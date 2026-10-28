@@ -1,0 +1,15 @@
+# Local PostgreSQL for `overseer serve` during development: `docker compose up -d`.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: overseer
+      POSTGRES_USER: overseer
+      POSTGRES_PASSWORD: overseer
+    ports:
+      - "55432:5432"  # an uncommon host port, so it doesn't clash with other local PostgreSQL servers
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:
