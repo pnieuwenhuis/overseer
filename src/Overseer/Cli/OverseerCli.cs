@@ -1,5 +1,6 @@
 using System.Collections;
 using System.CommandLine;
+using System.CommandLine.Invocation;
 using Overseer.Server;
 
 namespace Overseer.Cli;
@@ -32,6 +33,8 @@ public static class OverseerCli
             NotImplementedYet("uninstall", "Remove Overseer from Azure.", error),
             NotImplementedYet("reset-password", "Generate a new password for the Overseer user.", error),
         };
+        // The built-in --version reports the entry assembly, which is not Overseer when it runs in-process (tests).
+        root.Options.OfType<VersionOption>().Single().Action = new PrintVersion();
 
         return root.Parse(args).InvokeAsync(new InvocationConfiguration
         {
@@ -51,6 +54,15 @@ public static class OverseerCli
             return 1;
         });
         return command;
+    }
+
+    private sealed class PrintVersion : SynchronousCommandLineAction
+    {
+        public override int Invoke(ParseResult parseResult)
+        {
+            parseResult.InvocationConfiguration.Output.WriteLine(OverseerVersion.Current);
+            return 0;
+        }
     }
 
     private static Dictionary<string, string?> ProcessEnvironment() =>

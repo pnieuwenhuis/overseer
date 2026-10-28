@@ -1,0 +1,117 @@
+# Pushing a tag vX.Y.Z releases version X.Y.Z: the `overseer` executable for macOS and Linux as
+# GitHub release artifacts, and the container image ghcr.io/pnieuwenhuis/overseer:X.Y.Z.
+# Both are built with -p:Version=X.Y.Z, so the CLI, the image tag and the Portal all report the same version.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/pnieuwenhuis/overseer
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not v<major>.<minor>.<patch>[-<prerelease>]."
+            exit 1
+          fi
+          if [[ "$version" == "0.0.0-dev" ]]; then
+            echo "::error::0.0.0-dev is the version of local builds and can't be released."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      # Unstamped on purpose: the tests check that a local build reports the development version.
+      - run: dotnet test
+
+  cli:
+    needs: [version, test]
+    strategy:
+      matrix:
+        include:
+          - { rid: linux-x64, os: ubuntu-latest }
+          - { rid: linux-arm64, os: ubuntu-latest }
+          - { rid: osx-x64, os: macos-latest }
+          - { rid: osx-arm64, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      # Single file, but `serve` still needs appsettings.json and wwwroot next to it, so the whole folder ships.
+      - run: >
+          dotnet publish src/Overseer -c Release -r ${{ matrix.rid }} --self-contained
+          -p:PublishSingleFile=true -p:DebugType=None -p:Version="$VERSION" -o publish
+      - if: matrix.rid == 'linux-x64' || matrix.rid == 'osx-arm64'
+        run: test "$(publish/overseer --version)" = "$VERSION"
+      - run: tar -czf "overseer-$VERSION-${{ matrix.rid }}.tar.gz" -C publish .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cli-${{ matrix.rid }}
+          path: overseer-${{ env.VERSION }}-${{ matrix.rid }}.tar.gz
+          if-no-files-found: error
+
+  image:
+    needs: [version, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - run: >
+          dotnet publish src/Overseer -c Release -t:PublishContainer -r linux-x64
+          -p:Version="$VERSION"
+      - run: scripts/smoke-test-image.sh "pnieuwenhuis/overseer:$VERSION"
+      # Push exactly the image that passed the smoke test.
+      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - run: |
+          docker tag "pnieuwenhuis/overseer:$VERSION" "$IMAGE:$VERSION"
+          docker push "$IMAGE:$VERSION"
+
+  release:
+    needs: [version, cli, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: dist
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          prerelease=()
+          if [[ "$VERSION" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz "${prerelease[@]}" \
+            --repo "$GITHUB_REPOSITORY" --title "Overseer $VERSION" --generate-notes \
+            --notes "Container image: \`$IMAGE:$VERSION\`"

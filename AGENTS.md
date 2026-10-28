@@ -11,3 +11,4 @@ Running locally, configuration layering and adding migrations are documented in 
 - Keep `Microsoft.EntityFrameworkCore.Design` and the `dotnet-ef` tool on the EF Core version that `Npgsql.EntityFrameworkCore.PostgreSQL` depends on. A higher version breaks the test build (CS1705).
 - The first `serve` against an empty database logs `fail: ... Failed executing DbCommand ... FROM "__EFMigrationsHistory"`. That is EF Core probing for its history table before creating it; the migration still succeeds.
 - Server tests go through `RunningOverseer` (the real server in-process on a free port, with its own empty database). Pass settings as the environment map it hands to `OverseerServer`, never as process environment variables, so tests stay parallel-safe.
+- Run `dotnet test` without `-p:Version`: a test checks that a local build reports `0.0.0-dev`, the version `install` uses to tell a development build from a release.

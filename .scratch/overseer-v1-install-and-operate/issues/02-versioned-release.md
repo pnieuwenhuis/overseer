@@ -4,12 +4,14 @@
 
 **Blocked by:** 01 (Walking skeleton)
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] `overseer --version` prints the version stamped in at build time
-- [ ] The release build stamps one version into both the executable and the container image tag
-- [ ] The container image runs `overseer serve` by default
+**Note:** Everything is built and verified locally except anonymous pull. That needs the first `v*` tag and a one-time switch of the GHCR package to public (README, Releases).
+
+- [x] `overseer --version` prints the version stamped in at build time
+- [x] The release build stamps one version into both the executable and the container image tag
+- [x] The container image runs `overseer serve` by default
 - [ ] The image is published to a public container registry and can be pulled anonymously
-- [ ] The CLI is published as release artifacts for at least macOS and Linux
-- [ ] The Portal shows the same version as the image tag it runs from
-- [ ] A local development build reports a recognisable non-release version, so `install` can tell it apart from a release
+- [x] The CLI is published as release artifacts for at least macOS and Linux
+- [x] The Portal shows the same version as the image tag it runs from
+- [x] A local development build reports a recognisable non-release version, so `install` can tell it apart from a release

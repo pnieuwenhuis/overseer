@@ -37,6 +37,23 @@ public class CliTests
         Assert.Contains("not implemented yet", output);
     }
 
+    [Fact]
+    public async Task Version_prints_the_version_stamped_into_the_executable()
+    {
+        var (exitCode, output) = await Run("--version");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(OverseerVersion.Current, output.Trim());
+    }
+
+    [Fact]
+    public async Task A_local_build_reports_the_development_version()
+    {
+        var (_, output) = await Run("--version");
+
+        Assert.Equal("0.0.0-dev", output.Trim());
+    }
+
     private static async Task<(int ExitCode, string Output)> Run(params string[] args)
     {
         var output = new StringWriter();
