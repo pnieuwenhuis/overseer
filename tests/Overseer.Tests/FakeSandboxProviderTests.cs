@@ -37,29 +37,45 @@ public class FakeSandboxProviderTests
     }
 
     [Fact]
-    public async Task An_agent_can_ask_the_user_a_question_and_finish_in_the_next_session()
+    public async Task An_agent_session_plays_its_turns_in_order()
     {
         var sandbox = await CreateAsync();
-        _provider.ScriptAgentSession(AgentRole.Analyst,
-            new FakeAgentSession(["Reading the README"], new AgentOutcome.AskedQuestion("Which database should it use?")),
-            new FakeAgentSession(["Writing the Spec"], new AgentOutcome.Done()));
+        _provider.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
+            new FakeAgentTurn(["Reading the README"], new AgentOutcome.AskedQuestion("Which database should it use?")),
+            new FakeAgentTurn(["Writing the Spec"], new AgentOutcome.Done())));
+        await using var session = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Analyst, TestContext.Current.CancellationToken);
 
-        var asking = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Analyst, "Refine the Intent", TestContext.Current.CancellationToken);
-        var finishing = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Analyst, "The answer is PostgreSQL", TestContext.Current.CancellationToken);
-
+        var asking = await session.SendAsync("Refine the Intent", TestContext.Current.CancellationToken);
         Assert.Equal(["Reading the README"], await asking.Updates.ToListAsync(TestContext.Current.CancellationToken));
         Assert.Equal(new AgentOutcome.AskedQuestion("Which database should it use?"), await asking.Outcome);
+
+        var finishing = await session.SendAsync("PostgreSQL", TestContext.Current.CancellationToken);
         Assert.Equal(["Writing the Spec"], await finishing.Updates.ToListAsync(TestContext.Current.CancellationToken));
         Assert.Equal(new AgentOutcome.Done(), await finishing.Outcome);
+    }
+
+    [Fact]
+    public async Task Each_new_session_of_a_role_plays_the_next_script()
+    {
+        var sandbox = await CreateAsync();
+        _provider.ScriptAgentSessions(AgentRole.Developer,
+            new FakeAgentSession(new FakeAgentTurn(["Implemented the first Task"], new AgentOutcome.Done())),
+            new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.AskedQuestion("Which port?"))));
+
+        var first = await SendFirstMessageAsync(sandbox, AgentRole.Developer);
+        var second = await SendFirstMessageAsync(sandbox, AgentRole.Developer);
+
+        Assert.Equal(new AgentOutcome.Done(), await first.Outcome);
+        Assert.Equal(new AgentOutcome.AskedQuestion("Which port?"), await second.Outcome);
     }
 
     [Fact]
     public async Task Agent_sessions_are_scripted_per_role()
     {
         var sandbox = await CreateAsync();
-        _provider.ScriptAgentSession(AgentRole.Developer, new FakeAgentSession([], new AgentOutcome.AskedQuestion("Which port?")));
+        _provider.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.AskedQuestion("Which port?"))));
 
-        var reviewer = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Reviewer, "Review", TestContext.Current.CancellationToken);
+        var reviewer = await SendFirstMessageAsync(sandbox, AgentRole.Reviewer);
 
         Assert.Equal(new AgentOutcome.Done(), await reviewer.Outcome);
     }
@@ -100,7 +116,13 @@ public class FakeSandboxProviderTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _provider.RunCommandAsync(sandbox, "dotnet test", TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, "Implement the Task", TestContext.Current.CancellationToken));
+            _provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, TestContext.Current.CancellationToken));
+    }
+
+    private async Task<AgentTurn> SendFirstMessageAsync(Sandbox sandbox, AgentRole role)
+    {
+        await using var session = await _provider.StartAgentSessionAsync(sandbox, role, TestContext.Current.CancellationToken);
+        return await session.SendAsync("Start", TestContext.Current.CancellationToken);
     }
 
     private Task<Sandbox> CreateAsync() =>

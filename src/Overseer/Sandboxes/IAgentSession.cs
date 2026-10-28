@@ -1,13 +1,27 @@
 namespace Overseer.Sandboxes;
 
-/// <summary>One agent working in a Sandbox on one prompt, from start to its outcome.</summary>
-public interface IAgentSession
+/// <summary>
+/// One agent working in a Sandbox in one role, over as many turns as the conversation needs: each message to the
+/// agent starts a turn, which ends with an outcome. Disposing it stops the agent, also in the middle of a turn.
+/// </summary>
+public interface IAgentSession : IAsyncDisposable
 {
-    /// <summary>What the agent reports while it works, as it happens; the stream ends with the session. Read it once.</summary>
-    IAsyncEnumerable<string> Updates { get; }
+    /// <summary>
+    /// Sends the agent a message (its work to start with, then the user's answers) and starts the agent's turn.
+    /// Wait for a turn's outcome before sending the next message.
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">The session has been stopped.</exception>
+    Task<AgentTurn> SendAsync(string message, CancellationToken cancellationToken);
+}
 
-    /// <summary>How the session ended; completes when it does.</summary>
-    Task<AgentOutcome> Outcome { get; }
+/// <summary>The agent's response to one message.</summary>
+public sealed class AgentTurn(IAsyncEnumerable<string> updates, Task<AgentOutcome> outcome)
+{
+    /// <summary>What the agent reports while it works, as it happens; the stream ends with the turn. Read it once.</summary>
+    public IAsyncEnumerable<string> Updates { get; } = updates;
+
+    /// <summary>How the turn ended; completes when it does.</summary>
+    public Task<AgentOutcome> Outcome { get; } = outcome;
 }
 
 public enum AgentRole
@@ -18,7 +32,7 @@ public enum AgentRole
     Reviewer,
 }
 
-/// <summary>How an agent session ended.</summary>
+/// <summary>How an agent's turn ended.</summary>
 public abstract record AgentOutcome
 {
     private AgentOutcome()
@@ -28,6 +42,6 @@ public abstract record AgentOutcome
     /// <summary>The agent finished its work.</summary>
     public sealed record Done : AgentOutcome;
 
-    /// <summary>The agent stopped to ask the user something; the work continues in a new session once they answer.</summary>
+    /// <summary>The agent asks the user something; send their answer to the same session to continue.</summary>
     public sealed record AskedQuestion(string Question) : AgentOutcome;
 }

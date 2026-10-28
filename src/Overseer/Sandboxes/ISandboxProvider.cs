@@ -14,8 +14,8 @@ public interface ISandboxProvider
     /// <summary>Runs a shell command in the Sandbox and waits for it to finish.</summary>
     Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken);
 
-    /// <summary>Starts an agent in the given role on <paramref name="prompt"/>. Completes once the session runs; follow it through the returned session.</summary>
-    Task<IAgentSession> StartAgentSessionAsync(Sandbox sandbox, AgentRole role, string prompt, CancellationToken cancellationToken);
+    /// <summary>Starts an agent in the given role, ready for its first message. Dispose the session to stop the agent.</summary>
+    Task<IAgentSession> StartAgentSessionAsync(Sandbox sandbox, AgentRole role, CancellationToken cancellationToken);
 
     /// <summary>Removes the Sandbox and everything created with it.</summary>
     Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken);

@@ -63,24 +63,56 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     }
 
     [Fact]
-    public async Task An_agent_session_streams_updates_and_ends_with_its_outcome()
+    public async Task An_agent_turn_streams_updates_and_ends_with_its_outcome()
     {
         var sandbox = await CreateAsync(NewIntent());
-        const string prompt = "Reply with the word READY, then finish without changing anything.";
-        GivenAgentSession(AgentRole.Developer, ["READY"], new AgentOutcome.Done());
+        GivenAgentSession(AgentRole.Developer, (["READY"], new AgentOutcome.Done()));
+        await using var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, TestContext.Current.CancellationToken);
 
-        var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, prompt, TestContext.Current.CancellationToken);
+        var turn = await session.SendAsync("Reply with the word READY, then finish without changing anything.", TestContext.Current.CancellationToken);
 
-        var updates = await session.Updates.ToListAsync(TestContext.Current.CancellationToken);
+        var updates = await turn.Updates.ToListAsync(TestContext.Current.CancellationToken);
         Assert.Contains(updates, update => update.Contains("READY"));
-        Assert.Equal(new AgentOutcome.Done(), await session.Outcome);
+        Assert.Equal(new AgentOutcome.Done(), await turn.Outcome);
+    }
+
+    [Fact]
+    public async Task An_agent_that_asks_a_question_gets_the_answer_in_the_same_session()
+    {
+        var sandbox = await CreateAsync(NewIntent());
+        GivenAgentSession(AgentRole.Analyst,
+            (["Which colour do you prefer?"], new AgentOutcome.AskedQuestion("Which colour do you prefer?")),
+            (["You prefer Blue."], new AgentOutcome.Done()));
+        await using var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Analyst, TestContext.Current.CancellationToken);
+
+        var asking = await session.SendAsync("Ask me which colour I prefer, then wait for my answer.", TestContext.Current.CancellationToken);
+        await asking.Updates.ToListAsync(TestContext.Current.CancellationToken);
+        Assert.IsType<AgentOutcome.AskedQuestion>(await asking.Outcome);
+
+        var answered = await session.SendAsync("Blue. Repeat my answer, then finish without changing anything.", TestContext.Current.CancellationToken);
+
+        var updates = await answered.Updates.ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Contains(updates, update => update.Contains("Blue"));
+        Assert.Equal(new AgentOutcome.Done(), await answered.Outcome);
+    }
+
+    [Fact]
+    public async Task A_stopped_agent_session_takes_no_more_messages()
+    {
+        var sandbox = await CreateAsync(NewIntent());
+        var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, TestContext.Current.CancellationToken);
+
+        await session.DisposeAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            session.SendAsync("Implement the Task", TestContext.Current.CancellationToken));
     }
 
     /// <summary>
-    /// Makes a scriptable provider run the next <paramref name="role"/> session as a real agent would answer the prompt.
-    /// A real provider needs nothing: the agent really answers.
+    /// Makes a scriptable provider play the next <paramref name="role"/> session's turns as a real agent would answer
+    /// the messages. A real provider needs nothing: the agent really answers.
     /// </summary>
-    protected virtual void GivenAgentSession(AgentRole role, IReadOnlyList<string> updates, AgentOutcome outcome)
+    protected virtual void GivenAgentSession(AgentRole role, params (string[] Updates, AgentOutcome Outcome)[] turns)
     {
     }
 
@@ -125,6 +157,6 @@ public sealed class FakeSandboxProviderContract : SandboxProviderContract
 
     protected override void GivenCommand(string command, CommandResult result) => _fake.ScriptCommand(command, result);
 
-    protected override void GivenAgentSession(AgentRole role, IReadOnlyList<string> updates, AgentOutcome outcome) =>
-        _fake.ScriptAgentSession(role, new FakeAgentSession(updates, outcome));
+    protected override void GivenAgentSession(AgentRole role, params (string[] Updates, AgentOutcome Outcome)[] turns) =>
+        _fake.ScriptAgentSessions(role, new FakeAgentSession([.. turns.Select(turn => new FakeAgentTurn(turn.Updates, turn.Outcome))]));
 }

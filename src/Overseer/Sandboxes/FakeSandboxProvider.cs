@@ -21,9 +21,9 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
 
     /// <summary>
     /// Makes the next <paramref name="role"/> sessions play <paramref name="sessions"/> in turn, across all Sandboxes, repeating the last one.
-    /// Unscripted sessions are done without updates.
+    /// In an unscripted session, every turn is done without updates.
     /// </summary>
-    public void ScriptAgentSession(AgentRole role, params FakeAgentSession[] sessions) => _agentSessions[role] = new Sequence<FakeAgentSession>(sessions);
+    public void ScriptAgentSessions(AgentRole role, params FakeAgentSession[] sessions) => _agentSessions[role] = new Sequence<FakeAgentSession>(sessions);
 
     /// <summary>How long creating a Sandbox takes, success or failure, like a VM booting. None by default.</summary>
     public TimeSpan ProvisioningDelay { get; set; } = TimeSpan.Zero;
@@ -47,10 +47,10 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         return Task.FromResult(_commands.TryGetValue(command, out var results) ? results.Next() : new CommandResult(0, ""));
     }
 
-    public Task<IAgentSession> StartAgentSessionAsync(Sandbox sandbox, AgentRole role, string prompt, CancellationToken cancellationToken)
+    public Task<IAgentSession> StartAgentSessionAsync(Sandbox sandbox, AgentRole role, CancellationToken cancellationToken)
     {
         EnsureExists(sandbox);
-        var script = _agentSessions.TryGetValue(role, out var sessions) ? sessions.Next() : new FakeAgentSession([], new AgentOutcome.Done());
+        var script = _agentSessions.TryGetValue(role, out var sessions) ? sessions.Next() : new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()));
         return Task.FromResult<IAgentSession>(new ScriptedAgentSession(script));
     }
 
@@ -92,13 +92,29 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         }
     }
 
+    /// <summary>Plays one turn per message, whatever the message says.</summary>
     private sealed class ScriptedAgentSession(FakeAgentSession script) : IAgentSession
     {
-        public IAsyncEnumerable<string> Updates { get; } = script.Updates.ToAsyncEnumerable();
+        private readonly Sequence<FakeAgentTurn> _turns = new(script.Turns);
+        private bool _stopped;
 
-        public Task<AgentOutcome> Outcome { get; } = Task.FromResult(script.Outcome);
+        public Task<AgentTurn> SendAsync(string message, CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_stopped, this);
+            var turn = _turns.Next();
+            return Task.FromResult(new AgentTurn(turn.Updates.ToAsyncEnumerable(), Task.FromResult(turn.Outcome)));
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            _stopped = true;
+            return ValueTask.CompletedTask;
+        }
     }
 }
 
-/// <summary>A scripted agent session: the updates it streams and how it ends.</summary>
-public sealed record FakeAgentSession(IReadOnlyList<string> Updates, AgentOutcome Outcome);
+/// <summary>A scripted agent session: its turns in order, the last one repeating.</summary>
+public sealed record FakeAgentSession(params FakeAgentTurn[] Turns);
+
+/// <summary>A scripted turn: the updates the agent streams and how the turn ends.</summary>
+public sealed record FakeAgentTurn(IReadOnlyList<string> Updates, AgentOutcome Outcome);
