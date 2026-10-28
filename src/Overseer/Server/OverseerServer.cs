@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Overseer.Components;
 using Overseer.Login;
 using Overseer.Persistence;
+using Overseer.Sandboxes;
 
 namespace Overseer.Server;
 
@@ -30,6 +31,9 @@ public static class OverseerServer
                     "or ConnectionStrings:Overseer in the local config file.")));
 
         builder.Services.AddSingleton(services => UserCredential.FromConfiguration(services.GetRequiredService<IConfiguration>()));
+
+        builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSandboxes(builder.Configuration);
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(options =>
@@ -83,6 +87,12 @@ public static class OverseerServer
                 await database.Database.MigrateAsync(cancellationToken);
             }
             await app.StartAsync(cancellationToken);
+            if (app.Services.GetRequiredService<ISandboxProvider>() is FakeSandboxProvider)
+            {
+                app.Logger.LogInformation(
+                    "Using the fake Sandbox Provider: Sandboxes exist only in memory. Configure {AzureSection} to use Azure.",
+                    SandboxProviderConfiguration.AzureSection);
+            }
             return app;
         }
         catch

@@ -50,12 +50,19 @@ Other environment variables aren't read as settings. The only exception is `ASPN
 | Listen address | `Urls`                       | `OVERSEER_URLS`                        | `http://localhost:5080`                                                                     |
 | Username       | `User:Name`                  | `OVERSEER_USER__NAME`                  | `overseer`                                                                                  |
 | Password hash  | `User:PasswordHash`          | `OVERSEER_USER__PASSWORDHASH`          | none; `serve` exits with a message pointing at `reset-password`                            |
+| Azure provider | `SandboxProvider:Azure`      | `OVERSEER_SANDBOXPROVIDER__AZURE__*`   | none; the fake Sandbox Provider (see [Sandboxes](#sandboxes))                              |
 
 For example, to listen on another port for one run:
 
 ```sh
 OVERSEER_URLS=http://localhost:5090 dotnet run --project src/Overseer
 ```
+
+### Sandboxes
+
+Without `SandboxProvider:Azure` settings, `serve` uses the fake Sandbox Provider and logs that at startup. Its Sandboxes exist only in memory, every command succeeds without output, and every agent session is done straight away, so the Portal and orchestration work offline. Tests script it through `FakeSandboxProvider` (command results in sequence, agent session updates and outcomes, creation failures, slow provisioning). The Azure provider isn't built yet (ticket 10), so configuring `SandboxProvider:Azure` makes `serve` refuse to start.
+
+Any Sandbox Provider must pass the contract suite in `tests/Overseer.Tests/SandboxProviderContract.cs`: derive from it once per implementation.
 
 ## Tests
 
