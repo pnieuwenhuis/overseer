@@ -1,5 +1,4 @@
 using Azure;
-using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
 
 namespace Overseer.Secrets;
@@ -14,19 +13,7 @@ public sealed class KeyVaultSecretStore(SecretClient client) : ISecretStore, ISe
 
     /// <param name="managedIdentityClientId">The client ID of a user-assigned Managed Identity; <c>null</c> for the system-assigned one.</param>
     public static KeyVaultSecretStore Connect(Uri vaultUri, string? managedIdentityClientId) =>
-        new(new SecretClient(vaultUri, new DefaultAzureCredential(new DefaultAzureCredentialOptions
-        {
-            // Only the Managed Identity and the Azure CLI login: settings come from configuration, not from
-            // AZURE_* environment variables, and the CLI is how Overseer reaches Azure everywhere else.
-            ManagedIdentityClientId = managedIdentityClientId,
-            ExcludeEnvironmentCredential = true,
-            ExcludeWorkloadIdentityCredential = true,
-            ExcludeVisualStudioCredential = true,
-            ExcludeVisualStudioCodeCredential = true,
-            ExcludeAzurePowerShellCredential = true,
-            ExcludeAzureDeveloperCliCredential = true,
-            ExcludeInteractiveBrowserCredential = true,
-        })));
+        new(new SecretClient(vaultUri, AzureCredentials.ManagedIdentityOrAzureCli(managedIdentityClientId)));
 
     public async Task SetAsync(string name, string value, CancellationToken cancellationToken)
     {

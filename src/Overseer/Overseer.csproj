@@ -25,6 +25,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The installer's templated bash scripts travel inside the executable. -->
+    <EmbeddedResource Include="Installer/Scripts/*.sh" LogicalName="Overseer.Installer.Scripts.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Security.KeyVault.Secrets" Version="4.11.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4">

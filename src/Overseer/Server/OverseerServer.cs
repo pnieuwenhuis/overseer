@@ -30,11 +30,7 @@ public static class OverseerServer
             builder.Logging.AddProvider(logs);
         }
 
-        builder.Services.AddDbContextFactory<OverseerDbContext>((services, options) =>
-            options.UseNpgsql(services.GetRequiredService<IConfiguration>().GetConnectionString("Overseer")
-                ?? throw new MissingConfigurationException(
-                    "No database is configured. Set the OVERSEER_CONNECTIONSTRINGS__OVERSEER environment variable, " +
-                    "or ConnectionStrings:Overseer in the local config file.")));
+        builder.Services.AddDatabase(builder.Configuration);
 
         builder.Services.AddSingleton(services => UserCredential.FromConfiguration(services.GetRequiredService<IConfiguration>()));
 

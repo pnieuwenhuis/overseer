@@ -1,5 +1,4 @@
 using System.Net;
-using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -17,12 +16,13 @@ namespace Overseer.Tests;
 public sealed class RunningOverseer : IAsyncDisposable
 {
     private readonly WebApplication _app;
+    private readonly PortalBrowser _browser;
 
     private RunningOverseer(WebApplication app)
     {
         _app = app;
         var address = app.Services.GetRequiredService<IServer>().Features.GetRequiredFeature<IServerAddressesFeature>().Addresses.Single();
-        Http = new HttpClient(new HttpClientHandler { CookieContainer = Cookies }) { BaseAddress = new Uri(address) };
+        _browser = new PortalBrowser(new Uri(address));
     }
 
     /// <summary>The user Overseer is started with, unless the test configures its own.</summary>
@@ -31,10 +31,10 @@ public sealed class RunningOverseer : IAsyncDisposable
     public static readonly string PasswordHash = Passwords.Hash(Password);
 
     /// <summary>A browser-like client: it follows redirects and keeps cookies, so it stays logged in.</summary>
-    public HttpClient Http { get; }
+    public HttpClient Http => _browser.Http;
 
     /// <summary>The client's cookies; copy them to another instance to keep a browser session across a restart.</summary>
-    public CookieContainer Cookies { get; } = new();
+    public CookieContainer Cookies => _browser.Cookies;
 
     /// <summary>The server's services, for what the Portal can't reach yet, such as the secret store.</summary>
     public IServiceProvider Services => _app.Services;
@@ -81,33 +81,16 @@ public sealed class RunningOverseer : IAsyncDisposable
         return new RunningOverseer(app);
     }
 
-    /// <summary>Fills in and submits the login form, the way a browser would.</summary>
-    /// <param name="loginPage">The login page's address, including the query Overseer redirected with.</param>
-    public async Task<HttpResponseMessage> LogInAsync(string username = Username, string password = Password, string loginPage = "/login")
-    {
-        var form = await Http.GetStringAsync(loginPage, TestContext.Current.CancellationToken);
-        var antiforgeryToken = Regex.Match(form, "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value;
+    /// <inheritdoc cref="PortalBrowser.LogInAsync"/>
+    public Task<HttpResponseMessage> LogInAsync(string username = Username, string password = Password, string loginPage = "/login") =>
+        _browser.LogInAsync(username, password, loginPage);
 
-        return await Http.PostAsync(loginPage, new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["_handler"] = "login",
-            ["__RequestVerificationToken"] = antiforgeryToken,
-            ["Username"] = username,
-            ["Password"] = password,
-        }), TestContext.Current.CancellationToken);
-    }
-
-    /// <summary>Opens the Portal's home page and tells whether Overseer showed it or sent the client to log in.</summary>
-    public async Task<bool> IsLoggedInAsync()
-    {
-        using var response = await Http.GetAsync("/", TestContext.Current.CancellationToken);
-        response.EnsureSuccessStatusCode();
-        return response.RequestMessage!.RequestUri!.AbsolutePath != "/login";
-    }
+    /// <inheritdoc cref="PortalBrowser.IsLoggedInAsync"/>
+    public Task<bool> IsLoggedInAsync() => _browser.IsLoggedInAsync();
 
     public async ValueTask DisposeAsync()
     {
-        Http.Dispose();
+        _browser.Dispose();
         await _app.StopAsync();
         await _app.DisposeAsync();
     }

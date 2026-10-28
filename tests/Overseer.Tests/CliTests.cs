@@ -31,12 +31,10 @@ public class CliTests : IDisposable
         Assert.Contains("reset-password", output);
     }
 
-    [Theory]
-    [InlineData("install")]
-    [InlineData("uninstall")]
-    public async Task A_command_that_is_not_built_yet_says_so_and_fails(string command)
+    [Fact]
+    public async Task A_command_that_is_not_built_yet_says_so_and_fails()
     {
-        var (exitCode, output) = await Run(command);
+        var (exitCode, output) = await Run("uninstall");
 
         Assert.NotEqual(0, exitCode);
         Assert.Contains("not implemented yet", output);

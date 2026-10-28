@@ -4,6 +4,25 @@ Overseer lets one person direct a team of AI agents, installed into their own Az
 
 Overseer is a single `overseer` executable (ADR 0004). `overseer serve` runs the Portal and the orchestration; `install`, `uninstall` and `reset-password` manage the Azure deployment. Run `overseer` without a command to list them, and `overseer --version` for its version.
 
+## Installing Overseer in Azure
+
+You need the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), logged in (`az login`) to the subscription to install into, as Owner of it (or Contributor plus User Access Administrator: install creates a role assignment). Then run a released `overseer`:
+
+```sh
+overseer install [--region westeurope] [--prefix overseer]
+```
+
+Install shows the subscription it uses (`az account set` picks another), then creates everything, which takes 15 to 25 minutes, and prints the Portal URL, the username and a freshly generated password. Only the password's hash leaves your machine, as a Container App secret (ADR 0005); the password is shown only then.
+
+`--prefix` (3 to 12 lowercase letters, digits and hyphens) starts every resource name and identifies the installation. It creates:
+
+- **`<prefix>-rg`**: a Container Apps environment (`<prefix>-env`, logging to `<prefix>-logs`) on the VNet `<prefix>-vnet`; the Container App `<prefix>`, one replica of `ghcr.io/pnieuwenhuis/overseer` at the CLI's own version; PostgreSQL Flexible Server `<prefix>-db-<suffix>` (Burstable, private on the VNet, Microsoft Entra authentication only); Key Vault `<prefix>-kv-<suffix>`; and the user-assigned Managed Identity `<prefix>-identity`. Key Vault and PostgreSQL names must be unique across Azure, so `<suffix>` is derived from the subscription ID: the same prefix always gives the same names.
+- **`<prefix>-sandboxes-rg`**, for Sandboxes.
+
+The Managed Identity's only Azure role assignment is Contributor on the Sandbox resource group. Its other access is data-plane only: a Key Vault access policy for secrets (the vault uses access policies instead of Azure RBAC for exactly this reason), and being the only PostgreSQL login, as the server's Entra administrator. The application logs in to PostgreSQL with a token for the identity, so no database password exists.
+
+The scripts install runs are embedded in the executable (`src/Overseer/Installer/Scripts`) and manage Azure only through the Azure CLI. A failing step stops install with the Azure error and, for missing permissions, quotas and unavailable regions, what to do about it. A development build refuses to install, because no image is published for `0.0.0-dev`.
+
 ## Running Overseer locally
 
 You need the .NET 10 SDK and Docker.
@@ -50,6 +69,8 @@ Other environment variables aren't read as settings. The only exception is `ASPN
 | Listen address   | `Urls`                            | `OVERSEER_URLS`                             | `http://localhost:5080`                                                                     |
 | Username         | `User:Name`                       | `OVERSEER_USER__NAME`                       | `overseer`                                                                                  |
 | Password hash    | `User:PasswordHash`               | `OVERSEER_USER__PASSWORDHASH`               | none; `serve` exits with a message pointing at `reset-password`                             |
+| Database login   | `Database:EntraAuthentication`    | `OVERSEER_DATABASE__ENTRAAUTHENTICATION`    | `false`: the connection string's password. `true`: a Microsoft Entra token, as in Azure (see [Database login](#database-login)) |
+| Database identity | `Database:ManagedIdentityClientId` | `OVERSEER_DATABASE__MANAGEDIDENTITYCLIENTID` | none; the system-assigned identity, or your Azure CLI login                                |
 | Azure provider   | `SandboxProvider:Azure`           | `OVERSEER_SANDBOXPROVIDER__AZURE__*`        | none; the fake Sandbox Provider (see [Sandboxes](#sandboxes))                               |
 | Key Vault        | `Secrets:KeyVaultUri`             | `OVERSEER_SECRETS__KEYVAULTURI`             | none; the local secrets file (see [Secrets](#secrets))                                      |
 | Managed Identity | `Secrets:ManagedIdentityClientId` | `OVERSEER_SECRETS__MANAGEDIDENTITYCLIENTID` | none; the system-assigned identity, or your Azure CLI login                                 |
@@ -60,6 +81,10 @@ For example, to listen on another port for one run:
 ```sh
 OVERSEER_URLS=http://localhost:5090 dotnet run --project src/Overseer
 ```
+
+### Database login
+
+With `Database:EntraAuthentication` set to `true`, `serve` logs in to PostgreSQL as the connection string's `Username` with a Microsoft Entra token instead of a password, renewed every 30 minutes. In Azure the token is the Managed Identity's (`Database:ManagedIdentityClientId` names a user-assigned one); locally it is your Azure CLI login's. Install configures this, so the deployed connection string holds no password.
 
 ### Sandboxes
 
@@ -89,6 +114,14 @@ dotnet test
 ```
 
 Docker must be running: the server tests start Overseer in-process against a real PostgreSQL through Testcontainers.
+
+The install tests run `overseer install` against a fake `az` (`tests/Overseer.Tests/FakeAzureCli.cs`), so they need bash but no Azure. An opt-in smoke test installs for real into the subscription your Azure CLI is logged in to, with a fresh prefix, logs in to the Portal and deletes everything afterwards (about half an hour, and a little cost). It needs a released version whose image is published, such as a prerelease tag pushed for the purpose:
+
+```sh
+TEST_INSTALL_VERSION=0.2.0-rc.1 dotnet test --filter InstallSmokeTest
+```
+
+`TEST_INSTALL_REGION` overrides its region (westeurope).
 
 ## Releases
 
