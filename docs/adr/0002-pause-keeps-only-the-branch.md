@@ -1,0 +1,3 @@
+# Pausing an Intent destroys its Sandbox; only the branch survives
+
+When an Intent is Paused, the running agent commits its work in progress to the Intent branch as a clearly marked commit and pushes it, and then the Sandbox is destroyed. We considered deallocating the VM and keeping its disk so work could resume exactly where it stopped. We rejected that because paused Intents would keep costing money and leave VMs around indefinitely. Git and Overseer's database are the only state that survives a pause. Resuming builds a fresh Sandbox from the branch, and the interrupted Task picks up from the WIP commit.
