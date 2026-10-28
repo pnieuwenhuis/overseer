@@ -14,7 +14,7 @@ You need the .NET 10 SDK and Docker.
    docker compose up -d
    ```
 
-   This starts PostgreSQL on host port **55432** (not 5432, so it doesn't clash with other local databases), with a named volume so data survives restarts. `docker compose down -v` throws the data away.
+   This starts PostgreSQL on host port **5432**, with a named volume so data survives restarts. `docker compose down -v` throws the data away.
 
 2. Run the server:
 
@@ -36,10 +36,10 @@ Settings are layered. Later layers override earlier ones:
 
 Other environment variables aren't read as settings. The only exception is `ASPNETCORE_ENVIRONMENT`, which picks the environment (Production when unset).
 
-| Setting | Config file key | Environment variable | Default |
-|---|---|---|---|
-| Database | `ConnectionStrings:Overseer` | `OVERSEER_CONNECTIONSTRINGS__OVERSEER` | none; `serve` exits with a message when it is missing (the compose database in Development) |
-| Listen address | `Urls` | `OVERSEER_URLS` | `http://localhost:5080` |
+| Setting        | Config file key              | Environment variable                   | Default                                                                                     |
+| -------------- | ---------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Database       | `ConnectionStrings:Overseer` | `OVERSEER_CONNECTIONSTRINGS__OVERSEER` | none; `serve` exits with a message when it is missing (the compose database in Development) |
+| Listen address | `Urls`                       | `OVERSEER_URLS`                        | `http://localhost:5080`                                                                     |
 
 For example, to listen on another port for one run:
 
