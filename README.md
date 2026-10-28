@@ -71,7 +71,7 @@ dotnet publish src/Overseer -c Release -t:PublishContainer -p:Version=0.0.1-loca
 scripts/smoke-test-image.sh pnieuwenhuis/overseer:0.0.1-local
 ```
 
-The `overseer` package on GHCR must be public so the image can be pulled anonymously. After the first release, set its visibility to public once, under the package's settings on GitHub. Release assets follow the repository's visibility, so while the repository is private only people with access to it can download the CLI.
+The repository and the `overseer` package on GHCR are public, so the CLI can be downloaded and the image pulled anonymously.
 
 ## Schema changes
 
