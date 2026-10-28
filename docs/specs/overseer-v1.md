@@ -220,8 +220,9 @@ A traffic light per Intent shows whether agents are working, need me, or have fa
 
 ### Persistence
 
-- PostgreSQL holds Intents, Repositories in scope, Refinement Rounds and transcript, Spec versions with their Tasks, Task attempts and verification output, agent session logs, Review Comments with triage decisions, Sandboxes (owner, Azure resource, created at), Settings, Configured Repositories, the user's credential hash, Working Time per state, and token and VM-hour usage.
+- PostgreSQL holds Intents, Repositories in scope, Refinement Rounds and transcript, Spec versions with their Tasks, Task attempts and verification output, agent session logs, Review Comments with triage decisions, Sandboxes (owner, Azure resource, created at), Settings, Configured Repositories, Working Time per state, and token and VM-hour usage.
 - Schema migrations are applied at startup.
+- The user's credential hash is not in PostgreSQL but in configuration (ADR 0005).
 - No cross-Intent memory is stored.
 
 ### GitHub interaction

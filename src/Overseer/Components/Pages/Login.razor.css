@@ -1,0 +1,21 @@
+.login-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    max-width: 20rem;
+}
+
+.login-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.login-form button {
+    align-self: flex-start;
+}
+
+.login-error {
+    color: #b32121;
+    margin: 0;
+}

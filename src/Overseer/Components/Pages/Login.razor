@@ -1,0 +1,61 @@
+@page "/login"
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@using System.Diagnostics.CodeAnalysis
+@using Microsoft.AspNetCore.Authentication
+@using Overseer.Login
+@inject UserCredential Credential
+@inject NavigationManager Navigation
+
+<PageTitle>Log in · Overseer</PageTitle>
+
+<h1>Log in</h1>
+
+<form method="post" @formname="login" @onsubmit="LogInAsync" class="login-form">
+    <AntiforgeryToken />
+    @if (_failed)
+    {
+        <p class="login-error" role="alert">The username or password is incorrect.</p>
+    }
+    <label>
+        Username
+        <input name="Username" value="@Username" autocomplete="username" required autofocus />
+    </label>
+    <label>
+        Password
+        <input name="Password" type="password" autocomplete="current-password" required />
+    </label>
+    <button type="submit">Log in</button>
+</form>
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [SupplyParameterFromForm(FormName = "login")]
+    private string? Username { get; set; }
+
+    [SupplyParameterFromForm(FormName = "login")]
+    private string? Password { get; set; }
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    private bool _failed;
+
+    private async Task LogInAsync()
+    {
+        if (!Credential.Matches(Username ?? "", Password ?? ""))
+        {
+            _failed = true;
+            return;
+        }
+
+        await HttpContext.SignInAsync(Credential.CreatePrincipal());
+        Navigation.NavigateTo(IsPortalPath(ReturnUrl) ? ReturnUrl : "/");
+    }
+
+    // Only a path on this site, so a crafted link can't send the user elsewhere after logging in.
+    private static bool IsPortalPath([NotNullWhen(true)] string? url) =>
+        url is ['/', ..] && !url.StartsWith("//") && !url.StartsWith("/\\");
+}

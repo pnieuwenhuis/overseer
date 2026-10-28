@@ -1,1 +1,3 @@
-return await Overseer.Cli.OverseerCli.InvokeAsync(args, Console.Out, Console.Error);
+using Overseer.Cli;
+
+return await OverseerCli.InvokeAsync(args, OverseerCli.ProcessEnvironment(), Console.Out, Console.Error);

@@ -8,6 +8,7 @@ public class ServeTests(PostgresServer postgres)
     public async Task The_Portal_shows_the_running_version()
     {
         await using var overseer = await RunningOverseer.StartAsync(await postgres.CreateEmptyDatabaseAsync());
+        await overseer.LogInAsync();
 
         var page = await overseer.Http.GetStringAsync("/", TestContext.Current.CancellationToken);
 
