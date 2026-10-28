@@ -74,12 +74,7 @@ internal static class LocalResetPassword
             settings = new JsonObject(nodeOptions);
             Directory.CreateDirectory(Path.GetDirectoryName(configFile)!);
             // Only the user may read a new config file; it can hold connection strings as well.
-            var newFile = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
-            if (!OperatingSystem.IsWindows())
-            {
-                newFile.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            }
-            await using var _ = new FileStream(configFile, newFile);
+            await using var _ = UserOnlyFile.CreateNew(configFile);
         }
 
         var section = ConfigurationPath.GetParentPath(UserCredential.PasswordHashKey)!;

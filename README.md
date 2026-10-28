@@ -44,13 +44,16 @@ Settings are layered. Later layers override earlier ones:
 
 Other environment variables aren't read as settings. The only exception is `ASPNETCORE_ENVIRONMENT`, which picks the environment (Production when unset).
 
-| Setting        | Config file key              | Environment variable                   | Default                                                                                     |
-| -------------- | ---------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Database       | `ConnectionStrings:Overseer` | `OVERSEER_CONNECTIONSTRINGS__OVERSEER` | none; `serve` exits with a message when it is missing (the compose database in Development) |
-| Listen address | `Urls`                       | `OVERSEER_URLS`                        | `http://localhost:5080`                                                                     |
-| Username       | `User:Name`                  | `OVERSEER_USER__NAME`                  | `overseer`                                                                                  |
-| Password hash  | `User:PasswordHash`          | `OVERSEER_USER__PASSWORDHASH`          | none; `serve` exits with a message pointing at `reset-password`                            |
-| Azure provider | `SandboxProvider:Azure`      | `OVERSEER_SANDBOXPROVIDER__AZURE__*`   | none; the fake Sandbox Provider (see [Sandboxes](#sandboxes))                              |
+| Setting          | Config file key                   | Environment variable                        | Default                                                                                     |
+| ---------------- | --------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Database         | `ConnectionStrings:Overseer`      | `OVERSEER_CONNECTIONSTRINGS__OVERSEER`      | none; `serve` exits with a message when it is missing (the compose database in Development) |
+| Listen address   | `Urls`                            | `OVERSEER_URLS`                             | `http://localhost:5080`                                                                     |
+| Username         | `User:Name`                       | `OVERSEER_USER__NAME`                       | `overseer`                                                                                  |
+| Password hash    | `User:PasswordHash`               | `OVERSEER_USER__PASSWORDHASH`               | none; `serve` exits with a message pointing at `reset-password`                             |
+| Azure provider   | `SandboxProvider:Azure`           | `OVERSEER_SANDBOXPROVIDER__AZURE__*`        | none; the fake Sandbox Provider (see [Sandboxes](#sandboxes))                               |
+| Key Vault        | `Secrets:KeyVaultUri`             | `OVERSEER_SECRETS__KEYVAULTURI`             | none; the local secrets file (see [Secrets](#secrets))                                      |
+| Managed Identity | `Secrets:ManagedIdentityClientId` | `OVERSEER_SECRETS__MANAGEDIDENTITYCLIENTID` | none; the system-assigned identity, or your Azure CLI login                                 |
+| Secrets file     | `Secrets:File`                    | `OVERSEER_SECRETS__FILE`                    | `secrets.json` next to the local config file: `~/.config/overseer/secrets.json`             |
 
 For example, to listen on another port for one run:
 
@@ -63,6 +66,21 @@ OVERSEER_URLS=http://localhost:5090 dotnet run --project src/Overseer
 Without `SandboxProvider:Azure` settings, `serve` uses the fake Sandbox Provider and logs that at startup. Its Sandboxes exist only in memory, every command succeeds without output, and every agent turn is done straight away, so the Portal and orchestration work offline. Tests script it through `FakeSandboxProvider` (command results in sequence, agent sessions turn by turn with their updates and outcomes, creation failures, slow provisioning). The Azure provider isn't built yet (ticket 10), so configuring `SandboxProvider:Azure` makes `serve` refuse to start.
 
 Any Sandbox Provider must pass the contract suite in `tests/Overseer.Tests/SandboxProviderContract.cs`: derive from it once per implementation.
+
+### Secrets
+
+Secrets, such as the GitHub token and model provider tokens, are write-only: once set, a secret can be replaced, removed or checked for, but the Portal never shows its value again. The Portal uses `ISecretStore`, which has no way to read a value; only server-side code, such as injecting a token into a Sandbox, uses `ISecretReader`. A test fails if a Portal component injects the reader. Secret values never go into PostgreSQL or the logs; the logs only say which secret was set or removed. Names are 1 to 127 letters, digits and dashes (Key Vault's rule) and ignore case, whichever backend holds them.
+
+`serve` logs at startup where secrets are kept:
+
+- **Key Vault**, when `Secrets:KeyVaultUri` is set. In Azure, Overseer reaches the vault through its Managed Identity (set `Secrets:ManagedIdentityClientId` for a user-assigned one). Locally, it falls back to your Azure CLI login (`az login`), which needs the Key Vault Secrets Officer role on the vault. Removing a secret soft-deletes it, as Key Vault always does; setting it again recovers it and replaces its value, so this also works with purge protection.
+- **The local secrets file** otherwise: `secrets.json` next to the local config file, so `~/.config/overseer/secrets.json` by default, outside any repository. Overseer creates it readable only by you. It holds the values in plain text, so don't move it into a repository. `Secrets:File` puts it elsewhere.
+
+Every backend must pass the contract suite in `tests/Overseer.Tests/SecretStoreContract.cs`. The file backend runs in the default test run. The Key Vault backend runs only when `TEST_KEYVAULT_URI` points at a vault where your Azure CLI login has Key Vault Secrets Officer; each test uses fresh secret names and removes them afterwards:
+
+```sh
+TEST_KEYVAULT_URI=https://my-vault.vault.azure.net/ dotnet test --filter KeyVaultSecretStoreContract
+```
 
 ## Tests
 

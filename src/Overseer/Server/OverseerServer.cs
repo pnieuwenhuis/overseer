@@ -5,13 +5,15 @@ using Overseer.Components;
 using Overseer.Login;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
+using Overseer.Secrets;
 
 namespace Overseer.Server;
 
 /// <summary>The <c>serve</c> process: the Portal and the orchestration in one host.</summary>
 public static class OverseerServer
 {
-    public static WebApplication Build(IReadOnlyDictionary<string, string?> environment)
+    /// <param name="logs">Also receives everything the server logs, next to the console.</param>
+    public static WebApplication Build(IReadOnlyDictionary<string, string?> environment, ILoggerProvider? logs = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -23,6 +25,10 @@ public static class OverseerServer
         // This replaces the sources CreateBuilder reads from the process, so the environment map is the only environment.
         builder.Configuration.Sources.Clear();
         builder.Configuration.AddOverseerSettings(environment);
+        if (logs is not null)
+        {
+            builder.Logging.AddProvider(logs);
+        }
 
         builder.Services.AddDbContextFactory<OverseerDbContext>((services, options) =>
             options.UseNpgsql(services.GetRequiredService<IConfiguration>().GetConnectionString("Overseer")
@@ -34,6 +40,7 @@ public static class OverseerServer
 
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSandboxes(builder.Configuration);
+        builder.Services.AddSecrets(builder.Configuration, environment);
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(options =>
@@ -75,9 +82,11 @@ public static class OverseerServer
     }
 
     /// <summary>Builds the server, brings the database schema up to date, and starts listening.</summary>
-    public static async Task<WebApplication> StartAsync(IReadOnlyDictionary<string, string?> environment, CancellationToken cancellationToken)
+    /// <inheritdoc cref="Build"/>
+    public static async Task<WebApplication> StartAsync(
+        IReadOnlyDictionary<string, string?> environment, CancellationToken cancellationToken, ILoggerProvider? logs = null)
     {
-        var app = Build(environment);
+        var app = Build(environment, logs);
         try
         {
             // Fail on a missing credential before touching the database: without it nobody can log in.
@@ -92,6 +101,17 @@ public static class OverseerServer
                 app.Logger.LogInformation(
                     "Using the fake Sandbox Provider: Sandboxes exist only in memory. Configure {AzureSection} to use Azure.",
                     SandboxProviderConfiguration.AzureSection);
+            }
+            switch (app.Services.GetRequiredService<ISecretReader>())
+            {
+                case FileSecretStore file:
+                    app.Logger.LogInformation(
+                        "Secrets are kept in the local secrets file {SecretsFile}. Configure {KeyVaultUriKey} to use Key Vault.",
+                        file.Path, SecretStoreConfiguration.KeyVaultUriKey);
+                    break;
+                case KeyVaultSecretStore vault:
+                    app.Logger.LogInformation("Secrets are kept in Key Vault {VaultUri}.", vault.VaultUri);
+                    break;
             }
             return app;
         }

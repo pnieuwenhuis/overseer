@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Overseer.Login;
 using Overseer.Persistence;
 using Overseer.Server;
@@ -35,6 +36,9 @@ public sealed class RunningOverseer : IAsyncDisposable
     /// <summary>The client's cookies; copy them to another instance to keep a browser session across a restart.</summary>
     public CookieContainer Cookies { get; } = new();
 
+    /// <summary>The server's services, for what the Portal can't reach yet, such as the secret store.</summary>
+    public IServiceProvider Services => _app.Services;
+
     /// <summary>A fresh connection to Overseer's database; dispose it when done.</summary>
     public OverseerDbContext OpenDatabase() =>
         _app.Services.GetRequiredService<IDbContextFactory<OverseerDbContext>>().CreateDbContext();
@@ -53,7 +57,9 @@ public sealed class RunningOverseer : IAsyncDisposable
     }
 
     /// <param name="environment">Overrides the test defaults; a <c>null</c> value removes that variable.</param>
-    public static async Task<RunningOverseer> StartAsync(string connectionString, IReadOnlyDictionary<string, string?>? environment = null)
+    /// <param name="logs">Also receives everything the server logs.</param>
+    public static async Task<RunningOverseer> StartAsync(
+        string connectionString, IReadOnlyDictionary<string, string?>? environment = null, ILoggerProvider? logs = null)
     {
         var defaults = new Dictionary<string, string?>
         {
@@ -69,7 +75,8 @@ public sealed class RunningOverseer : IAsyncDisposable
 
         var app = await OverseerServer.StartAsync(
             defaults.Where(variable => variable.Value is not null).ToDictionary(),
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken,
+            logs);
 
         return new RunningOverseer(app);
     }
