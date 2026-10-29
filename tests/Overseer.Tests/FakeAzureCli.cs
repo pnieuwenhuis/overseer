@@ -19,6 +19,7 @@ public sealed class FakeAzureCli : IDisposable
         Directory.CreateDirectory(Path.Combine(_directory, "responses"));
         var az = Path.Combine(_directory, "bin", "az");
         // The last response whose arguments start the call answers it; without one, the call succeeds without output.
+        // A response given in turns answers with its next output each time, and with its last one once they run out.
         File.WriteAllText(az, $$"""
             #!/bin/bash
             dir='{{_directory}}'
@@ -31,7 +32,14 @@ public sealed class FakeAzureCli : IDisposable
               case "$call" in "$prefix"*) match=${response%.args} ;; esac
             done
             if [ -n "$match" ]; then
-              cat "$match.out"
+              if [ -e "$match.turns" ]; then
+                turn=$(( $(cat "$match.turn") + 1 ))
+                [ "$turn" -le "$(cat "$match.turns")" ] || turn=$(cat "$match.turns")
+                echo "$turn" > "$match.turn"
+                cat "$match.out.$turn"
+              else
+                cat "$match.out"
+              fi
               cat "$match.err" >&2
               exit "$(cat "$match.code")"
             fi
@@ -63,6 +71,23 @@ public sealed class FakeAzureCli : IDisposable
         return this;
     }
 
+    /// <summary>
+    /// Answers later calls whose arguments start with <paramref name="command"/> with each of <paramref name="outputs"/>
+    /// in turn, then with the last one, as Azure answers before and after a change.
+    /// </summary>
+    public FakeAzureCli RespondInTurn(string[] command, params string[] outputs)
+    {
+        Respond(command);
+        var path = Path.Combine(_directory, "responses", $"{_responses:D4}");
+        for (var turn = 1; turn <= outputs.Length; turn++)
+        {
+            File.WriteAllText($"{path}.out.{turn}", outputs[turn - 1]);
+        }
+        File.WriteAllText(path + ".turns", outputs.Length.ToString());
+        File.WriteAllText(path + ".turn", "0");
+        return this;
+    }
+
     /// <summary>Fails every later call whose arguments start with <paramref name="command"/>, the way <c>az</c> reports an Azure error.</summary>
     public FakeAzureCli Fail(string[] command, string error) => Respond(command, error: error + "\n", exitCode: 1);
 
@@ -79,6 +104,27 @@ public sealed class FakeAzureCli : IDisposable
                 : [];
         }
     }
+
+    /// <summary>The calls that start with <paramref name="command"/>, such as <c>containerapp create</c>.</summary>
+    public IReadOnlyList<IReadOnlyList<string>> CallsTo(params string[] command) =>
+        Calls.Where(call => call.Take(command.Length).SequenceEqual(command)).ToList();
+
+    /// <summary>The one call that starts with <paramref name="command"/>.</summary>
+    public IReadOnlyList<string> CallTo(params string[] command) => Assert.Single(CallsTo(command));
+
+    /// <summary>The calls that change something in Azure, as opposed to looking.</summary>
+    public IReadOnlyList<IReadOnlyList<string>> Changes =>
+        Calls.Where(call => Command(call).Split(' ').Last() is not ("list" or "show" or "exists")).ToList();
+
+    /// <summary>The command a call runs, such as <c>containerapp env create</c>: its arguments up to the first option.</summary>
+    public static string Command(IReadOnlyList<string> call) => string.Join(' ', call.TakeWhile(argument => !argument.StartsWith("--")));
+
+    /// <summary>The values that follow <paramref name="option"/> in <paramref name="call"/>, up to the next option.</summary>
+    public static IReadOnlyList<string> Values(IReadOnlyList<string> call, string option) =>
+        call.SkipWhile(argument => argument != option).Skip(1).TakeWhile(argument => !argument.StartsWith("--")).ToList();
+
+    /// <summary>The one value that follows <paramref name="option"/> in <paramref name="call"/>.</summary>
+    public static string Value(IReadOnlyList<string> call, string option) => Assert.Single(Values(call, option));
 
     public void Dispose() => Directory.Delete(_directory, recursive: true);
 }

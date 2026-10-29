@@ -3,6 +3,7 @@ using Npgsql;
 using Overseer.Cli;
 using Overseer.Secrets;
 using Overseer.Server;
+using static Overseer.Tests.FakeAzureCli;
 
 namespace Overseer.Tests;
 
@@ -120,7 +121,7 @@ public class InstallTests : IDisposable
         Assert.Equal(1, exitCode);
         Assert.Contains(azureError, output);
         Assert.All(advice, words => Assert.Contains(words, output));
-        Assert.Empty(Calls("containerapp", "create"));
+        Assert.Empty(_az.CallsTo("containerapp", "create"));
         Assert.DoesNotContain("Password:", output);
     }
 
@@ -160,7 +161,7 @@ public class InstallTests : IDisposable
         var (exitCode, _) = await Install();
 
         Assert.Equal(0, exitCode);
-        Assert.Equal(["overseer-rg", "overseer-sandboxes-rg"], Calls("group", "create").Select(call => Value(call, "--name")).Order());
+        Assert.Equal(["overseer-rg", "overseer-sandboxes-rg"], _az.CallsTo("group", "create").Select(call => Value(call, "--name")).Order());
         Assert.All(_az.Calls.Where(call => call.Contains("--location")), call => Assert.Equal("westeurope", Value(call, "--location")));
     }
 
@@ -170,8 +171,8 @@ public class InstallTests : IDisposable
         var (exitCode, _) = await Install("--region", "swedencentral", "--prefix", "acme");
 
         Assert.Equal(0, exitCode);
-        Assert.Equal(["acme-rg", "acme-sandboxes-rg"], Calls("group", "create").Select(call => Value(call, "--name")).Order());
-        Assert.Equal("acme", Value(Call("containerapp", "create"), "--name"));
+        Assert.Equal(["acme-rg", "acme-sandboxes-rg"], _az.CallsTo("group", "create").Select(call => Value(call, "--name")).Order());
+        Assert.Equal("acme", Value(_az.CallTo("containerapp", "create"), "--name"));
         var locations = _az.Calls.Where(call => call.Contains("--location")).ToList();
         Assert.NotEmpty(locations);
         Assert.All(locations, call => Assert.Equal("swedencentral", Value(call, "--location")));
@@ -203,10 +204,10 @@ public class InstallTests : IDisposable
         var (exitCode, _) = await Install();
 
         Assert.Equal(0, exitCode);
-        var identity = Call("identity", "create");
+        var identity = _az.CallTo("identity", "create");
         Assert.Equal("overseer-identity", Value(identity, "--name"));
         Assert.Equal("overseer-rg", Value(identity, "--resource-group"));
-        var assignment = Assert.Single(Calls("role", "assignment", "create"));
+        var assignment = Assert.Single(_az.CallsTo("role", "assignment", "create"));
         Assert.Equal(IdentityPrincipalId, Value(assignment, "--assignee-object-id"));
         Assert.Equal("ServicePrincipal", Value(assignment, "--assignee-principal-type"));
         Assert.Equal("Contributor", Value(assignment, "--role"));
@@ -219,13 +220,13 @@ public class InstallTests : IDisposable
         var (exitCode, _) = await Install();
 
         Assert.Equal(0, exitCode);
-        var network = Call("network", "vnet", "create");
+        var network = _az.CallTo("network", "vnet", "create");
         Assert.Equal("overseer-vnet", Value(network, "--name"));
         Assert.Equal("overseer-rg", Value(network, "--resource-group"));
-        var subnet = Assert.Single(Calls("network", "vnet", "subnet", "create"), call => Value(call, "--name") == "postgres");
+        var subnet = Assert.Single(_az.CallsTo("network", "vnet", "subnet", "create"), call => Value(call, "--name") == "postgres");
         Assert.Equal("Microsoft.DBforPostgreSQL/flexibleServers", Value(subnet, "--delegations"));
 
-        var server = Call("postgres", "flexible-server", "create");
+        var server = _az.CallTo("postgres", "flexible-server", "create");
         Assert.Equal("overseer-rg", Value(server, "--resource-group"));
         Assert.Equal("Burstable", Value(server, "--tier"));
         Assert.Equal(
@@ -237,7 +238,7 @@ public class InstallTests : IDisposable
         Assert.Equal(IdentityPrincipalId, Value(server, "--admin-object-id"));
         Assert.Equal("ServicePrincipal", Value(server, "--admin-type"));
         Assert.Equal("overseer-identity", Value(server, "--admin-display-name"));
-        Assert.Equal("overseer", Value(Call("postgres", "flexible-server", "db", "create"), "--database-name"));
+        Assert.Equal("overseer", Value(_az.CallTo("postgres", "flexible-server", "db", "create"), "--database-name"));
     }
 
     [Fact]
@@ -246,12 +247,12 @@ public class InstallTests : IDisposable
         var (exitCode, _) = await Install();
 
         Assert.Equal(0, exitCode);
-        var vault = Call("keyvault", "create");
+        var vault = _az.CallTo("keyvault", "create");
         Assert.Equal("overseer-rg", Value(vault, "--resource-group"));
         // Access policies instead of Azure RBAC, so Contributor on the Sandbox resource group stays the identity's only role.
         Assert.Equal("false", Value(vault, "--enable-rbac-authorization"));
         Assert.Contains("--no-self-perms", vault);
-        var policy = Assert.Single(Calls("keyvault", "set-policy"));
+        var policy = Assert.Single(_az.CallsTo("keyvault", "set-policy"));
         Assert.Equal(Value(vault, "--name"), Value(policy, "--name"));
         Assert.Equal(IdentityPrincipalId, Value(policy, "--object-id"));
         Assert.Equal(["delete", "get", "list", "recover", "set"], Values(policy, "--secret-permissions").Order());
@@ -266,8 +267,8 @@ public class InstallTests : IDisposable
         _az.Respond(["account", "show"], "11111111-2222-4333-8444-555566667777\nOther subscription\nuser@example.com\n");
         await Install();
 
-        var vaults = Calls("keyvault", "create").Select(call => Value(call, "--name")).ToList();
-        var servers = Calls("postgres", "flexible-server", "create").Select(call => Value(call, "--name")).ToList();
+        var vaults = _az.CallsTo("keyvault", "create").Select(call => Value(call, "--name")).ToList();
+        var servers = _az.CallsTo("postgres", "flexible-server", "create").Select(call => Value(call, "--name")).ToList();
         Assert.All(vaults, name => Assert.Matches("^overseer-kv-[0-9a-f]{8}$", name));
         Assert.All(servers, name => Assert.Matches("^overseer-db-[0-9a-f]{8}$", name));
         Assert.Equal(vaults[0], vaults[1]);
@@ -282,15 +283,15 @@ public class InstallTests : IDisposable
         var (exitCode, _) = await Install();
 
         Assert.Equal(0, exitCode);
-        var environment = Call("containerapp", "env", "create");
+        var environment = _az.CallTo("containerapp", "env", "create");
         Assert.Equal("overseer-rg", Value(environment, "--resource-group"));
         Assert.Equal(
             $"/subscriptions/{SubscriptionId}/resourceGroups/overseer-rg/providers/Microsoft.Network/virtualNetworks/overseer-vnet/subnets/container-apps",
             Value(environment, "--infrastructure-subnet-resource-id"));
-        var subnet = Assert.Single(Calls("network", "vnet", "subnet", "create"), call => Value(call, "--name") == "container-apps");
+        var subnet = Assert.Single(_az.CallsTo("network", "vnet", "subnet", "create"), call => Value(call, "--name") == "container-apps");
         Assert.Equal("Microsoft.App/environments", Value(subnet, "--delegations"));
 
-        var app = Call("containerapp", "create");
+        var app = _az.CallTo("containerapp", "create");
         Assert.Equal(Value(environment, "--name"), Value(app, "--environment"));
         Assert.Equal("ghcr.io/pnieuwenhuis/overseer:1.2.3", Value(app, "--image"));
         Assert.Equal("1", Value(app, "--min-replicas"));
@@ -305,7 +306,7 @@ public class InstallTests : IDisposable
         var (exitCode, _) = await Install();
 
         Assert.Equal(0, exitCode);
-        var app = Call("containerapp", "create");
+        var app = _az.CallTo("containerapp", "create");
         Assert.Equal(IdentityId, Value(app, "--user-assigned"));
         var settings = ContainerAppEnvironment();
         var connectionString = new NpgsqlConnectionStringBuilder(settings["OVERSEER_CONNECTIONSTRINGS__OVERSEER"]);
@@ -334,7 +335,7 @@ public class InstallTests : IDisposable
         Assert.Equal(1, exitCode);
         var refusal = Assert.Single(output.Split('\n'), line => line.Contains("swedencentral"));
         Assert.Contains("westeurope", refusal);
-        Assert.Empty(Changes());
+        Assert.Empty(_az.Changes);
     }
 
     [Fact]
@@ -347,7 +348,7 @@ public class InstallTests : IDisposable
         Assert.Equal(1, exitCode);
         Assert.Contains("overseer-rg", output);
         Assert.Contains("--prefix", output);
-        Assert.Empty(Changes());
+        Assert.Empty(_az.Changes);
     }
 
     [Fact]
@@ -361,7 +362,7 @@ public class InstallTests : IDisposable
         Assert.Equal(1, exitCode);
         Assert.Contains("overseer-sandboxes-rg", output);
         Assert.Contains("--prefix", output);
-        Assert.DoesNotContain(Changes(), call => Command(call).EndsWith(" create") && Command(call) != "group create");
+        Assert.DoesNotContain(_az.Changes, call => Command(call).EndsWith(" create") && Command(call) != "group create");
     }
 
     [Fact]
@@ -388,8 +389,8 @@ public class InstallTests : IDisposable
         // Registering providers and setting the vault's access policy again are no-ops; so is deploying the image the app already runs.
         Assert.Equal(
             ["containerapp update", "keyvault set-policy", "provider register"],
-            Changes().Select(Command).Distinct().Order());
-        Assert.Equal("ghcr.io/pnieuwenhuis/overseer:1.2.3", Value(Call("containerapp", "update"), "--image"));
+            _az.Changes.Select(Command).Distinct().Order());
+        Assert.Equal("ghcr.io/pnieuwenhuis/overseer:1.2.3", Value(_az.CallTo("containerapp", "update"), "--image"));
     }
 
     [Fact]
@@ -401,7 +402,7 @@ public class InstallTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Contains(output.Split('\n'), line => line.Contains("Upgrading") && line.Contains("1.2.0") && line.Contains("1.2.3"));
-        var update = Call("containerapp", "update");
+        var update = _az.CallTo("containerapp", "update");
         Assert.Equal("overseer", Value(update, "--name"));
         Assert.Equal("ghcr.io/pnieuwenhuis/overseer:1.2.3", Value(update, "--image"));
         Assert.Equal("1", Value(update, "--min-replicas"));
@@ -414,7 +415,7 @@ public class InstallTests : IDisposable
         // Nothing else changes: the database and the Key Vault, with the secrets in them, are neither created again nor removed.
         Assert.Equal(
             ["containerapp update", "keyvault set-policy", "provider register"],
-            Changes().Select(Command).Distinct().Order());
+            _az.Changes.Select(Command).Distinct().Order());
     }
 
     [Fact]
@@ -442,7 +443,7 @@ public class InstallTests : IDisposable
         var (exitCode, _) = await Install();
 
         Assert.Equal(0, exitCode);
-        var readiness = Calls("containerapp", "replica", "list");
+        var readiness = _az.CallsTo("containerapp", "replica", "list");
         Assert.NotEmpty(readiness);
         Assert.All(readiness, call => Assert.Equal(LatestRevision, Value(call, "--revision")));
     }
@@ -462,7 +463,7 @@ public class InstallTests : IDisposable
         Assert.Equal(1, exitCode);
         var refusal = Assert.Single(output.Split('\n'), line => line.Contains(deployedVersion));
         Assert.Contains("1.2.3", refusal);
-        Assert.Empty(Changes());
+        Assert.Empty(_az.Changes);
     }
 
     [Theory]
@@ -477,7 +478,7 @@ public class InstallTests : IDisposable
         var (exitCode, _) = await Install();
 
         Assert.Equal(0, exitCode);
-        Assert.Equal("ghcr.io/pnieuwenhuis/overseer:1.2.3", Value(Call("containerapp", "update"), "--image"));
+        Assert.Equal("ghcr.io/pnieuwenhuis/overseer:1.2.3", Value(_az.CallTo("containerapp", "update"), "--image"));
     }
 
     [Fact]
@@ -493,7 +494,7 @@ public class InstallTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.Equal(
             ["containerapp create", "containerapp env create", "monitor log-analytics workspace create", "postgres flexible-server create", "postgres flexible-server db create"],
-            Changes().Select(Command).Where(command => command.EndsWith(" create")).Order());
+            _az.Changes.Select(Command).Where(command => command.EndsWith(" create")).Order());
         Assert.All(_az.Calls.Where(call => call.Contains("--location")), call => Assert.Equal("swedencentral", Value(call, "--location")));
         // The Container App is new, so is its password.
         var credentials = ResetPasswordOutput.Parse(output);
@@ -562,35 +563,16 @@ public class InstallTests : IDisposable
         }
     }
 
-    /// <summary>The calls that change something in Azure, as opposed to looking.</summary>
-    private IReadOnlyList<IReadOnlyList<string>> Changes() =>
-        _az.Calls.Where(call => Command(call).Split(' ').Last() is not ("list" or "show" or "exists")).ToList();
-
-    /// <summary>The command a call runs, such as <c>containerapp env create</c>: its arguments up to the first option.</summary>
-    private static string Command(IReadOnlyList<string> call) => string.Join(' ', call.TakeWhile(argument => !argument.StartsWith("--")));
-
-    private IReadOnlyList<IReadOnlyList<string>> Calls(params string[] command) =>
-        _az.Calls.Where(call => call.Take(command.Length).SequenceEqual(command)).ToList();
-
-    private IReadOnlyList<string> Call(params string[] command) =>
-        Assert.Single(_az.Calls, call => call.Take(command.Length).SequenceEqual(command));
-
-    /// <summary>The values that follow <paramref name="option"/> in <paramref name="call"/>, up to the next option.</summary>
-    private static IReadOnlyList<string> Values(IReadOnlyList<string> call, string option) =>
-        call.SkipWhile(argument => argument != option).Skip(1).TakeWhile(argument => !argument.StartsWith("--")).ToList();
-
-    private static string Value(IReadOnlyList<string> call, string option) => Assert.Single(Values(call, option));
-
     /// <summary>The Container App's environment variables, with secret references resolved as Container Apps does.</summary>
     private Dictionary<string, string?> ContainerAppEnvironment() =>
-        Values(Call("containerapp", "create"), "--env-vars")
+        Values(_az.CallTo("containerapp", "create"), "--env-vars")
             .Select(variable => variable.Split('=', 2))
             .ToDictionary(
                 variable => variable[0],
                 string? (variable) => variable[1].StartsWith("secretref:") ? ContainerAppSecret(variable[1]["secretref:".Length..]) : variable[1]);
 
     private string ContainerAppSecret(string name) =>
-        Assert.Single(Values(Call("containerapp", "create"), "--secrets"), secret => secret.StartsWith(name + "="))[(name.Length + 1)..];
+        Assert.Single(Values(_az.CallTo("containerapp", "create"), "--secrets"), secret => secret.StartsWith(name + "="))[(name.Length + 1)..];
 
     private Task<(int ExitCode, string Output)> Install(params string[] args) => Install(args, _az.Environment());
 

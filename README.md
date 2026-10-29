@@ -33,6 +33,18 @@ To upgrade, get the new `overseer` and run `install` again with the same `--pref
 - leaves the database, the Key Vault with its secrets, and the password alone. It prints the Portal URL and the username, and says the password is kept: `overseer reset-password` sets a new one;
 - refuses to deploy a version older than the one running, because migrations only go forward.
 
+### Resetting the password
+
+If you lose the password, generate a new one for the installation with the same `--prefix` as install:
+
+```sh
+overseer reset-password [--prefix overseer]
+```
+
+It finds the installation in the subscription your Azure CLI uses, sets the new password's hash as the Container App's `password-hash` secret, restarts the active revision and waits until its new replica is ready and the old one, which still has the old hash, is gone. Then it prints the username and the new password, once. The old password no longer works, and sessions logged in with it have ended (ADR 0005). Nothing else changes: no new revision, no other setting, and the database and Key Vault are left alone. It needs Contributor on `<prefix>-rg`.
+
+If the restart fails, it still prints the password, with the `az` command to restart the Container App yourself: the hash is set, and the next restart makes it the only one that works. Running reset-password again would replace it.
+
 ## Running Overseer locally
 
 You need the .NET 10 SDK and Docker.
@@ -48,7 +60,7 @@ You need the .NET 10 SDK and Docker.
 2. Generate a password:
 
    ```sh
-   dotnet run --project src/Overseer -- reset-password
+   dotnet run --project src/Overseer -- reset-password --local
    ```
 
    This prints the username and a new password, once, and writes only the password's hash to the local config file (see [Configuration](#configuration)). Run it again whenever you lose the password, then restart the server. Without a hash, `serve` refuses to start (ADR 0005).
@@ -78,7 +90,7 @@ Other environment variables aren't read as settings. The only exception is `ASPN
 | Database         | `ConnectionStrings:Overseer`      | `OVERSEER_CONNECTIONSTRINGS__OVERSEER`      | none; `serve` exits with a message when it is missing (the compose database in Development) |
 | Listen address   | `Urls`                            | `OVERSEER_URLS`                             | `http://localhost:5080`                                                                     |
 | Username         | `User:Name`                       | `OVERSEER_USER__NAME`                       | `overseer`                                                                                  |
-| Password hash    | `User:PasswordHash`               | `OVERSEER_USER__PASSWORDHASH`               | none; `serve` exits with a message pointing at `reset-password`                             |
+| Password hash    | `User:PasswordHash`               | `OVERSEER_USER__PASSWORDHASH`               | none; `serve` exits with a message pointing at `reset-password --local`                     |
 | Database login   | `Database:EntraAuthentication`    | `OVERSEER_DATABASE__ENTRAAUTHENTICATION`    | `false`: the connection string's password. `true`: a Microsoft Entra token, as in Azure (see [Database login](#database-login)) |
 | Database identity | `Database:ManagedIdentityClientId` | `OVERSEER_DATABASE__MANAGEDIDENTITYCLIENTID` | none; the system-assigned identity, or your Azure CLI login                                |
 | Azure provider   | `SandboxProvider:Azure`           | `OVERSEER_SANDBOXPROVIDER__AZURE__*`        | none; the fake Sandbox Provider (see [Sandboxes](#sandboxes))                               |
@@ -125,7 +137,7 @@ dotnet test
 
 Docker must be running: the server tests start Overseer in-process against a real PostgreSQL through Testcontainers.
 
-The install tests run `overseer install` against a fake `az` (`tests/Overseer.Tests/FakeAzureCli.cs`), so they need bash but no Azure. An opt-in smoke test installs for real into the subscription your Azure CLI is logged in to, with a fresh prefix, logs in to the Portal, runs install again (which must keep the password and create no new revision) and deletes everything afterwards (about half an hour, and a little cost). It needs a released version whose image is published, such as a prerelease tag pushed for the purpose:
+The install and Azure reset-password tests run `overseer install` and `overseer reset-password` against a fake `az` (`tests/Overseer.Tests/FakeAzureCli.cs`), so they need bash but no Azure. An opt-in smoke test installs for real into the subscription your Azure CLI is logged in to, with a fresh prefix, logs in to the Portal, resets the password (after which only the new one logs in), runs install again (which must keep the password and create no new revision) and deletes everything afterwards (about half an hour, and a little cost). It needs a released version whose image is published, such as a prerelease tag pushed for the purpose:
 
 ```sh
 TEST_INSTALL_VERSION=0.2.0-rc.1 dotnet test --filter InstallSmokeTest

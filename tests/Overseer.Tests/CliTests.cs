@@ -63,7 +63,7 @@ public class CliTests : IDisposable
         var (exitCode, output) = await Run("serve");
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("overseer reset-password", output);
+        Assert.Contains("overseer reset-password --local", output);
     }
 
     [Fact]
@@ -74,13 +74,13 @@ public class CliTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("not a password hash", output);
-        Assert.Contains("overseer reset-password", output);
+        Assert.Contains("overseer reset-password --local", output);
     }
 
     [Fact]
-    public async Task Reset_password_prints_a_new_password_and_writes_its_hash_to_the_local_config_file()
+    public async Task Local_reset_password_prints_a_new_password_and_writes_its_hash_to_the_local_config_file()
     {
-        var (exitCode, output) = await Run("reset-password");
+        var (exitCode, output) = await Run("reset-password", "--local");
 
         Assert.Equal(0, exitCode);
         var credentials = ResetPasswordOutput.Parse(output);
@@ -92,17 +92,17 @@ public class CliTests : IDisposable
     }
 
     [Fact]
-    public async Task Reset_password_generates_a_different_password_each_time()
+    public async Task Local_reset_password_generates_a_different_password_each_time()
     {
-        var first = ResetPasswordOutput.Parse((await Run("reset-password")).Output);
-        var second = ResetPasswordOutput.Parse((await Run("reset-password")).Output);
+        var first = ResetPasswordOutput.Parse((await Run("reset-password", "--local")).Output);
+        var second = ResetPasswordOutput.Parse((await Run("reset-password", "--local")).Output);
 
         Assert.NotEqual(first.Password, second.Password);
         Assert.False(Passwords.Verify(ConfiguredPasswordHash(File.ReadAllText(LocalConfigFile)), first.Password));
     }
 
     [Fact]
-    public async Task Reset_password_keeps_the_other_settings_in_the_local_config_file()
+    public async Task Local_reset_password_keeps_the_other_settings_in_the_local_config_file()
     {
         File.WriteAllText(LocalConfigFile, """
             {
@@ -112,7 +112,7 @@ public class CliTests : IDisposable
             }
             """);
 
-        var credentials = ResetPasswordOutput.Parse((await Run("reset-password")).Output);
+        var credentials = ResetPasswordOutput.Parse((await Run("reset-password", "--local")).Output);
 
         Assert.Equal("paul", credentials.Username);
         var configFile = JsonNode.Parse(File.ReadAllText(LocalConfigFile))!;
@@ -122,12 +122,22 @@ public class CliTests : IDisposable
     }
 
     [Fact]
-    public async Task Reset_password_warns_when_an_environment_variable_overrides_the_new_hash()
+    public async Task Local_reset_password_warns_when_an_environment_variable_overrides_the_new_hash()
     {
-        var (exitCode, output) = await Run(["reset-password"], new Dictionary<string, string?> { ["OVERSEER_USER__PASSWORDHASH"] = "set-elsewhere" });
+        var (exitCode, output) = await Run(["reset-password", "--local"], new Dictionary<string, string?> { ["OVERSEER_USER__PASSWORDHASH"] = "set-elsewhere" });
 
         Assert.Equal(0, exitCode);
         Assert.Contains("OVERSEER_USER__PASSWORDHASH", output);
+    }
+
+    [Fact]
+    public async Task Reset_password_refuses_a_prefix_with_local_because_it_names_an_installation_in_Azure()
+    {
+        var (exitCode, output) = await Run("reset-password", "--local", "--prefix", "acme");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("--local", output);
+        Assert.False(File.Exists(LocalConfigFile));
     }
 
     private static string ConfiguredPasswordHash(string configFile)

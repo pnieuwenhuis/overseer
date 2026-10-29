@@ -34,9 +34,6 @@ public static class OverseerCli
             }
         });
 
-        var resetPassword = new Command("reset-password", "Generate a new password for the Overseer user.");
-        resetPassword.SetAction((_, _) => LocalResetPassword.RunAsync(environment, output, error));
-
         var region = new Option<string>("--region")
         {
             Description = $"The Azure region to install into: {Install.DefaultRegion} when left out. An existing installation stays in its region.",
@@ -44,11 +41,31 @@ public static class OverseerCli
         var prefix = new Option<string>("--prefix")
         {
             Description = "Starts the name of every resource Overseer creates; it identifies the installation.",
-            DefaultValueFactory = _ => Install.DefaultPrefix,
+            DefaultValueFactory = _ => InstallationNames.DefaultPrefix,
         };
         var install = new Command("install", "Install Overseer in Azure.") { region, prefix };
         install.SetAction((parseResult, cancellationToken) => Install.RunAsync(
             parseResult.GetValue(region), parseResult.GetRequiredValue(prefix), version, environment, output, error, cancellationToken));
+
+        var local = new Option<bool>("--local")
+        {
+            Description = "Reset the password of an Overseer you run yourself with `serve`: its hash goes into the local config file.",
+        };
+        var resetPassword = new Command("reset-password", "Generate a new password for the Overseer user, of an installation in Azure unless --local.")
+        {
+            prefix,
+            local,
+        };
+        resetPassword.Validators.Add(result =>
+        {
+            if (result.GetValue(local) && result.GetResult(prefix) is { Implicit: false })
+            {
+                result.AddError("--prefix names an installation in Azure, so it can't go with --local.");
+            }
+        });
+        resetPassword.SetAction((parseResult, cancellationToken) => parseResult.GetValue(local)
+            ? LocalResetPassword.RunAsync(environment, output, error)
+            : ResetPassword.RunAsync(parseResult.GetRequiredValue(prefix), environment, output, error, cancellationToken));
 
         var root = new RootCommand("Overseer: direct a team of AI agents from Intent to merged pull request.")
         {

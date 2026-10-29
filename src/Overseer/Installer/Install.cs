@@ -13,8 +13,6 @@ internal static partial class Install
     /// <summary>Where a new installation goes without <c>--region</c>; an existing one stays where it is.</summary>
     public const string DefaultRegion = "westeurope";
 
-    public const string DefaultPrefix = "overseer";
-
     public static async Task<int> RunAsync(
         string? region, string prefix, string version,
         IReadOnlyDictionary<string, string?> environment, TextWriter output, TextWriter error, CancellationToken cancellationToken)
@@ -26,11 +24,9 @@ internal static partial class Install
                 "Install with a released `overseer` from https://github.com/pnieuwenhuis/overseer/releases.");
             return 1;
         }
-        if (!ValidPrefix().IsMatch(prefix))
+        if (InstallationNames.PrefixProblem(prefix) is { } prefixProblem)
         {
-            await error.WriteLineAsync(
-                $"--prefix {prefix} can't start Azure resource names. Use 3 to 12 lowercase letters, digits and single hyphens, " +
-                "starting with a letter and not ending with a hyphen, such as `overseer` or `acme-dev`.");
+            await error.WriteLineAsync(prefixProblem);
             return 1;
         }
         if (region is not null && !ValidRegion().IsMatch(region))
@@ -52,10 +48,10 @@ internal static partial class Install
         }
 
         var azure = new AzureScripts(environment);
-        string[] account;
+        AzureAccount account;
         try
         {
-            account = Lines(await azure.RunAsync("check-azure-cli", new Dictionary<string, string>(), cancellationToken));
+            account = await AzureAccount.CurrentAsync(azure, cancellationToken);
         }
         catch (AzureScriptException exception)
         {
@@ -63,27 +59,14 @@ internal static partial class Install
             await error.WriteLineAsync(exception.Message);
             return 1;
         }
-        var (subscriptionId, subscriptionName, user) = (account[0], account[1], account[2]);
-        var names = new InstallationNames(prefix, subscriptionId);
-        await output.WriteLineAsync(
-            $"Using the subscription {subscriptionName} ({subscriptionId}) as {user}. `az account set` selects another subscription.");
+        var names = new InstallationNames(prefix, account.SubscriptionId);
+        await output.WriteLineAsync(account.Using);
 
-        async Task<string[]> Step(string description, string script, Dictionary<string, string> parameters)
-        {
-            await output.WriteLineAsync($"{description}...");
-            try
-            {
-                return Lines(await azure.RunAsync(script, parameters, cancellationToken));
-            }
-            catch (AzureScriptException exception)
-            {
-                throw new StepFailedException(description, exception.Message);
-            }
-        }
+        var steps = new AzureSteps(azure, output, cancellationToken);
 
         try
         {
-            var found = await Step($"Looking for an installation with the prefix {prefix}", "find-installation", new()
+            var found = await steps.RunAsync($"Looking for an installation with the prefix {prefix}", "find-installation", new()
             {
                 ["ResourceGroup"] = names.ResourceGroup,
                 ["ContainerApp"] = names.ContainerApp,
@@ -134,9 +117,9 @@ internal static partial class Install
             // An existing installation may lack what an install that stopped early didn't create, so every step looks first.
             string CreatingOrChecking(string what, string howLong = "") => existing ? $"Checking {what}" : $"Creating {what}{howLong}";
 
-            await Step("Registering the Azure resource providers Overseer uses", "register-providers", []);
+            await steps.RunAsync("Registering the Azure resource providers Overseer uses", "register-providers", []);
 
-            await Step(CreatingOrChecking($"the resource groups {names.ResourceGroup} and {names.SandboxResourceGroup}"), "create-resource-groups", new()
+            await steps.RunAsync(CreatingOrChecking($"the resource groups {names.ResourceGroup} and {names.SandboxResourceGroup}"), "create-resource-groups", new()
             {
                 ["ResourceGroup"] = names.ResourceGroup,
                 ["SandboxResourceGroup"] = names.SandboxResourceGroup,
@@ -144,7 +127,7 @@ internal static partial class Install
                 ["Prefix"] = prefix,
             });
 
-            var identity = await Step(CreatingOrChecking("the Managed Identity, with Contributor on the Sandbox resource group only"), "create-identity", new()
+            var identity = await steps.RunAsync(CreatingOrChecking("the Managed Identity, with Contributor on the Sandbox resource group only"), "create-identity", new()
             {
                 ["SubscriptionId"] = names.SubscriptionId,
                 ["ResourceGroup"] = names.ResourceGroup,
@@ -154,7 +137,7 @@ internal static partial class Install
             });
             var (identityId, identityPrincipalId, identityClientId) = (identity[0], identity[1], identity[2]);
 
-            var vaultUri = (await Step(CreatingOrChecking("the Key Vault"), "create-key-vault", new()
+            var vaultUri = (await steps.RunAsync(CreatingOrChecking("the Key Vault"), "create-key-vault", new()
             {
                 ["ResourceGroup"] = names.ResourceGroup,
                 ["KeyVault"] = names.KeyVault,
@@ -162,14 +145,14 @@ internal static partial class Install
                 ["IdentityPrincipalId"] = identityPrincipalId,
             }))[0];
 
-            await Step(CreatingOrChecking("the virtual network"), "create-network", new()
+            await steps.RunAsync(CreatingOrChecking("the virtual network"), "create-network", new()
             {
                 ["ResourceGroup"] = names.ResourceGroup,
                 ["VirtualNetwork"] = names.VirtualNetwork,
                 ["Location"] = region,
             });
 
-            var databaseHost = (await Step(CreatingOrChecking("the PostgreSQL server", " (this takes 5 to 15 minutes)"), "create-database", new()
+            var databaseHost = (await steps.RunAsync(CreatingOrChecking("the PostgreSQL server", " (this takes 5 to 15 minutes)"), "create-database", new()
             {
                 ["SubscriptionId"] = names.SubscriptionId,
                 ["ResourceGroup"] = names.ResourceGroup,
@@ -181,7 +164,7 @@ internal static partial class Install
                 ["IdentityPrincipalId"] = identityPrincipalId,
             }))[0];
 
-            await Step(CreatingOrChecking("the Container Apps environment", " (this takes a few minutes)"), "create-container-app-environment", new()
+            await steps.RunAsync(CreatingOrChecking("the Container Apps environment", " (this takes a few minutes)"), "create-container-app-environment", new()
             {
                 ["SubscriptionId"] = names.SubscriptionId,
                 ["ResourceGroup"] = names.ResourceGroup,
@@ -207,7 +190,7 @@ internal static partial class Install
                 var password = Passwords.Generate();
                 try
                 {
-                    portalHost = (await Step($"Creating the Container App running {ImageRepository}:{version}", "create-container-app", new()
+                    portalHost = (await steps.RunAsync($"Creating the Container App running {ImageRepository}:{version}", "create-container-app", new()
                     {
                         ["ResourceGroup"] = names.ResourceGroup,
                         ["ContainerAppsEnvironment"] = names.ContainerAppsEnvironment,
@@ -245,7 +228,7 @@ internal static partial class Install
             else
             {
                 // The Container App's secrets stay as they are, and with them the password.
-                portalHost = (await Step($"Updating the Container App to {ImageRepository}:{version}", "update-container-app", new()
+                portalHost = (await steps.RunAsync($"Updating the Container App to {ImageRepository}:{version}", "update-container-app", new()
                 {
                     ["ResourceGroup"] = names.ResourceGroup,
                     ["ContainerApp"] = names.ContainerApp,
@@ -260,12 +243,12 @@ internal static partial class Install
                       Portal:   https://{portalHost}/
                       Username: {username}
 
-                    The existing password is kept. If you lost it, `overseer reset-password{(prefix == DefaultPrefix ? "" : $" --prefix {prefix}")}` sets a new one.
+                    The existing password is kept. If you lost it, `overseer reset-password{InstallationNames.PrefixOption(prefix)}` sets a new one.
                     """;
             }
             try
             {
-                await Step("Waiting for the Portal to start", "wait-for-portal", new()
+                await steps.RunAsync("Waiting for the Portal to start", "wait-for-portal", new()
                 {
                     ["ResourceGroup"] = names.ResourceGroup,
                     ["ContainerApp"] = names.ContainerApp,
@@ -287,7 +270,7 @@ internal static partial class Install
 
                 Install stopped at: {exception.Step}. The Azure CLI reported:
 
-                {Indent(exception.AzureError)}
+                {AzureSteps.Indent(exception.AzureError)}
 
                 {AzureErrorAdvice.For(exception.AzureError, region ?? DefaultRegion)}
                 """);
@@ -295,20 +278,6 @@ internal static partial class Install
         }
     }
 
-    // The Key Vault name is the tightest: at most 24 characters, of which the prefix gets 12 (see InstallationNames).
-    [GeneratedRegex("^(?=.{3,12}$)[a-z][a-z0-9]*(-[a-z0-9]+)*$")]
-    private static partial Regex ValidPrefix();
-
     [GeneratedRegex("^[a-z0-9]+$")]
     private static partial Regex ValidRegion();
-
-    private static string[] Lines(string output) => output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-
-    private static string Indent(string text) => string.Join(Environment.NewLine, text.Split('\n').Select(line => "    " + line.TrimEnd()));
-
-    private sealed class StepFailedException(string step, string azureError) : Exception($"{step}: {azureError}")
-    {
-        public string Step { get; } = step;
-        public string AzureError { get; } = azureError;
-    }
 }

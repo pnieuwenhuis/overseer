@@ -7,7 +7,8 @@ namespace Overseer.Tests;
 /// <summary>
 /// Opt-in: installs Overseer for real, into the subscription your Azure CLI is logged in to, when
 /// <c>TEST_INSTALL_VERSION</c> names a released version (its image must be published). It uses a fresh prefix,
-/// logs in to the Portal, runs install again as an upgrade would, and removes everything it created afterwards. It takes about half an hour and costs a little.
+/// logs in to the Portal, resets the password, runs install again as an upgrade would, and removes everything it created
+/// afterwards. It takes about half an hour and costs a little.
 /// </summary>
 public class InstallSmokeTest : IDisposable
 {
@@ -18,7 +19,7 @@ public class InstallSmokeTest : IDisposable
     private readonly string _prefix = $"smoke{Guid.NewGuid():N}"[..12];
 
     [Fact]
-    public async Task Install_into_a_real_subscription_gives_a_Portal_the_printed_credentials_log_in_to_also_after_running_it_again()
+    public async Task Install_into_a_real_subscription_gives_a_Portal_the_printed_credentials_log_in_to_also_after_a_reset_and_running_it_again()
     {
         var version = Environment.GetEnvironmentVariable(VersionVariable);
         Assert.SkipWhen(string.IsNullOrEmpty(version), $"Set {VersionVariable} to a released version to install it into your current Azure subscription.");
@@ -36,9 +37,22 @@ public class InstallSmokeTest : IDisposable
 
             Assert.True(exitCode == 0, output.ToString());
             var portal = new Uri(Regex.Match(output.ToString(), @"^\s*Portal:\s*(\S+)\s*$", RegexOptions.Multiline).Groups[1].Value);
-            var credentials = ResetPasswordOutput.Parse(output.ToString());
+            var installed = ResetPasswordOutput.Parse(output.ToString());
             using (var browser = new PortalBrowser(portal))
             {
+                await browser.LogInAsync(installed.Username, installed.Password);
+                Assert.True(await browser.IsLoggedInAsync());
+            }
+
+            var reset = new StringWriter();
+            exitCode = await OverseerCli.InvokeAsync(["reset-password", "--prefix", _prefix], environment, reset, reset, version);
+
+            Assert.True(exitCode == 0, reset.ToString());
+            var credentials = ResetPasswordOutput.Parse(reset.ToString());
+            using (var browser = new PortalBrowser(portal))
+            {
+                await browser.LogInAsync(installed.Username, installed.Password);
+                Assert.False(await browser.IsLoggedInAsync());
                 await browser.LogInAsync(credentials.Username, credentials.Password);
                 Assert.True(await browser.IsLoggedInAsync());
             }

@@ -54,14 +54,14 @@ public sealed class UserCredential
         if (string.IsNullOrWhiteSpace(passwordHash))
         {
             throw new MissingConfigurationException(
-                "No password is configured. Run `overseer reset-password` to generate one, " +
+                "No password is configured. Run `overseer reset-password --local` to generate one, " +
                 $"or set the {OverseerConfiguration.EnvironmentVariable(PasswordHashKey)} environment variable.");
         }
         if (!Passwords.IsHash(passwordHash))
         {
             throw new MissingConfigurationException(
-                $"The configured {PasswordHashKey} is not a password hash. Run `overseer reset-password` to generate a new password; " +
-                "it prints the password and configures only its hash.");
+                $"The configured {PasswordHashKey} is not a password hash. Run `overseer reset-password --local` to generate a new password " +
+                "(or `overseer reset-password` for an installation in Azure); it prints the password and configures only its hash.");
         }
 
         return new UserCredential(name, passwordHash);

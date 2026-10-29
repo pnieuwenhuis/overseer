@@ -3,7 +3,7 @@ using Overseer.Cli;
 
 namespace Overseer.Tests;
 
-/// <summary>A local <c>overseer reset-password</c> followed by a restart of <c>overseer serve</c>, as a developer would do it.</summary>
+/// <summary>A local <c>overseer reset-password --local</c> followed by a restart of <c>overseer serve</c>, as a developer would do it.</summary>
 public class ResetPasswordTests(PostgresServer postgres) : IDisposable
 {
     private readonly string _directory = Directory.CreateTempSubdirectory("overseer-reset-").FullName;
@@ -81,7 +81,7 @@ public class ResetPasswordTests(PostgresServer postgres) : IDisposable
     private async Task<ResetPasswordOutput> ResetPasswordAsync()
     {
         var output = new StringWriter();
-        Assert.Equal(0, await OverseerCli.InvokeAsync(["reset-password"], CliEnvironment, output, output));
+        Assert.Equal(0, await OverseerCli.InvokeAsync(["reset-password", "--local"], CliEnvironment, output, output));
         return ResetPasswordOutput.Parse(output.ToString());
     }
 
