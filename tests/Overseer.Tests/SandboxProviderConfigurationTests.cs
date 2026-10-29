@@ -48,6 +48,36 @@ public class SandboxProviderConfigurationTests : IDisposable
         Assert.Equal("Standard_D8s_v5", azure.Settings.VmSize);
     }
 
+    [Fact]
+    public async Task By_default_Sandboxes_have_a_public_IP_and_the_Azure_CLI_uses_its_own_login()
+    {
+        await using var app = Build(new()
+        {
+            ["OVERSEER_SANDBOXPROVIDER__AZURE__SUBSCRIPTIONID"] = Subscription,
+            ["OVERSEER_SANDBOXPROVIDER__AZURE__RESOURCEGROUP"] = "overseer-sandboxes-rg",
+        });
+
+        var azure = Assert.IsType<AzureSandboxProvider>(app.Services.GetRequiredService<ISandboxProvider>());
+        Assert.False(azure.Settings.PrivateNetwork);
+        Assert.Null(azure.Settings.ManagedIdentityClientId);
+    }
+
+    [Fact]
+    public async Task Sandboxes_can_be_private_and_managed_as_a_Managed_Identity()
+    {
+        await using var app = Build(new()
+        {
+            ["OVERSEER_SANDBOXPROVIDER__AZURE__SUBSCRIPTIONID"] = Subscription,
+            ["OVERSEER_SANDBOXPROVIDER__AZURE__RESOURCEGROUP"] = "overseer-sandboxes-rg",
+            ["OVERSEER_SANDBOXPROVIDER__AZURE__PRIVATENETWORK"] = "true",
+            ["OVERSEER_SANDBOXPROVIDER__AZURE__MANAGEDIDENTITYCLIENTID"] = "9f8e7d6c-aaaa-4bbb-8ccc-ddddeeeeffff",
+        });
+
+        var azure = Assert.IsType<AzureSandboxProvider>(app.Services.GetRequiredService<ISandboxProvider>());
+        Assert.True(azure.Settings.PrivateNetwork);
+        Assert.Equal("9f8e7d6c-aaaa-4bbb-8ccc-ddddeeeeffff", azure.Settings.ManagedIdentityClientId);
+    }
+
     [Theory]
     [InlineData("OVERSEER_SANDBOXPROVIDER__AZURE__SUBSCRIPTIONID", "OVERSEER_SANDBOXPROVIDER__AZURE__RESOURCEGROUP")]
     [InlineData("OVERSEER_SANDBOXPROVIDER__AZURE__RESOURCEGROUP", "OVERSEER_SANDBOXPROVIDER__AZURE__SUBSCRIPTIONID")]

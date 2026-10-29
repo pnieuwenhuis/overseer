@@ -9,21 +9,6 @@
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
-  <!-- The container image (`dotnet publish -t:PublishContainer`) is tagged with the same Version as the executable. -->
-  <PropertyGroup>
-    <ContainerRepository>pnieuwenhuis/overseer</ContainerRepository>
-    <ContainerImageTag>$(Version)</ContainerImageTag>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <ContainerDefaultArgs Include="serve" />
-    <!-- Configuration only reads OVERSEER_ variables, so the base image's ASPNETCORE_HTTP_PORTS has no effect. -->
-    <ContainerEnvironmentVariable Include="OVERSEER_URLS" Value="http://+:8080" />
-    <ContainerPort Include="8080" Type="tcp" />
-    <!-- Links the GHCR package to this repository. -->
-    <ContainerLabel Include="org.opencontainers.image.source" Value="https://github.com/pnieuwenhuis/overseer" />
-  </ItemGroup>
-
   <ItemGroup>
     <!-- The templated bash scripts of the installer and the Azure Sandbox Provider travel inside the executable. -->
     <EmbeddedResource Include="Installer/Scripts/*.sh" LogicalName="Overseer.Installer.Scripts.%(Filename)%(Extension)" />

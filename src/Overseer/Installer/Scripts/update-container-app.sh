@@ -3,7 +3,9 @@
 # already runs with the same settings creates no new revision. Prints the Portal's host name.
 set -euo pipefail
 
+subscription_id={{SubscriptionId}}
 resource_group={{ResourceGroup}}
+sandbox_resource_group={{SandboxResourceGroup}}
 container_app={{ContainerApp}}
 image={{Image}}
 identity_client_id={{IdentityClientId}}
@@ -17,14 +19,18 @@ az containerapp update \
   --image "$image" \
   --min-replicas 1 \
   --max-replicas 1 \
-  --cpu 0.5 \
-  --memory 1.0Gi \
+  --cpu 1.0 \
+  --memory 2.0Gi \
   --replace-env-vars \
     "OVERSEER_CONNECTIONSTRINGS__OVERSEER=$connection_string" \
     OVERSEER_DATABASE__ENTRAAUTHENTICATION=true \
     "OVERSEER_DATABASE__MANAGEDIDENTITYCLIENTID=$identity_client_id" \
     "OVERSEER_SECRETS__KEYVAULTURI=$vault_uri" \
     "OVERSEER_SECRETS__MANAGEDIDENTITYCLIENTID=$identity_client_id" \
+    "OVERSEER_SANDBOXPROVIDER__AZURE__SUBSCRIPTIONID=$subscription_id" \
+    "OVERSEER_SANDBOXPROVIDER__AZURE__RESOURCEGROUP=$sandbox_resource_group" \
+    OVERSEER_SANDBOXPROVIDER__AZURE__PRIVATENETWORK=true \
+    "OVERSEER_SANDBOXPROVIDER__AZURE__MANAGEDIDENTITYCLIENTID=$identity_client_id" \
     "OVERSEER_USER__NAME=$username" \
     OVERSEER_USER__PASSWORDHASH=secretref:password-hash \
   --query properties.configuration.ingress.fqdn \

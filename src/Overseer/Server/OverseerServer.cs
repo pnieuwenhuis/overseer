@@ -37,6 +37,7 @@ public static class OverseerServer
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSandboxes(builder.Configuration, environment);
         builder.Services.AddSecrets(builder.Configuration, environment);
+        builder.Services.AddSmokeTest(builder.Configuration);
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(options =>
@@ -69,6 +70,7 @@ public static class OverseerServer
         app.UseAntiforgery();
 
         app.MapStaticAssets();
+        app.MapSmokeTest();
         // Every page requires the logged-in user; only the login page opts out with [AllowAnonymous].
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode()
@@ -98,6 +100,12 @@ public static class OverseerServer
                     app.Logger.LogInformation(
                         "Using the fake Sandbox Provider: Sandboxes exist only in memory. Configure {AzureSection} to use Azure.",
                         SandboxProviderConfiguration.AzureSection);
+                    break;
+                case AzureSandboxProvider { Settings.PrivateNetwork: true } azure:
+                    app.Logger.LogInformation(
+                        "Sandboxes are Azure VMs of size {VmSize} in the resource group {ResourceGroup} of the subscription {SubscriptionId}, " +
+                        "without a public IP: reached over SSH by private IP, through the Sandbox VNet's peering with Overseer's.",
+                        azure.Settings.VmSize, azure.Settings.ResourceGroup, azure.Settings.SubscriptionId);
                     break;
                 case AzureSandboxProvider azure:
                     app.Logger.LogInformation(

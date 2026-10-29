@@ -1,0 +1,5 @@
+# Only Directory.Build.props and src/Overseer go into the image, without what local builds left in them.
+**/bin/
+**/obj/
+.git/
+.scratch/

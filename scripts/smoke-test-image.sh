@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs an Overseer image with its default command against a throwaway PostgreSQL and checks
-# that the Portal comes up showing the version the image is tagged with (on its login page).
+# that the Portal comes up showing the version the image is tagged with (on its login page),
+# and that the Azure CLI, which the deployed Overseer manages Sandboxes through, runs in it.
 #
 #   scripts/smoke-test-image.sh <image>:<version>
 set -euo pipefail
@@ -14,6 +15,11 @@ cleanup() {
   docker network rm "$name" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+
+if ! docker run --rm --entrypoint az "$image" version --output none; then
+  echo "The Azure CLI does not run in the image." >&2
+  exit 1
+fi
 
 docker network create "$name" >/dev/null
 docker run -d --name "$name-db" --network "$name" \

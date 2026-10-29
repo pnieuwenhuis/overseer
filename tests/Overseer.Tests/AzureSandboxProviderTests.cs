@@ -13,6 +13,7 @@ public sealed class AzureSandboxProviderTests : IDisposable
     private const string ResourceGroup = "overseer-sandboxes-rg";
     private static readonly IPAddress DeveloperAddress = IPAddress.Parse("203.0.113.5");
     private const string SandboxAddress = "198.51.100.7";
+    private const string PrivateSandboxAddress = "10.41.0.4";
 
     private readonly FakeAzureCli _az = new();
     private readonly FakeSandboxSsh _ssh = new();
@@ -79,6 +80,76 @@ public sealed class AzureSandboxProviderTests : IDisposable
         Assert.Equal("VirtualNetwork", FakeAzureCli.Value(rule, "--source-address-prefixes"));
         Assert.Equal("*", FakeAzureCli.Value(rule, "--destination-port-ranges"));
         Assert.Equal("*", FakeAzureCli.Value(rule, "--protocol"));
+    }
+
+    [Fact]
+    public async Task On_the_private_network_a_Sandbox_has_no_public_IP_and_only_Overseers_subnet_reaches_it_by_its_private_IP()
+    {
+        InstalledSandboxNetwork();
+
+        await CreateAsync(Provider(privateNetwork: true));
+
+        Assert.Empty(_az.CallsTo("network", "public-ip", "create"));
+        var nic = _az.CallTo("network", "nic", "create");
+        Assert.DoesNotContain("--public-ip-address", nic);
+        var rule = Assert.Single(_az.CallsTo("network", "nsg", "rule", "create"), rule => FakeAzureCli.Value(rule, "--access") == "Allow");
+        Assert.Equal("Inbound", FakeAzureCli.Value(rule, "--direction"));
+        // The Container Apps subnet of the VNet install creates for Overseer.
+        Assert.Equal("10.40.0.0/23", FakeAzureCli.Value(rule, "--source-address-prefixes"));
+        Assert.Equal("22", FakeAzureCli.Value(rule, "--destination-port-ranges"));
+        Assert.Equal(PrivateSandboxAddress, Assert.Single(_ssh.Runs).Target.Host);
+    }
+
+    [Fact]
+    public async Task On_the_private_network_a_restarted_Overseer_still_reaches_a_Sandbox_by_its_private_IP()
+    {
+        InstalledSandboxNetwork();
+        var sandbox = await CreateAsync(Provider(privateNetwork: true));
+        var created = _ssh.Runs.Single().Target;
+        _az.Respond(["vm", "show"], $"{PrivateSandboxAddress}\n{created.HostKeyFingerprint}\n");
+
+        await Provider(privateNetwork: true).RunCommandAsync(sandbox, "git status", TestContext.Current.CancellationToken);
+
+        Assert.Equal((created, "git status"), _ssh.Runs[^1]);
+        Assert.Contains("privateIps", FakeAzureCli.Value(_az.CallTo("vm", "show"), "--query"));
+    }
+
+    [Fact]
+    public async Task On_the_private_network_the_provider_does_not_make_the_Sandbox_VNet_that_install_makes_with_its_NAT_Gateway_and_peering()
+    {
+        var failure = await Assert.ThrowsAsync<SandboxCreationFailedException>(() => CreateAsync(Provider(privateNetwork: true)));
+
+        Assert.Empty(_az.CallsTo("network", "vnet", "create"));
+        Assert.Empty(_az.CallsTo("vm", "create"));
+        Assert.Contains("overseer install", failure.Message);
+    }
+
+    [Fact]
+    public async Task With_a_Managed_Identity_the_Azure_CLI_logs_in_as_it_once_before_anything_else_without_touching_the_machines_own_login()
+    {
+        const string clientId = "9f8e7d6c-aaaa-4bbb-8ccc-ddddeeeeffff";
+        InstalledSandboxNetwork();
+        var provider = Provider(privateNetwork: true, managedIdentityClientId: clientId);
+
+        var sandbox = await CreateAsync(provider);
+        await provider.ListAsync(TestContext.Current.CancellationToken);
+        await provider.DestroyAsync(sandbox, TestContext.Current.CancellationToken);
+
+        var login = Assert.Single(_az.CallsTo("login"));
+        Assert.Equal("login", _az.Calls[0][0]);
+        Assert.Contains("--identity", login);
+        Assert.Equal(clientId, FakeAzureCli.Value(login, "--client-id"));
+        Assert.All(_az.ConfigDirectories, directory => Assert.Equal(_az.ConfigDirectories[0], directory));
+        Assert.NotNull(_az.ConfigDirectories[0]);
+    }
+
+    [Fact]
+    public async Task Without_a_Managed_Identity_the_Azure_CLI_uses_its_own_login()
+    {
+        await CreateAsync(Provider());
+
+        Assert.Empty(_az.CallsTo("login"));
+        Assert.All(_az.ConfigDirectories, Assert.Null);
     }
 
     [Fact]
@@ -244,6 +315,11 @@ public sealed class AzureSandboxProviderTests : IDisposable
         Assert.Equal(VirtualMachine(sandbox), FakeAzureCli.Value(_az.CallTo("vm", "show"), "--name"));
     }
 
+    /// <summary>The Sandbox VNet as install leaves it, and the private IP Azure gives a Sandbox's network interface on it.</summary>
+    private void InstalledSandboxNetwork() =>
+        _az.Respond(["network", "vnet", "list"], "sandboxes\n")
+            .Respond(["network", "nic", "show"], PrivateSandboxAddress + "\n");
+
     /// <summary>
     /// The VM, its disk, its network interface, then the public IP and network security group the interface used, in an
     /// order in which nothing deleted is still in use; and the key.
@@ -296,13 +372,15 @@ public sealed class AzureSandboxProviderTests : IDisposable
         return publicKey.Trim();
     }
 
-    private AzureSandboxProvider Provider(string? vmSize = null, TimeProvider? time = null) => new(
-        new AzureSandboxSettings(Subscription, ResourceGroup, vmSize ?? AzureSandboxSettings.DefaultVmSize),
+    private AzureSandboxProvider Provider(
+        string? vmSize = null, TimeProvider? time = null, bool privateNetwork = false, string? managedIdentityClientId = null) => new(
+        new AzureSandboxSettings(Subscription, ResourceGroup, vmSize ?? AzureSandboxSettings.DefaultVmSize, privateNetwork, managedIdentityClientId),
         _az.Environment(),
         _secrets,
         _secrets,
         _ssh,
-        _ => Task.FromResult(DeveloperAddress),
+        // A deployed Overseer has no use for its public address: nothing reaches a Sandbox from the internet.
+        _ => privateNetwork ? throw new InvalidOperationException("A private-network Sandbox lets in no public address.") : Task.FromResult(DeveloperAddress),
         time ?? TimeProvider.System);
 
     public void Dispose()

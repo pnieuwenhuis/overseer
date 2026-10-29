@@ -152,6 +152,17 @@ internal static partial class Install
                 ["Location"] = region,
             });
 
+            await steps.RunAsync(CreatingOrChecking("the Sandbox network: a VNet with a NAT Gateway for outbound traffic, peered with Overseer's"), "create-sandbox-network", new()
+            {
+                ["SubscriptionId"] = names.SubscriptionId,
+                ["ResourceGroup"] = names.ResourceGroup,
+                ["VirtualNetwork"] = names.VirtualNetwork,
+                ["SandboxResourceGroup"] = names.SandboxResourceGroup,
+                ["SandboxVirtualNetwork"] = names.SandboxVirtualNetwork,
+                ["NatGateway"] = names.NatGateway,
+                ["Location"] = region,
+            });
+
             var databaseHost = (await steps.RunAsync(CreatingOrChecking("the PostgreSQL server", " (this takes 5 to 15 minutes)"), "create-database", new()
             {
                 ["SubscriptionId"] = names.SubscriptionId,
@@ -192,6 +203,8 @@ internal static partial class Install
                 {
                     portalHost = (await steps.RunAsync($"Creating the Container App running {ImageRepository}:{version}", "create-container-app", new()
                     {
+                        ["SubscriptionId"] = names.SubscriptionId,
+                        ["SandboxResourceGroup"] = names.SandboxResourceGroup,
                         ["ResourceGroup"] = names.ResourceGroup,
                         ["ContainerAppsEnvironment"] = names.ContainerAppsEnvironment,
                         ["ContainerApp"] = names.ContainerApp,
@@ -230,6 +243,8 @@ internal static partial class Install
                 // The Container App's secrets stay as they are, and with them the password.
                 portalHost = (await steps.RunAsync($"Updating the Container App to {ImageRepository}:{version}", "update-container-app", new()
                 {
+                    ["SubscriptionId"] = names.SubscriptionId,
+                    ["SandboxResourceGroup"] = names.SandboxResourceGroup,
                     ["ResourceGroup"] = names.ResourceGroup,
                     ["ContainerApp"] = names.ContainerApp,
                     ["Image"] = $"{ImageRepository}:{version}",

@@ -26,6 +26,7 @@ public sealed class FakeAzureCli : IDisposable
             dir='{{_directory}}'
             call=$(printf '%s\x1f' "$@")
             printf '%s\x1e' "$call" >> "$dir/calls"
+            printf '%s\x1e' "${AZURE_CONFIG_DIR:-}" >> "$dir/config-dirs"
             match=
             for response in "$dir"/responses/*.args; do
               [ -e "$response" ] || continue
@@ -102,6 +103,18 @@ public sealed class FakeAzureCli : IDisposable
                 ? File.ReadAllText(file).Split(CallSeparator, StringSplitOptions.RemoveEmptyEntries)
                     .Select(call => call.Split(ArgumentSeparator)[..^1])
                     .ToList()
+                : [];
+        }
+    }
+
+    /// <summary>The Azure CLI configuration directory (<c>AZURE_CONFIG_DIR</c>) of every call so far, in order; null for the default one.</summary>
+    public IReadOnlyList<string?> ConfigDirectories
+    {
+        get
+        {
+            var file = Path.Combine(_directory, "config-dirs");
+            return File.Exists(file)
+                ? File.ReadAllText(file).Split(CallSeparator)[..^1].Select(directory => directory.Length > 0 ? directory : null).ToList()
                 : [];
         }
     }

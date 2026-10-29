@@ -40,7 +40,7 @@ public class UninstallTests : IDisposable
 
         Assert.True(exitCode == 0, output);
         Assert.Equal(
-            ["role assignment delete", "group delete", "monitor log-analytics workspace delete", "group delete", "keyvault purge"],
+            ["role assignment delete", "network vnet peering delete", "network vnet peering delete", "group delete", "monitor log-analytics workspace delete", "group delete", "keyvault purge"],
             _az.Changes.Select(Command));
         Assert.Equal([SandboxRoleAssignment], Values(_az.CallTo("role", "assignment", "delete"), "--ids"));
         Assert.Equal(
@@ -48,6 +48,23 @@ public class UninstallTests : IDisposable
             _az.CallsTo("group", "delete").Select(call => Value(call, "--name")));
         Assert.Equal(KeyVault, Value(_az.CallTo("keyvault", "purge"), "--name"));
         Assert.Contains("uninstalled", output);
+    }
+
+    [Fact]
+    public async Task The_peering_between_Overseers_VNet_and_the_Sandbox_VNet_is_removed_both_ways_and_the_NAT_Gateway_with_the_Sandbox_resource_group()
+    {
+        Installed();
+
+        var (exitCode, output) = await Uninstall(["--yes"]);
+
+        Assert.True(exitCode == 0, output);
+        var peerings = _az.CallsTo("network", "vnet", "peering", "delete");
+        Assert.Equal(
+            [("overseer-rg", "overseer-vnet", "sandboxes"), ("overseer-sandboxes-rg", "sandboxes", "overseer-vnet")],
+            peerings.Select(call => (Value(call, "--resource-group"), Value(call, "--vnet-name"), Value(call, "--name"))));
+        var listing = Assert.Single(output.Split('\n'), line => line.StartsWith("  - ") && line.Contains("overseer-sandboxes-rg"));
+        Assert.Contains("NAT Gateway", listing);
+        Assert.Contains("peering", listing);
     }
 
     [Fact]
@@ -167,7 +184,7 @@ public class UninstallTests : IDisposable
         Assert.Contains("run `overseer uninstall` again", output);
         // Deleting a role assignment takes more than Contributor.
         Assert.Contains("User Access Administrator", output);
-        Assert.Equal(["role assignment delete", "group delete"], _az.Changes.Select(Command));
+        Assert.Equal(["role assignment delete", "network vnet peering delete", "network vnet peering delete", "group delete"], _az.Changes.Select(Command));
     }
 
     [Fact]
@@ -222,6 +239,8 @@ public class UninstallTests : IDisposable
             .Respond(["group", "show"], "overseer\n")
             .Respond(["identity", "list"], IdentityPrincipalId + "\n")
             .Respond(["role", "assignment", "list"], SandboxRoleAssignment + "\n")
+            .Respond(["network", "vnet", "list"], "overseer-vnet\nsandboxes\n")
+            .Respond(["network", "vnet", "peering", "list"], "sandboxes\noverseer-vnet\n")
             .Respond(["monitor", "log-analytics", "workspace", "list"], "overseer-logs\n");
         _az.RespondInTurn(["keyvault", "list-deleted"], "", KeyVault + "\n");
     }

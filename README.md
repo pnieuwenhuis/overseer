@@ -17,7 +17,9 @@ Install shows the subscription it uses (`az account set` picks another), then cr
 `--prefix` (3 to 12 lowercase letters, digits and hyphens) starts every resource name and identifies the installation. It creates:
 
 - **`<prefix>-rg`**: a Container Apps environment (`<prefix>-env`, logging to `<prefix>-logs`) on the VNet `<prefix>-vnet`; the Container App `<prefix>`, one replica of `ghcr.io/pnieuwenhuis/overseer` at the CLI's own version; PostgreSQL Flexible Server `<prefix>-db-<suffix>` (Burstable, private on the VNet, Microsoft Entra authentication only); Key Vault `<prefix>-kv-<suffix>`; and the user-assigned Managed Identity `<prefix>-identity`. Key Vault and PostgreSQL names must be unique across Azure, so `<suffix>` is derived from the subscription ID: the same prefix always gives the same names.
-- **`<prefix>-sandboxes-rg`**, for Sandboxes.
+- **`<prefix>-sandboxes-rg`**, for Sandboxes, with the VNet `sandboxes` (10.41.0.0/16) they go on, peered both ways with `<prefix>-vnet`, and the NAT Gateway `sandboxes-nat`, with its public IP `sandboxes-nat-ip`, that its subnet reaches the internet through. Sandboxes have no public IP, and new VNets no longer get default outbound access, so the NAT Gateway, a small fixed monthly cost, is how they reach GitHub, model providers and package registries. The VNet is in this group, not in `<prefix>-rg`, because the Managed Identity, which creates the Sandboxes, has rights only here.
+
+The Container App runs Overseer with the Azure Sandbox Provider in deployed mode (see [Sandboxes](#sandboxes)): as the Managed Identity, in `<prefix>-sandboxes-rg`, without public IPs. Install also registers `Microsoft.Compute` in the subscription, which the identity can't.
 
 The Managed Identity's only Azure role assignment is Contributor on the Sandbox resource group. Its other access is data-plane only: a Key Vault access policy for secrets (the vault uses access policies instead of Azure RBAC for exactly this reason), and being the only PostgreSQL login, as the server's Entra administrator. The application logs in to PostgreSQL with a token for the identity, so no database password exists.
 
@@ -28,7 +30,7 @@ The scripts install runs are embedded in the executable (`src/Overseer/Installer
 To upgrade, get the new `overseer` and run `install` again with the same `--prefix`. Install finds the existing installation by its resource group `<prefix>-rg`, tagged `overseer-prefix=<prefix>`. It stops rather than take over a `<prefix>-rg` or `<prefix>-sandboxes-rg` without that tag. It:
 
 - keeps it in its region, so `--region` can be left out. Naming another region is an error, because an installation can't move;
-- creates only what is missing, so re-running after an install that stopped partway completes it, and re-running the same version changes nothing;
+- creates only what is missing, so re-running after an install that stopped partway completes it, and re-running the same version changes nothing. A `sandboxes` VNet that the Azure Sandbox Provider made in local mode gets the NAT Gateway, and a peering that was disconnected (because the VNet on its other side was deleted and created again) is replaced;
 - updates the Container App to the image of the CLI's version, with the same settings, and waits for the new revision; the server applies new migrations when it starts;
 - leaves the database, the Key Vault with its secrets, and the password alone. It prints the Portal URL and the username, and says the password is kept: `overseer reset-password` sets a new one;
 - refuses to deploy a version older than the one running, because migrations only go forward.
@@ -56,9 +58,10 @@ overseer uninstall [--prefix overseer] [--yes]
 It finds the installation in the subscription your Azure CLI uses and lists what it removes. Only after you type the prefix (or with `--yes`, for scripts) does it remove it:
 
 1. the Managed Identity's role assignments, so the running Overseer loses its rights on the Sandbox resource group first, and none are left orphaned;
-2. `<prefix>-sandboxes-rg`, with every Sandbox still in it;
-3. `<prefix>-rg`, with the Portal, the database and the Key Vault with its secrets. This takes 10 to 20 minutes. Its Log Analytics workspace is deleted for good first: deleting the group would only soft-delete it, and a later install would recover the old logs;
-4. the soft-deleted Key Vault, purged, so that a later install with the same prefix can create it again.
+2. the peering between `<prefix>-vnet` and the `sandboxes` VNet, both ways;
+3. `<prefix>-sandboxes-rg`, with every Sandbox still in it, their VNet and the NAT Gateway;
+4. `<prefix>-rg`, with the Portal, the database and the Key Vault with its secrets. This takes 10 to 20 minutes. Its Log Analytics workspace is deleted for good first: deleting the group would only soft-delete it, and a later install would recover the old logs;
+5. the soft-deleted Key Vault, purged, so that a later install with the same prefix can create it again.
 
 This can't be undone. It removes only resource groups tagged `overseer-prefix=<prefix>`: a group of the same name without that tag isn't Overseer's, and uninstall says so and leaves it alone. With nothing installed it says there is nothing to remove, and succeeds. A failing step stops it with the Azure error; running it again removes what is left. It needs Owner on the subscription, or Contributor plus User Access Administrator, as install does.
 
@@ -113,6 +116,8 @@ Other environment variables aren't read as settings. The only exception is `ASPN
 | Sandbox subscription | `SandboxProvider:Azure:SubscriptionId` | `OVERSEER_SANDBOXPROVIDER__AZURE__SUBSCRIPTIONID` | none; without any `SandboxProvider:Azure` setting, the fake Sandbox Provider (see [Sandboxes](#sandboxes)) |
 | Sandbox resource group | `SandboxProvider:Azure:ResourceGroup` | `OVERSEER_SANDBOXPROVIDER__AZURE__RESOURCEGROUP` | none; required with the subscription                                                    |
 | Sandbox VM size  | `SandboxProvider:Azure:VmSize`    | `OVERSEER_SANDBOXPROVIDER__AZURE__VMSIZE`   | `Standard_D4s_v5`                                                                           |
+| Private Sandboxes | `SandboxProvider:Azure:PrivateNetwork` | `OVERSEER_SANDBOXPROVIDER__AZURE__PRIVATENETWORK` | `false`: a public IP only you reach. `true`: deployed mode, no public IP (see [Sandboxes](#sandboxes)) |
+| Sandbox identity | `SandboxProvider:Azure:ManagedIdentityClientId` | `OVERSEER_SANDBOXPROVIDER__AZURE__MANAGEDIDENTITYCLIENTID` | none; your Azure CLI login. Set: the Azure CLI logs in as that user-assigned Managed Identity |
 | Key Vault        | `Secrets:KeyVaultUri`             | `OVERSEER_SECRETS__KEYVAULTURI`             | none; the local secrets file (see [Secrets](#secrets))                                      |
 | Managed Identity | `Secrets:ManagedIdentityClientId` | `OVERSEER_SECRETS__MANAGEDIDENTITYCLIENTID` | none; the system-assigned identity, or your Azure CLI login                                 |
 | Secrets file     | `Secrets:File`                    | `OVERSEER_SECRETS__FILE`                    | `secrets.json` next to the local config file: `~/.config/overseer/secrets.json`             |
@@ -143,7 +148,13 @@ To work with real Sandboxes from your machine, configure the Azure Sandbox Provi
 - a fresh SSH key pair. The private key is kept in the secret store as `<vm>-ssh-key`, never in PostgreSQL, so Overseer still reaches the Sandbox after a restart. Overseer also generates the VM's SSH host key, hands it over through cloud-init and tags the VM with its fingerprint (`overseer-host-key`), so it never logs in to another machine;
 - Docker with Compose, git, `gh` 2.99 or newer, Node 24 with Playwright and its browsers (in `/opt/ms-playwright`), and OpenCode, installed by cloud-init (`src/Overseer/Sandboxes/Setup/setup-sandbox.sh`). Creation takes several minutes: it completes only once cloud-init has finished, and fails with what cloud-init reported if it didn't succeed, or if the Sandbox isn't set up within 30 minutes.
 
-A creation that fails, with the Azure error or cloud-init's, removes what it created. Commands run over SSH as `overseer`, with standard error merged into standard output. Destroying a Sandbox deletes the VM, its disk, network interface, public IP and network security group, then its key; the `sandboxes` VNet stays for the next one. Agent sessions in Azure Sandboxes come with the Agent Session module.
+In Azure, install configures deployed mode instead (`PrivateNetwork` and `ManagedIdentityClientId`), so the deployed Overseer needs no configuration of its own. The provider logs the Azure CLI in as the Managed Identity once per process, with an Azure CLI configuration of its own (`AZURE_CONFIG_DIR`), so no other login on the machine is replaced. Sandboxes then differ in their network:
+
+- no public IP: nothing in them is reachable from the internet. Their security group lets in SSH only from Overseer's Container Apps subnet (10.40.0.0/23), which reaches the `sandboxes` VNet over the peering, and Overseer connects to the Sandbox's private IP;
+- outbound traffic leaves through the NAT Gateway, from its public IP;
+- the provider doesn't create the `sandboxes` VNet, because only install creates it with the NAT Gateway and peering. Without it, creation fails and says to run install again.
+
+The image (`Dockerfile`) has the Azure CLI for this. A creation that fails, with the Azure error or cloud-init's, removes what it created. Commands run over SSH as `overseer`, with standard error merged into standard output. Destroying a Sandbox deletes the VM, its disk, network interface, public IP (if any) and network security group, then its key; the `sandboxes` VNet stays for the next one. Agent sessions in Azure Sandboxes come with the Agent Session module.
 
 Any Sandbox Provider must pass the contract suite in `tests/Overseer.Tests/SandboxProviderContract.cs`: derive from it once per implementation. The fake runs it in the default test run. The Azure provider runs it only when `TEST_SANDBOX_SUBSCRIPTION_ID` and `TEST_SANDBOX_RESOURCE_GROUP` name an existing resource group where your Azure CLI login has Contributor. It creates real Sandboxes one after the other and destroys each one, which takes about an hour and costs a little; its agent session tests are skipped until the Agent Session module exists:
 
@@ -184,19 +195,27 @@ TEST_INSTALL_VERSION=0.2.0-rc.1 dotnet test --filter InstallSmokeTest
 
 `TEST_INSTALL_REGION` overrides its region (westeurope).
 
+Another opt-in smoke test, with the same variables, has a deployed Overseer create a Sandbox: it installs, checks that the Managed Identity's only role assignment is Contributor on the Sandbox resource group and that the VNets are peered both ways, and enables the smoke-test endpoints. Through them, as the logged-in user, the deployed Overseer creates a Sandbox. The test checks that the Sandbox has no public IP and lets in SSH only from Overseer's subnet, runs a command in it that shows it reaches the internet from the NAT Gateway's IP, destroys it, and uninstalls (about an hour):
+
+```sh
+TEST_INSTALL_VERSION=0.2.0-rc.1 dotnet test --filter DeployedSandboxSmokeTest
+```
+
+The smoke-test endpoints (`/smoke-test/sandboxes`) exist only when `SmokeTest:Enabled` (`OVERSEER_SMOKETEST__ENABLED`) is `true`. Install never sets it; the test sets it on the Container App with `az containerapp update`. They only create, run commands in and destroy the logged-in user's Sandboxes, in the background, because creating one takes longer than Container Apps lets a request last.
+
 ## Releases
 
-Pushing a tag `vX.Y.Z` (optionally with a prerelease suffix, such as `v1.2.0-rc.1`) runs `.github/workflows/release.yml`. After the tests pass, it builds every release output with `-p:Version=X.Y.Z`, so all of them report the same version:
+Pushing a tag `vX.Y.Z` (optionally with a prerelease suffix, such as `v1.2.0-rc.1`) runs `.github/workflows/release.yml`. After the tests pass, it builds every release output with the version X.Y.Z, so all of them report it:
 
 - **CLI**: `overseer-X.Y.Z-<rid>.tar.gz` for `linux-x64`, `linux-arm64`, `osx-x64` and `osx-arm64`, attached to the GitHub release. Unpack the whole archive: `serve` needs the files next to the executable.
-- **Container image**: `ghcr.io/pnieuwenhuis/overseer:X.Y.Z` (linux/amd64). It runs `overseer serve` on port 8080 by default and needs `OVERSEER_CONNECTIONSTRINGS__OVERSEER` and `OVERSEER_USER__PASSWORDHASH`. The workflow smoke-tests the image against a throwaway PostgreSQL before pushing it, and checks that the Portal shows the tag's version.
+- **Container image**: `ghcr.io/pnieuwenhuis/overseer:X.Y.Z` (linux/amd64), built from the `Dockerfile` with `--build-arg VERSION=X.Y.Z`. It runs `overseer serve` on port 8080 by default and needs `OVERSEER_CONNECTIONSTRINGS__OVERSEER` and `OVERSEER_USER__PASSWORDHASH`. It includes the Azure CLI, pinned in the `Dockerfile`, for the Azure Sandbox Provider. The workflow smoke-tests the image against a throwaway PostgreSQL before pushing it, and checks that the Portal shows the tag's version and that the Azure CLI runs.
 
 The Portal header and `overseer --version` show that version. A local build reports `0.0.0-dev` instead, which tells it apart from any release.
 
 To build and smoke-test an image locally (Docker must be running):
 
 ```sh
-dotnet publish src/Overseer -c Release -t:PublishContainer -p:Version=0.0.1-local
+docker build --build-arg VERSION=0.0.1-local --tag pnieuwenhuis/overseer:0.0.1-local .
 scripts/smoke-test-image.sh pnieuwenhuis/overseer:0.0.1-local
 ```
 

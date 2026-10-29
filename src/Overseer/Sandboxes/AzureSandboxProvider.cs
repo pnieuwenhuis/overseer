@@ -4,18 +4,26 @@ using Overseer.Secrets;
 
 namespace Overseer.Sandboxes;
 
-/// <summary>How the Azure Sandbox Provider reaches Azure: where Sandboxes go, and how big they are.</summary>
+/// <summary>How the Azure Sandbox Provider reaches Azure and its Sandboxes: where they go, and how big they are.</summary>
 /// <param name="SubscriptionId">The ID of the subscription holding the Sandbox resource group.</param>
-public sealed record AzureSandboxSettings(string SubscriptionId, string ResourceGroup, string VmSize)
+/// <param name="PrivateNetwork">
+/// Deployed mode: Sandboxes have no public IP, and Overseer reaches them by private IP over the peering install makes
+/// between its VNet and the Sandbox VNet. Otherwise local mode: a public IP that only this machine's reaches.
+/// </param>
+/// <param name="ManagedIdentityClientId">The user-assigned Managed Identity the Azure CLI logs in as; null for the CLI's own login.</param>
+public sealed record AzureSandboxSettings(
+    string SubscriptionId, string ResourceGroup, string VmSize, bool PrivateNetwork = false, string? ManagedIdentityClientId = null)
 {
     /// <summary>4 vCPUs and 16 GiB: enough for Docker, a build and a browser at once.</summary>
     public const string DefaultVmSize = "Standard_D4s_v5";
 }
 
 /// <summary>
-/// Sandboxes as Azure VMs in the Sandbox resource group, managed only through the Azure CLI and its login. This is
-/// local mode (ADR 0004): each Sandbox has a public IP that only the developer's current public IP reaches, over SSH.
-/// Each Sandbox has its own SSH key, kept in the secret store so that Overseer still reaches it after a restart.
+/// Sandboxes as Azure VMs in the Sandbox resource group, managed only through the Azure CLI. In local mode (ADR 0004)
+/// the CLI uses the developer's login, and each Sandbox has a public IP that only the developer's current public IP
+/// reaches, over SSH. Deployed, the CLI logs in as the Managed Identity, and Sandboxes have only a private IP on the
+/// Sandbox VNet, which only Overseer's subnet reaches. Each Sandbox has its own SSH key, kept in the secret store so
+/// that Overseer still reaches it after a restart.
 /// </summary>
 public sealed class AzureSandboxProvider(
     AzureSandboxSettings settings,
@@ -31,6 +39,12 @@ public sealed class AzureSandboxProvider(
 
     private const int SshPort = 22;
 
+    /// <summary>
+    /// Where a deployed Overseer connects to Sandboxes from: the Container Apps subnet of the VNet install creates for it
+    /// (<c>Installer/Scripts/create-network.sh</c>), peered with the Sandbox VNet.
+    /// </summary>
+    public const string OverseerSubnet = "10.40.0.0/23";
+
     public AzureSandboxSettings Settings => settings;
 
     /// <summary>Waits for cloud-init to finish, then shows how it went, with the end of its log when it failed.</summary>
@@ -45,9 +59,9 @@ public sealed class AzureSandboxProvider(
     private static readonly TimeSpan SetUpWithin = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan ReachRetryInterval = TimeSpan.FromSeconds(10);
 
-    private readonly AzureScripts _azure = new("Sandboxes", environment);
-    private readonly SemaphoreSlim _creatingNetwork = new(1, 1);
-    private bool _networkExists;
+    private readonly AzureScripts _azure = new("Sandboxes", settings.ManagedIdentityClientId is null ? environment : WithOwnAzureCliLogin(environment));
+    private readonly Once _logIn = new();
+    private readonly Once _createNetwork = new();
 
     /// <summary>How to reach each Sandbox, by VM name, so that only the first command after a restart asks Azure.</summary>
     private readonly ConcurrentDictionary<string, SshTarget> _targets = new();
@@ -87,8 +101,9 @@ public sealed class AzureSandboxProvider(
         var hostKey = SshKeyPair.Generate();
         await secrets.SetAsync(KeySecret(name), userKey.PrivateKey, cancellationToken);
 
-        var allowedAddress = await developerAddress(cancellationToken);
-        await CreateNetworkAsync(cancellationToken);
+        // Deployed, nothing on the internet reaches a Sandbox: only Overseer, from its own subnet.
+        var allowedAddress = settings.PrivateNetwork ? OverseerSubnet : (await developerAddress(cancellationToken)).ToString();
+        await _createNetwork.RunAsync(() => RunAsync("create-sandbox-network", ScriptParameters(), cancellationToken), cancellationToken);
         // The host's private key goes to Azure in a file only the user may read, rather than on a command line.
         var customData = Path.Combine(Path.GetTempPath(), $"overseer-{name}-cloud-init.yaml");
         string address;
@@ -98,7 +113,7 @@ public sealed class AzureSandboxProvider(
             {
                 await file.WriteAsync(SandboxCloudInit.For(hostKey));
             }
-            var created = Lines(await _azure.RunAsync("create-sandbox", new Dictionary<string, string>(ScriptParameters(name))
+            var created = await RunAsync("create-sandbox", new Dictionary<string, string>(ScriptParameters(name))
             {
                 ["Size"] = settings.VmSize,
                 ["Username"] = Username,
@@ -107,9 +122,9 @@ public sealed class AzureSandboxProvider(
                 ["HostKeyFingerprint"] = hostKey.Fingerprint,
                 ["PublicKey"] = userKey.PublicKey,
                 ["CustomDataFile"] = customData,
-                ["AllowedAddress"] = allowedAddress.ToString(),
-            }, cancellationToken));
-            address = created is [.., var last] ? last : throw new SandboxCreationFailedException($"Azure gave no public IP address for the Sandbox {name}.");
+                ["AllowedAddress"] = allowedAddress,
+            }, cancellationToken);
+            address = created is [.., var last] ? last : throw new SandboxCreationFailedException($"Azure gave no IP address for the Sandbox {name}.");
         }
         finally
         {
@@ -135,7 +150,7 @@ public sealed class AzureSandboxProvider(
     public async Task<IReadOnlyList<Sandbox>> ListAsync(CancellationToken cancellationToken)
     {
         var sandboxes = new List<Sandbox>();
-        foreach (var line in Lines(await _azure.RunAsync("list-sandboxes", ScriptParameters(), cancellationToken)))
+        foreach (var line in await RunAsync("list-sandboxes", ScriptParameters(), cancellationToken))
         {
             // A VM tagged with an owner Overseer doesn't know isn't one of its Sandboxes.
             if (line.Split('\t') is [var name, var kind, var id]
@@ -159,7 +174,7 @@ public sealed class AzureSandboxProvider(
         string[] found;
         try
         {
-            found = Lines(await _azure.RunAsync("find-sandbox", ScriptParameters(name), cancellationToken));
+            found = await RunAsync("find-sandbox", ScriptParameters(name), cancellationToken);
         }
         catch (AzureScriptException exception)
         {
@@ -169,35 +184,38 @@ public sealed class AzureSandboxProvider(
             ?? throw new InvalidOperationException($"The SSH key of the Sandbox {name} is not in the secret store, so Overseer can't log in to it.");
         return found is [var address, var hostKey]
             ? _targets.GetOrAdd(name, new SshTarget(address, SshPort, Username, key, hostKey))
-            : throw new InvalidOperationException($"The Sandbox {name} has no public IP address or host key tag, so Overseer can't log in to it.");
+            : throw new InvalidOperationException(
+                $"The Sandbox {name} has no {(settings.PrivateNetwork ? "private" : "public")} IP address or host key tag, so Overseer can't log in to it.");
     }
 
     /// <summary>Deletes the Sandbox's VM and everything created with it, then its key.</summary>
     private async Task RemoveAsync(string name, CancellationToken cancellationToken)
     {
         _targets.TryRemove(name, out _);
-        await _azure.RunAsync("destroy-sandbox", ScriptParameters(name), cancellationToken);
+        await RunAsync("destroy-sandbox", ScriptParameters(name), cancellationToken);
         // The key goes last: until the VM is gone, it is how Overseer reaches it.
         await secrets.RemoveAsync(KeySecret(name), cancellationToken);
     }
 
-    /// <summary>Creates the VNet Sandboxes share, once per process: concurrent creations would conflict.</summary>
-    private async Task CreateNetworkAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Runs one of the provider's scripts and returns the lines it printed, once the Azure CLI is logged in as the
+    /// Managed Identity, if there is one.
+    /// </summary>
+    private async Task<string[]> RunAsync(string script, Dictionary<string, string> parameters, CancellationToken cancellationToken)
     {
-        await _creatingNetwork.WaitAsync(cancellationToken);
-        try
+        if (settings.ManagedIdentityClientId is { } clientId)
         {
-            if (!_networkExists)
-            {
-                await _azure.RunAsync("create-sandbox-network", ScriptParameters(), cancellationToken);
-                _networkExists = true;
-            }
+            await _logIn.RunAsync(() => _azure.RunAsync("log-in", new Dictionary<string, string> { ["ClientId"] = clientId }, cancellationToken), cancellationToken);
         }
-        finally
-        {
-            _creatingNetwork.Release();
-        }
+        return Lines(await _azure.RunAsync(script, parameters, cancellationToken));
     }
+
+    /// <summary>
+    /// The environment with an Azure CLI configuration of the provider's own, so that logging in as the Managed Identity
+    /// replaces no other login on the machine.
+    /// </summary>
+    private static Dictionary<string, string?> WithOwnAzureCliLogin(IReadOnlyDictionary<string, string?> environment) =>
+        new(environment) { ["AZURE_CONFIG_DIR"] = Directory.CreateTempSubdirectory("overseer-azure-cli-").FullName };
 
     /// <summary>
     /// Waits until the Sandbox accepts SSH and cloud-init has set it up, reconnecting while it boots or when the connection
@@ -240,13 +258,17 @@ public sealed class AzureSandboxProvider(
         }
     }
 
-    /// <summary>What every script needs: where the Sandboxes are, and the VM of the Sandbox it is about, if any.</summary>
+    /// <summary>
+    /// What every script needs: where the Sandboxes are, whether they are on the private network, and the VM of the
+    /// Sandbox it is about, if any.
+    /// </summary>
     private Dictionary<string, string> ScriptParameters(string? virtualMachine = null)
     {
         var parameters = new Dictionary<string, string>
         {
             ["SubscriptionId"] = settings.SubscriptionId,
             ["ResourceGroup"] = settings.ResourceGroup,
+            ["PrivateNetwork"] = settings.PrivateNetwork ? "true" : "false",
         };
         if (virtualMachine is not null)
         {
@@ -272,4 +294,28 @@ public sealed class AzureSandboxProvider(
     private static string KeySecret(string name) => $"{name}-ssh-key";
 
     private static string[] Lines(string output) => output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+    /// <summary>Something done once per process, by one caller at a time, and tried again by the next caller if it failed.</summary>
+    private sealed class Once
+    {
+        private readonly SemaphoreSlim _gate = new(1, 1);
+        private bool _done;
+
+        public async Task RunAsync(Func<Task> action, CancellationToken cancellationToken)
+        {
+            await _gate.WaitAsync(cancellationToken);
+            try
+            {
+                if (!_done)
+                {
+                    await action();
+                    _done = true;
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+    }
 }

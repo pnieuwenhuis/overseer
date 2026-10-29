@@ -82,12 +82,10 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 10.0.x
+      # The Dockerfile builds with the .NET SDK image, so the runner needs only Docker.
       - run: >
-          dotnet publish src/Overseer -c Release -t:PublishContainer -r linux-x64
-          -p:Version="$VERSION"
+          docker build --platform linux/amd64 --build-arg VERSION="$VERSION"
+          --tag "pnieuwenhuis/overseer:$VERSION" .
       - run: scripts/smoke-test-image.sh "pnieuwenhuis/overseer:$VERSION"
       # Push exactly the image that passed the smoke test.
       - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin

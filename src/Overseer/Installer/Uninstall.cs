@@ -69,7 +69,9 @@ internal static class Uninstall
             }
             if (sandboxGroup)
             {
-                await output.WriteLineAsync($"  - the resource group {names.SandboxResourceGroup}, with every Sandbox in it");
+                await output.WriteLineAsync(
+                    $"  - the resource group {names.SandboxResourceGroup}, with every Sandbox in it, their VNet and its peering with Overseer's, " +
+                    "and the NAT Gateway they reach the internet through");
             }
             if (removeVault)
             {
@@ -97,6 +99,17 @@ internal static class Uninstall
                 {
                     ["ResourceGroup"] = names.ResourceGroup,
                     ["Identity"] = names.Identity,
+                });
+            }
+            // Install peers the VNets only when both groups are Overseer's; otherwise deleting the one that is takes its side along.
+            if (overseerGroup && sandboxGroup)
+            {
+                await steps.RunAsync("Removing the peering between Overseer's VNet and the Sandbox VNet", "delete-sandbox-network-peering", new()
+                {
+                    ["ResourceGroup"] = names.ResourceGroup,
+                    ["VirtualNetwork"] = names.VirtualNetwork,
+                    ["SandboxResourceGroup"] = names.SandboxResourceGroup,
+                    ["SandboxVirtualNetwork"] = names.SandboxVirtualNetwork,
                 });
             }
             if (sandboxGroup)

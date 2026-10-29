@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Npgsql;
 using Overseer.Cli;
+using Overseer.Sandboxes;
 using Overseer.Secrets;
 using Overseer.Server;
 using static Overseer.Tests.FakeAzureCli;
@@ -87,7 +88,8 @@ public class InstallTests : IDisposable
 
         var registered = _az.Calls.TakeWhile(call => !call.Contains("create")).Where(call => call.Take(2).SequenceEqual(["provider", "register"]));
         Assert.Equal(
-            ["Microsoft.App", "Microsoft.DBforPostgreSQL", "Microsoft.KeyVault", "Microsoft.ManagedIdentity", "Microsoft.Network", "Microsoft.OperationalInsights"],
+            // Microsoft.Compute for the Sandboxes, which the Managed Identity can't register: it has no rights on the subscription.
+            ["Microsoft.App", "Microsoft.Compute", "Microsoft.DBforPostgreSQL", "Microsoft.KeyVault", "Microsoft.ManagedIdentity", "Microsoft.Network", "Microsoft.OperationalInsights"],
             registered.Select(call => Value(call, "--namespace")).Order());
     }
 
@@ -220,8 +222,7 @@ public class InstallTests : IDisposable
         var (exitCode, _) = await Install();
 
         Assert.Equal(0, exitCode);
-        var network = _az.CallTo("network", "vnet", "create");
-        Assert.Equal("overseer-vnet", Value(network, "--name"));
+        var network = Assert.Single(_az.CallsTo("network", "vnet", "create"), call => Value(call, "--name") == "overseer-vnet");
         Assert.Equal("overseer-rg", Value(network, "--resource-group"));
         var subnet = Assert.Single(_az.CallsTo("network", "vnet", "subnet", "create"), call => Value(call, "--name") == "postgres");
         Assert.Equal("Microsoft.DBforPostgreSQL/flexibleServers", Value(subnet, "--delegations"));
@@ -239,6 +240,115 @@ public class InstallTests : IDisposable
         Assert.Equal("ServicePrincipal", Value(server, "--admin-type"));
         Assert.Equal("overseer-identity", Value(server, "--admin-display-name"));
         Assert.Equal("overseer", Value(_az.CallTo("postgres", "flexible-server", "db", "create"), "--database-name"));
+    }
+
+    [Fact]
+    public async Task Sandboxes_get_a_VNet_in_the_Sandbox_resource_group_with_a_NAT_Gateway_for_outbound_traffic_peered_both_ways_with_Overseers()
+    {
+        var (exitCode, _) = await Install();
+
+        Assert.Equal(0, exitCode);
+        // In the Sandbox resource group, because a Sandbox's network interface joins its subnet as the Managed Identity.
+        var network = Assert.Single(_az.CallsTo("network", "vnet", "create"), call => Value(call, "--name") == "sandboxes");
+        Assert.Equal("overseer-sandboxes-rg", Value(network, "--resource-group"));
+        Assert.Equal("10.41.0.0/16", Value(network, "--address-prefixes"));
+        var nat = _az.CallTo("network", "nat", "gateway", "create");
+        Assert.Equal("overseer-sandboxes-rg", Value(nat, "--resource-group"));
+        var natIp = _az.CallTo("network", "public-ip", "create");
+        Assert.Equal("overseer-sandboxes-rg", Value(natIp, "--resource-group"));
+        Assert.Equal(Value(natIp, "--name"), Value(nat, "--public-ip-addresses"));
+        var subnet = Assert.Single(_az.CallsTo("network", "vnet", "subnet", "create"), call => Value(call, "--vnet-name") == "sandboxes");
+        Assert.Equal("sandboxes", Value(subnet, "--name"));
+        Assert.Equal("overseer-sandboxes-rg", Value(subnet, "--resource-group"));
+        Assert.Equal(Value(nat, "--name"), Value(subnet, "--nat-gateway"));
+        Assert.Equal("false", Value(subnet, "--default-outbound-access"));
+
+        AssertPeeredBothWays();
+    }
+
+    [Fact]
+    public async Task Re_running_install_gives_a_Sandbox_VNet_that_local_mode_made_a_NAT_Gateway_and_the_peering()
+    {
+        ExistingInstallation();
+        // The Azure Sandbox Provider made the VNet when a developer used the installation's Sandbox resource group.
+        _az.Respond(["network", "nat", "gateway", "list"], "")
+            .Respond(["network", "public-ip", "list"], "")
+            .Respond(["network", "vnet", "subnet", "show"], "")
+            .Respond(["network", "vnet", "peering", "list"], "");
+
+        var (exitCode, _) = await Install();
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(_az.CallsTo("network", "vnet", "create"));
+        Assert.Empty(_az.CallsTo("network", "vnet", "subnet", "create"));
+        var update = _az.CallTo("network", "vnet", "subnet", "update");
+        Assert.Equal("sandboxes", Value(update, "--vnet-name"));
+        Assert.Equal("overseer-sandboxes-rg", Value(update, "--resource-group"));
+        Assert.Equal(Value(_az.CallTo("network", "nat", "gateway", "create"), "--name"), Value(update, "--nat-gateway"));
+        AssertPeeredBothWays();
+    }
+
+    [Fact]
+    public async Task Re_running_install_replaces_a_peering_that_a_VNet_made_again_has_disconnected()
+    {
+        ExistingInstallation();
+        _az.Respond(["network", "vnet", "peering", "list", "--resource-group", "overseer-rg"], "Disconnected\n")
+            .Respond(["network", "vnet", "peering", "list", "--resource-group", "overseer-sandboxes-rg"], "");
+
+        var (exitCode, _) = await Install();
+
+        Assert.Equal(0, exitCode);
+        var deleted = _az.CallTo("network", "vnet", "peering", "delete");
+        Assert.Equal("overseer-rg", Value(deleted, "--resource-group"));
+        Assert.Equal("overseer-vnet", Value(deleted, "--vnet-name"));
+        AssertPeeredBothWays();
+    }
+
+    /// <summary>A peering from each VNet to the other, so that Overseer reaches Sandboxes by private IP.</summary>
+    private void AssertPeeredBothWays()
+    {
+        var peerings = _az.CallsTo("network", "vnet", "peering", "create");
+        Assert.Equal(2, peerings.Count);
+        var fromOverseer = Assert.Single(peerings, call => Value(call, "--resource-group") == "overseer-rg");
+        Assert.Equal("overseer-vnet", Value(fromOverseer, "--vnet-name"));
+        Assert.Equal(
+            $"/subscriptions/{SubscriptionId}/resourceGroups/overseer-sandboxes-rg/providers/Microsoft.Network/virtualNetworks/sandboxes",
+            Value(fromOverseer, "--remote-vnet"));
+        var fromSandboxes = Assert.Single(peerings, call => Value(call, "--resource-group") == "overseer-sandboxes-rg");
+        Assert.Equal("sandboxes", Value(fromSandboxes, "--vnet-name"));
+        Assert.Equal(
+            $"/subscriptions/{SubscriptionId}/resourceGroups/overseer-rg/providers/Microsoft.Network/virtualNetworks/overseer-vnet",
+            Value(fromSandboxes, "--remote-vnet"));
+    }
+
+    [Fact]
+    public async Task The_deployed_Overseer_creates_private_Sandboxes_in_the_Sandbox_resource_group_as_its_Managed_Identity()
+    {
+        var (exitCode, _) = await Install();
+
+        Assert.Equal(0, exitCode);
+        await using var server = OverseerServer.Build(ContainerAppEnvironment());
+        var sandboxes = Assert.IsType<AzureSandboxProvider>(server.Services.GetService(typeof(ISandboxProvider)));
+        Assert.Equal(
+            new AzureSandboxSettings(SubscriptionId, "overseer-sandboxes-rg", AzureSandboxSettings.DefaultVmSize, PrivateNetwork: true, ManagedIdentityClientId: IdentityClientId),
+            sandboxes.Settings);
+    }
+
+    [Fact]
+    public async Task An_upgrade_gives_the_Container_App_the_Sandbox_settings_too()
+    {
+        ExistingInstallation();
+
+        var (exitCode, _) = await Install();
+
+        Assert.Equal(0, exitCode);
+        var settings = Values(_az.CallTo("containerapp", "update"), "--replace-env-vars")
+            .Select(variable => variable.Split('=', 2)).ToDictionary(variable => variable[0], string? (variable) => variable[1]);
+        await using var server = OverseerServer.Build(settings);
+        var sandboxes = Assert.IsType<AzureSandboxProvider>(server.Services.GetService(typeof(ISandboxProvider)));
+        Assert.Equal(
+            new AzureSandboxSettings(SubscriptionId, "overseer-sandboxes-rg", AzureSandboxSettings.DefaultVmSize, PrivateNetwork: true, ManagedIdentityClientId: IdentityClientId),
+            sandboxes.Settings);
     }
 
     [Fact]
@@ -487,7 +597,7 @@ public class InstallTests : IDisposable
         // The PostgreSQL server ran into a quota, so neither it nor anything after it exists.
         _az.Respond(["group", "list"], "swedencentral\noverseer\n")
             .Respond(["containerapp", "list"], "-\n");
-        ExistingResources(Resources.ResourceGroups | Resources.Identity | Resources.KeyVault | Resources.Network);
+        ExistingResources(Resources.ResourceGroups | Resources.Identity | Resources.KeyVault | Resources.Network | Resources.SandboxNetwork);
 
         var (exitCode, output) = await Install();
 
@@ -522,7 +632,8 @@ public class InstallTests : IDisposable
         Network = 8,
         Database = 16,
         ContainerAppsEnvironment = 32,
-        All = 63,
+        SandboxNetwork = 64,
+        All = 127,
     }
 
     /// <summary>
@@ -550,6 +661,15 @@ public class InstallTests : IDisposable
         {
             _az.Respond(["network", "vnet", "list"], "overseer-vnet\n")
                 .Respond(["network", "vnet", "subnet", "list"], "container-apps\npostgres\n");
+        }
+        if (resources.HasFlag(Resources.SandboxNetwork))
+        {
+            _az.Respond(["network", "public-ip", "list"], "sandboxes-nat-ip\n")
+                .Respond(["network", "nat", "gateway", "list"], "sandboxes-nat\n")
+                .Respond(["network", "vnet", "list"], "overseer-vnet\nsandboxes\n")
+                .Respond(["network", "vnet", "subnet", "show"],
+                    $"/subscriptions/{SubscriptionId}/resourceGroups/overseer-sandboxes-rg/providers/Microsoft.Network/natGateways/sandboxes-nat\n")
+                .Respond(["network", "vnet", "peering", "list"], "Connected\n");
         }
         if (resources.HasFlag(Resources.Database))
         {

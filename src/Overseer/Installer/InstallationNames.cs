@@ -13,6 +13,9 @@ internal sealed partial record InstallationNames(string Prefix, string Subscript
 {
     public string ResourceGroup => $"{Prefix}-rg";
     public string SandboxResourceGroup => $"{Prefix}-sandboxes-rg";
+    /// <summary>In the Sandbox resource group, where the Azure Sandbox Provider puts Sandboxes (<c>Sandboxes/Scripts</c>).</summary>
+    public string SandboxVirtualNetwork => "sandboxes";
+    public string NatGateway => "sandboxes-nat";
     public string Identity => $"{Prefix}-identity";
     public string KeyVault => $"{Prefix}-kv-{UniqueSuffix}";
     public string VirtualNetwork => $"{Prefix}-vnet";
