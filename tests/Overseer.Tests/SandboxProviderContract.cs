@@ -1,4 +1,6 @@
+using Overseer.Cli;
 using Overseer.Sandboxes;
+using Overseer.Secrets;
 
 namespace Overseer.Tests;
 
@@ -11,6 +13,9 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     private readonly List<Sandbox> _created = [];
 
     protected abstract ISandboxProvider Provider { get; }
+
+    /// <summary>Why this provider's agent sessions are left untested, while it can't start them yet; <c>null</c> when it can.</summary>
+    protected virtual string? AgentSessionsSkipReason => null;
 
     [Theory]
     [InlineData(SandboxOwnerKind.Intent)]
@@ -65,6 +70,7 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     [Fact]
     public async Task An_agent_turn_streams_updates_and_ends_with_its_outcome()
     {
+        Assert.SkipWhen(AgentSessionsSkipReason is not null, AgentSessionsSkipReason ?? "");
         var sandbox = await CreateAsync(NewIntent());
         GivenAgentSession(AgentRole.Developer, (["READY"], new AgentOutcome.Done()));
         await using var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, TestContext.Current.CancellationToken);
@@ -79,6 +85,7 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     [Fact]
     public async Task An_agent_that_asks_a_question_gets_the_answer_in_the_same_session()
     {
+        Assert.SkipWhen(AgentSessionsSkipReason is not null, AgentSessionsSkipReason ?? "");
         var sandbox = await CreateAsync(NewIntent());
         GivenAgentSession(AgentRole.Analyst,
             (["Which colour do you prefer?"], new AgentOutcome.AskedQuestion("Which colour do you prefer?")),
@@ -99,6 +106,7 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     [Fact]
     public async Task A_stopped_agent_session_takes_no_more_messages()
     {
+        Assert.SkipWhen(AgentSessionsSkipReason is not null, AgentSessionsSkipReason ?? "");
         var sandbox = await CreateAsync(NewIntent());
         var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, TestContext.Current.CancellationToken);
 
@@ -145,8 +153,11 @@ public abstract class SandboxProviderContract : IAsyncDisposable
         {
             await Provider.DestroyAsync(sandbox, CancellationToken.None);
         }
+        await DisposeProviderAsync();
         GC.SuppressFinalize(this);
     }
+
+    protected virtual ValueTask DisposeProviderAsync() => ValueTask.CompletedTask;
 }
 
 public sealed class FakeSandboxProviderContract : SandboxProviderContract
@@ -159,4 +170,45 @@ public sealed class FakeSandboxProviderContract : SandboxProviderContract
 
     protected override void GivenAgentSession(AgentRole role, params (string[] Updates, AgentOutcome Outcome)[] turns) =>
         _fake.ScriptAgentSessions(role, new FakeAgentSession([.. turns.Select(turn => new FakeAgentTurn(turn.Updates, turn.Outcome))]));
+}
+
+/// <summary>
+/// Opt-in: creates real Sandboxes, through your Azure CLI login, when <c>TEST_SANDBOX_SUBSCRIPTION_ID</c> and
+/// <c>TEST_SANDBOX_RESOURCE_GROUP</c> name an existing resource group to create them in. Each VM takes several minutes
+/// to set up and costs a little; every test destroys its own.
+/// </summary>
+public sealed class AzureSandboxProviderContract : SandboxProviderContract
+{
+    private const string SubscriptionVariable = "TEST_SANDBOX_SUBSCRIPTION_ID";
+    private const string ResourceGroupVariable = "TEST_SANDBOX_RESOURCE_GROUP";
+
+    private readonly string _directory = Directory.CreateTempSubdirectory("overseer-azure-sandboxes-").FullName;
+    private readonly AzureSandboxProvider _azure;
+
+    public AzureSandboxProviderContract()
+    {
+        var subscription = Environment.GetEnvironmentVariable(SubscriptionVariable);
+        var resourceGroup = Environment.GetEnvironmentVariable(ResourceGroupVariable);
+        Assert.SkipWhen(string.IsNullOrEmpty(subscription) || string.IsNullOrEmpty(resourceGroup),
+            $"Set {SubscriptionVariable} and {ResourceGroupVariable} to an existing resource group to run the Azure Sandbox Provider contract.");
+        var secrets = new FileSecretStore(Path.Combine(_directory, "secrets.json"));
+        _azure = new AzureSandboxProvider(
+            new AzureSandboxSettings(subscription, resourceGroup, AzureSandboxSettings.DefaultVmSize),
+            OverseerCli.ProcessEnvironment(),
+            secrets,
+            secrets,
+            new SshNetSandboxSsh(),
+            DeveloperAddress.CurrentAsync,
+            TimeProvider.System);
+    }
+
+    protected override ISandboxProvider Provider => _azure;
+
+    protected override string? AgentSessionsSkipReason => "Agent sessions in Azure Sandboxes come with the Agent Session module.";
+
+    protected override ValueTask DisposeProviderAsync()
+    {
+        Directory.Delete(_directory, recursive: true);
+        return ValueTask.CompletedTask;
+    }
 }

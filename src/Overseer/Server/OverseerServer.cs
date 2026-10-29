@@ -35,7 +35,7 @@ public static class OverseerServer
         builder.Services.AddSingleton(services => UserCredential.FromConfiguration(services.GetRequiredService<IConfiguration>()));
 
         builder.Services.AddSingleton(TimeProvider.System);
-        builder.Services.AddSandboxes(builder.Configuration);
+        builder.Services.AddSandboxes(builder.Configuration, environment);
         builder.Services.AddSecrets(builder.Configuration, environment);
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
@@ -92,11 +92,19 @@ public static class OverseerServer
                 await database.Database.MigrateAsync(cancellationToken);
             }
             await app.StartAsync(cancellationToken);
-            if (app.Services.GetRequiredService<ISandboxProvider>() is FakeSandboxProvider)
+            switch (app.Services.GetRequiredService<ISandboxProvider>())
             {
-                app.Logger.LogInformation(
-                    "Using the fake Sandbox Provider: Sandboxes exist only in memory. Configure {AzureSection} to use Azure.",
-                    SandboxProviderConfiguration.AzureSection);
+                case FakeSandboxProvider:
+                    app.Logger.LogInformation(
+                        "Using the fake Sandbox Provider: Sandboxes exist only in memory. Configure {AzureSection} to use Azure.",
+                        SandboxProviderConfiguration.AzureSection);
+                    break;
+                case AzureSandboxProvider azure:
+                    app.Logger.LogInformation(
+                        "Sandboxes are Azure VMs of size {VmSize} in the resource group {ResourceGroup} of the subscription {SubscriptionId}, " +
+                        "reached over SSH from this machine's public IP address only.",
+                        azure.Settings.VmSize, azure.Settings.ResourceGroup, azure.Settings.SubscriptionId);
+                    break;
             }
             switch (app.Services.GetRequiredService<ISecretReader>())
             {

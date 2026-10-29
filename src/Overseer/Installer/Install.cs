@@ -47,7 +47,7 @@ internal static partial class Install
             return 1;
         }
 
-        var azure = new AzureScripts(environment);
+        var azure = new AzureScripts("Installer", environment);
         AzureAccount account;
         try
         {

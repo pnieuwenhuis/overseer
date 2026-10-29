@@ -25,8 +25,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The installer's templated bash scripts travel inside the executable. -->
+    <!-- The templated bash scripts of the installer and the Azure Sandbox Provider travel inside the executable. -->
     <EmbeddedResource Include="Installer/Scripts/*.sh" LogicalName="Overseer.Installer.Scripts.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Sandboxes/Scripts/*.sh" LogicalName="Overseer.Sandboxes.Scripts.%(Filename)%(Extension)" />
+    <!-- What a Sandbox runs to set itself up, from its cloud-init. -->
+    <EmbeddedResource Include="Sandboxes/Setup/*.sh" LogicalName="Overseer.Sandboxes.Setup.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,6 +40,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
     <PackageReference Include="System.CommandLine" Version="2.0.14" />
   </ItemGroup>
 

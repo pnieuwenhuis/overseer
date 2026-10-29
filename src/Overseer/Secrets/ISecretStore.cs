@@ -1,9 +1,9 @@
 namespace Overseer.Secrets;
 
 /// <summary>
-/// Secrets such as the GitHub token and model provider tokens, write-only: once set, a secret can be replaced,
-/// removed or checked for, but this interface never returns its value. The Portal uses this one;
-/// only server-side consumers use <see cref="ISecretReader"/>.
+/// Secrets such as the GitHub token, model provider tokens and the SSH keys of Sandboxes, write-only: once set, a
+/// secret can be replaced, removed or checked for, but this interface never returns its value. The Portal uses this
+/// one; only server-side consumers use <see cref="ISecretReader"/>.
 /// </summary>
 public interface ISecretStore
 {

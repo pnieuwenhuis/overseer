@@ -2,7 +2,8 @@ namespace Overseer.Tests;
 
 /// <summary>
 /// An <c>az</c> executable that records every call and answers from scripted responses, for running the installer's
-/// scripts without Azure. Hand <see cref="Environment"/> to the CLI so its scripts find this <c>az</c> first.
+/// and the Azure Sandbox Provider's scripts without Azure. Hand <see cref="Environment"/> to the CLI so its scripts
+/// find this <c>az</c> first.
 /// </summary>
 public sealed class FakeAzureCli : IDisposable
 {

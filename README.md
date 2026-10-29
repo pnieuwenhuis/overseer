@@ -110,7 +110,9 @@ Other environment variables aren't read as settings. The only exception is `ASPN
 | Password hash    | `User:PasswordHash`               | `OVERSEER_USER__PASSWORDHASH`               | none; `serve` exits with a message pointing at `reset-password --local`                     |
 | Database login   | `Database:EntraAuthentication`    | `OVERSEER_DATABASE__ENTRAAUTHENTICATION`    | `false`: the connection string's password. `true`: a Microsoft Entra token, as in Azure (see [Database login](#database-login)) |
 | Database identity | `Database:ManagedIdentityClientId` | `OVERSEER_DATABASE__MANAGEDIDENTITYCLIENTID` | none; the system-assigned identity, or your Azure CLI login                                |
-| Azure provider   | `SandboxProvider:Azure`           | `OVERSEER_SANDBOXPROVIDER__AZURE__*`        | none; the fake Sandbox Provider (see [Sandboxes](#sandboxes))                               |
+| Sandbox subscription | `SandboxProvider:Azure:SubscriptionId` | `OVERSEER_SANDBOXPROVIDER__AZURE__SUBSCRIPTIONID` | none; without any `SandboxProvider:Azure` setting, the fake Sandbox Provider (see [Sandboxes](#sandboxes)) |
+| Sandbox resource group | `SandboxProvider:Azure:ResourceGroup` | `OVERSEER_SANDBOXPROVIDER__AZURE__RESOURCEGROUP` | none; required with the subscription                                                    |
+| Sandbox VM size  | `SandboxProvider:Azure:VmSize`    | `OVERSEER_SANDBOXPROVIDER__AZURE__VMSIZE`   | `Standard_D4s_v5`                                                                           |
 | Key Vault        | `Secrets:KeyVaultUri`             | `OVERSEER_SECRETS__KEYVAULTURI`             | none; the local secrets file (see [Secrets](#secrets))                                      |
 | Managed Identity | `Secrets:ManagedIdentityClientId` | `OVERSEER_SECRETS__MANAGEDIDENTITYCLIENTID` | none; the system-assigned identity, or your Azure CLI login                                 |
 | Secrets file     | `Secrets:File`                    | `OVERSEER_SECRETS__FILE`                    | `secrets.json` next to the local config file: `~/.config/overseer/secrets.json`             |
@@ -127,9 +129,29 @@ With `Database:EntraAuthentication` set to `true`, `serve` logs in to PostgreSQL
 
 ### Sandboxes
 
-Without `SandboxProvider:Azure` settings, `serve` uses the fake Sandbox Provider and logs that at startup. Its Sandboxes exist only in memory, every command succeeds without output, and every agent turn is done straight away, so the Portal and orchestration work offline. Tests script it through `FakeSandboxProvider` (command results in sequence, agent sessions turn by turn with their updates and outcomes, creation failures, slow provisioning). The Azure provider isn't built yet (ticket 10), so configuring `SandboxProvider:Azure` makes `serve` refuse to start.
+Without `SandboxProvider:Azure` settings, `serve` uses the fake Sandbox Provider and logs that at startup. Its Sandboxes exist only in memory, every command succeeds without output, and every agent turn is done straight away, so the Portal and orchestration work offline. Tests script it through `FakeSandboxProvider` (command results in sequence, agent sessions turn by turn with their updates and outcomes, creation failures, slow provisioning).
 
-Any Sandbox Provider must pass the contract suite in `tests/Overseer.Tests/SandboxProviderContract.cs`: derive from it once per implementation.
+To work with real Sandboxes from your machine, configure the Azure Sandbox Provider with a subscription ID (`az account show --query id`) and an existing resource group to create Sandboxes in, such as an installation's `<prefix>-sandboxes-rg`:
+
+```json
+{ "SandboxProvider": { "Azure": { "SubscriptionId": "<subscription ID>", "ResourceGroup": "<resource group>" } } }
+```
+
+`serve` then refuses to start without both, and logs where Sandboxes go. Like the installer, the provider manages Azure only through the Azure CLI (its scripts are in `src/Overseer/Sandboxes/Scripts`), logged in as you, which needs Contributor on the resource group. Each Sandbox is an Ubuntu 24.04 VM `sandbox-<id>` of the configured size, tagged with its owner (`overseer-owner-kind`, `overseer-owner-id`), with:
+
+- its own network security group, public IP, network interface and 64 GiB OS disk, named after the VM, on the VNet `sandboxes` (10.41.0.0/16) that the provider creates in the resource group when it is missing. The security group lets in SSH only from your current public IPv4 address, as api.ipify.org sees it at creation, and nothing from the other Sandboxes on the VNet. A Sandbox created before your address changed is no longer reachable;
+- a fresh SSH key pair. The private key is kept in the secret store as `<vm>-ssh-key`, never in PostgreSQL, so Overseer still reaches the Sandbox after a restart. Overseer also generates the VM's SSH host key, hands it over through cloud-init and tags the VM with its fingerprint (`overseer-host-key`), so it never logs in to another machine;
+- Docker with Compose, git, `gh` 2.99 or newer, Node 24 with Playwright and its browsers (in `/opt/ms-playwright`), and OpenCode, installed by cloud-init (`src/Overseer/Sandboxes/Setup/setup-sandbox.sh`). Creation takes several minutes: it completes only once cloud-init has finished, and fails with what cloud-init reported if it didn't succeed, or if the Sandbox isn't set up within 30 minutes.
+
+A creation that fails, with the Azure error or cloud-init's, removes what it created. Commands run over SSH as `overseer`, with standard error merged into standard output. Destroying a Sandbox deletes the VM, its disk, network interface, public IP and network security group, then its key; the `sandboxes` VNet stays for the next one. Agent sessions in Azure Sandboxes come with the Agent Session module.
+
+Any Sandbox Provider must pass the contract suite in `tests/Overseer.Tests/SandboxProviderContract.cs`: derive from it once per implementation. The fake runs it in the default test run. The Azure provider runs it only when `TEST_SANDBOX_SUBSCRIPTION_ID` and `TEST_SANDBOX_RESOURCE_GROUP` name an existing resource group where your Azure CLI login has Contributor. It creates real Sandboxes one after the other and destroys each one, which takes about an hour and costs a little; its agent session tests are skipped until the Agent Session module exists:
+
+```sh
+TEST_SANDBOX_SUBSCRIPTION_ID=$(az account show --query id --output tsv) TEST_SANDBOX_RESOURCE_GROUP=my-sandboxes-rg dotnet test --filter AzureSandboxProviderContract
+```
+
+The default test run covers the Azure provider against a fake `az` and a fake SSH (`AzureSandboxProviderTests`), and its SSH client against a real OpenSSH server in a container (`SandboxSshTests`).
 
 ### Secrets
 
