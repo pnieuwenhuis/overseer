@@ -7,7 +7,7 @@ namespace Overseer.Tests;
 /// <summary>
 /// Opt-in: installs Overseer for real, into the subscription your Azure CLI is logged in to, when
 /// <c>TEST_INSTALL_VERSION</c> names a released version (its image must be published). It uses a fresh prefix,
-/// logs in to the Portal, and removes everything it created afterwards. It takes about half an hour and costs a little.
+/// logs in to the Portal, runs install again as an upgrade would, and removes everything it created afterwards. It takes about half an hour and costs a little.
 /// </summary>
 public class InstallSmokeTest : IDisposable
 {
@@ -18,7 +18,7 @@ public class InstallSmokeTest : IDisposable
     private readonly string _prefix = $"smoke{Guid.NewGuid():N}"[..12];
 
     [Fact]
-    public async Task Install_into_a_real_subscription_gives_a_Portal_the_printed_credentials_log_in_to()
+    public async Task Install_into_a_real_subscription_gives_a_Portal_the_printed_credentials_log_in_to_also_after_running_it_again()
     {
         var version = Environment.GetEnvironmentVariable(VersionVariable);
         Assert.SkipWhen(string.IsNullOrEmpty(version), $"Set {VersionVariable} to a released version to install it into your current Azure subscription.");
@@ -37,15 +37,34 @@ public class InstallSmokeTest : IDisposable
             Assert.True(exitCode == 0, output.ToString());
             var portal = new Uri(Regex.Match(output.ToString(), @"^\s*Portal:\s*(\S+)\s*$", RegexOptions.Multiline).Groups[1].Value);
             var credentials = ResetPasswordOutput.Parse(output.ToString());
-            using var browser = new PortalBrowser(portal);
-            await browser.LogInAsync(credentials.Username, credentials.Password);
-            Assert.True(await browser.IsLoggedInAsync());
+            using (var browser = new PortalBrowser(portal))
+            {
+                await browser.LogInAsync(credentials.Username, credentials.Password);
+                Assert.True(await browser.IsLoggedInAsync());
+            }
+
+            // Every resource exists now, so this checks them all, keeps the password and, at the same version, changes nothing.
+            var revision = await LatestRevisionAsync();
+            var again = new StringWriter();
+            exitCode = await OverseerCli.InvokeAsync(["install", "--prefix", _prefix], environment, again, again, version);
+
+            Assert.True(exitCode == 0, again.ToString());
+            Assert.Contains("password is kept", again.ToString());
+            Assert.Equal(revision, await LatestRevisionAsync());
+            using (var browser = new PortalBrowser(portal))
+            {
+                await browser.LogInAsync(credentials.Username, credentials.Password);
+                Assert.True(await browser.IsLoggedInAsync());
+            }
         }
         finally
         {
             await RemoveInstallationAsync();
         }
     }
+
+    private Task<string> LatestRevisionAsync() =>
+        AzAsync("containerapp", "show", "--resource-group", $"{_prefix}-rg", "--name", _prefix, "--query", "properties.latestRevisionName", "--output", "tsv");
 
     /// <summary>Deletes both resource groups and purges the soft-deleted Key Vault, so its name is free again.</summary>
     private async Task RemoveInstallationAsync()

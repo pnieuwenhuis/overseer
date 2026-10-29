@@ -23,6 +23,16 @@ The Managed Identity's only Azure role assignment is Contributor on the Sandbox 
 
 The scripts install runs are embedded in the executable (`src/Overseer/Installer/Scripts`) and manage Azure only through the Azure CLI. A failing step stops install with the Azure error and, for missing permissions, quotas and unavailable regions, what to do about it. A development build refuses to install, because no image is published for `0.0.0-dev`.
 
+### Upgrading
+
+To upgrade, get the new `overseer` and run `install` again with the same `--prefix`. Install finds the existing installation by its resource group `<prefix>-rg`, tagged `overseer-prefix=<prefix>`. It stops rather than take over a `<prefix>-rg` or `<prefix>-sandboxes-rg` without that tag. It:
+
+- keeps it in its region, so `--region` can be left out. Naming another region is an error, because an installation can't move;
+- creates only what is missing, so re-running after an install that stopped partway completes it, and re-running the same version changes nothing;
+- updates the Container App to the image of the CLI's version, with the same settings, and waits for the new revision; the server applies new migrations when it starts;
+- leaves the database, the Key Vault with its secrets, and the password alone. It prints the Portal URL and the username, and says the password is kept: `overseer reset-password` sets a new one;
+- refuses to deploy a version older than the one running, because migrations only go forward.
+
 ## Running Overseer locally
 
 You need the .NET 10 SDK and Docker.
@@ -115,7 +125,7 @@ dotnet test
 
 Docker must be running: the server tests start Overseer in-process against a real PostgreSQL through Testcontainers.
 
-The install tests run `overseer install` against a fake `az` (`tests/Overseer.Tests/FakeAzureCli.cs`), so they need bash but no Azure. An opt-in smoke test installs for real into the subscription your Azure CLI is logged in to, with a fresh prefix, logs in to the Portal and deletes everything afterwards (about half an hour, and a little cost). It needs a released version whose image is published, such as a prerelease tag pushed for the purpose:
+The install tests run `overseer install` against a fake `az` (`tests/Overseer.Tests/FakeAzureCli.cs`), so they need bash but no Azure. An opt-in smoke test installs for real into the subscription your Azure CLI is logged in to, with a fresh prefix, logs in to the Portal, runs install again (which must keep the password and create no new revision) and deletes everything afterwards (about half an hour, and a little cost). It needs a released version whose image is published, such as a prerelease tag pushed for the purpose:
 
 ```sh
 TEST_INSTALL_VERSION=0.2.0-rc.1 dotnet test --filter InstallSmokeTest

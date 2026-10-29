@@ -39,17 +39,16 @@ public static class OverseerCli
 
         var region = new Option<string>("--region")
         {
-            Description = "The Azure region to install into.",
-            DefaultValueFactory = _ => "westeurope",
+            Description = $"The Azure region to install into: {Install.DefaultRegion} when left out. An existing installation stays in its region.",
         };
         var prefix = new Option<string>("--prefix")
         {
             Description = "Starts the name of every resource Overseer creates; it identifies the installation.",
-            DefaultValueFactory = _ => "overseer",
+            DefaultValueFactory = _ => Install.DefaultPrefix,
         };
         var install = new Command("install", "Install Overseer in Azure.") { region, prefix };
         install.SetAction((parseResult, cancellationToken) => Install.RunAsync(
-            parseResult.GetRequiredValue(region), parseResult.GetRequiredValue(prefix), version, environment, output, error, cancellationToken));
+            parseResult.GetValue(region), parseResult.GetRequiredValue(prefix), version, environment, output, error, cancellationToken));
 
         var root = new RootCommand("Overseer: direct a team of AI agents from Intent to merged pull request.")
         {

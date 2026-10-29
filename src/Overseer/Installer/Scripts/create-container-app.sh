@@ -1,5 +1,6 @@
 # Creates the Container App running Overseer: one replica, as its Managed Identity, which is how it logs in to
 # PostgreSQL and reaches Key Vault. The password hash is a Container App secret. Prints the Portal's host name.
+# update-container-app.sh gives an existing one the same settings.
 set -euo pipefail
 
 resource_group={{ResourceGroup}}

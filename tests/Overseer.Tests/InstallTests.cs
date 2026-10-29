@@ -17,6 +17,7 @@ public class InstallTests : IDisposable
     private const string DatabaseHost = "overseer-db-0123abcd.postgres.database.azure.com";
     private const string VaultUri = "https://overseer-kv-0123abcd.vault.azure.net/";
     private const string PortalHost = "overseer.calmwave-1a2b3c4d.westeurope.azurecontainerapps.io";
+    private const string LatestRevision = "overseer--0000002";
 
     private readonly PostgresServer _postgres;
     private readonly FakeAzureCli _az = new();
@@ -30,6 +31,7 @@ public class InstallTests : IDisposable
             .Respond(["keyvault", "create"], VaultUri + "\n")
             .Respond(["postgres", "flexible-server", "show"], DatabaseHost + "\n")
             .Respond(["containerapp", "create"], PortalHost + "\n")
+            .Respond(["containerapp", "show"], LatestRevision + "\n")
             .Respond(["containerapp", "replica", "list"], "true\n");
     }
 
@@ -321,6 +323,251 @@ public class InstallTests : IDisposable
         var secrets = Assert.IsType<KeyVaultSecretStore>(server.Services.GetService(typeof(ISecretReader)));
         Assert.Equal(new Uri(VaultUri), secrets.VaultUri);
     }
+
+    [Fact]
+    public async Task Install_refuses_another_region_than_the_existing_installations_and_changes_nothing()
+    {
+        ExistingInstallation(region: "swedencentral");
+
+        var (exitCode, output) = await Install("--region", "westeurope");
+
+        Assert.Equal(1, exitCode);
+        var refusal = Assert.Single(output.Split('\n'), line => line.Contains("swedencentral"));
+        Assert.Contains("westeurope", refusal);
+        Assert.Empty(Changes());
+    }
+
+    [Fact]
+    public async Task Install_leaves_a_resource_group_of_the_same_name_that_Overseer_did_not_create_alone()
+    {
+        _az.Respond(["group", "list"], "westeurope\n-\n");
+
+        var (exitCode, output) = await Install();
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("overseer-rg", output);
+        Assert.Contains("--prefix", output);
+        Assert.Empty(Changes());
+    }
+
+    [Fact]
+    public async Task Install_leaves_a_Sandbox_resource_group_of_the_same_name_that_Overseer_did_not_create_alone()
+    {
+        _az.Respond(["group", "exists", "--name", "overseer-sandboxes-rg"], "true\n")
+            .Respond(["group", "show", "--name", "overseer-sandboxes-rg"], "-\n");
+
+        var (exitCode, output) = await Install();
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("overseer-sandboxes-rg", output);
+        Assert.Contains("--prefix", output);
+        Assert.DoesNotContain(Changes(), call => Command(call).EndsWith(" create") && Command(call) != "group create");
+    }
+
+    [Fact]
+    public async Task When_creating_the_Container_App_fails_install_still_shows_the_password_it_may_have_been_given()
+    {
+        _az.Fail(["containerapp", "create"], "ERROR: (ContainerAppOperationError) Failed to provision revision for container app 'overseer'.");
+
+        var (exitCode, output) = await Install();
+
+        Assert.Equal(1, exitCode);
+        // A re-run finds the Container App, keeps its password and doesn't show it again.
+        var credentials = ResetPasswordOutput.Parse(output);
+        Assert.Equal("overseer", credentials.Username);
+    }
+
+    [Fact]
+    public async Task Re_running_install_at_the_deployed_version_creates_nothing_and_changes_nothing()
+    {
+        ExistingInstallation(deployedVersion: Version);
+
+        var (exitCode, _) = await Install();
+
+        Assert.Equal(0, exitCode);
+        // Registering providers and setting the vault's access policy again are no-ops; so is deploying the image the app already runs.
+        Assert.Equal(
+            ["containerapp update", "keyvault set-policy", "provider register"],
+            Changes().Select(Command).Distinct().Order());
+        Assert.Equal("ghcr.io/pnieuwenhuis/overseer:1.2.3", Value(Call("containerapp", "update"), "--image"));
+    }
+
+    [Fact]
+    public async Task An_upgrade_rolls_the_Container_App_to_the_CLIs_version_with_the_same_settings_and_leaves_the_data_alone()
+    {
+        ExistingInstallation(deployedVersion: "1.2.0");
+
+        var (exitCode, output) = await Install();
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(output.Split('\n'), line => line.Contains("Upgrading") && line.Contains("1.2.0") && line.Contains("1.2.3"));
+        var update = Call("containerapp", "update");
+        Assert.Equal("overseer", Value(update, "--name"));
+        Assert.Equal("ghcr.io/pnieuwenhuis/overseer:1.2.3", Value(update, "--image"));
+        Assert.Equal("1", Value(update, "--min-replicas"));
+        Assert.Equal("1", Value(update, "--max-replicas"));
+        var settings = Values(update, "--replace-env-vars").Select(variable => variable.Split('=', 2)).ToDictionary(variable => variable[0], variable => variable[1]);
+        Assert.Equal(DatabaseHost, new NpgsqlConnectionStringBuilder(settings["OVERSEER_CONNECTIONSTRINGS__OVERSEER"]).Host);
+        Assert.Equal(VaultUri, settings["OVERSEER_SECRETS__KEYVAULTURI"]);
+        Assert.Equal(IdentityClientId, settings["OVERSEER_DATABASE__MANAGEDIDENTITYCLIENTID"]);
+        Assert.Equal("secretref:password-hash", settings["OVERSEER_USER__PASSWORDHASH"]);
+        // Nothing else changes: the database and the Key Vault, with the secrets in them, are neither created again nor removed.
+        Assert.Equal(
+            ["containerapp update", "keyvault set-policy", "provider register"],
+            Changes().Select(Command).Distinct().Order());
+    }
+
+    [Fact]
+    public async Task An_upgrade_keeps_the_password_and_says_how_to_get_a_new_one()
+    {
+        ExistingInstallation();
+
+        var (exitCode, output) = await Install();
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(output.Split('\n'), line => Regex.IsMatch(line, $@"^\s*Portal:\s*https://{Regex.Escape(PortalHost)}/?\s*$"));
+        Assert.Contains(output.Split('\n'), line => Regex.IsMatch(line, @"^\s*Username:\s*overseer\s*$"));
+        Assert.DoesNotContain("Password:", output);
+        Assert.Contains("password is kept", output);
+        Assert.Contains("overseer reset-password", output);
+        Assert.DoesNotContain(_az.Calls, call => call.Contains("secret") || call.Contains("--secrets"));
+        Assert.DoesNotContain(_az.Calls.SelectMany(call => call), argument => argument.Contains("password-hash=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_upgrade_waits_for_the_new_revision_to_be_ready_not_the_one_it_replaces()
+    {
+        ExistingInstallation();
+
+        var (exitCode, _) = await Install();
+
+        Assert.Equal(0, exitCode);
+        var readiness = Calls("containerapp", "replica", "list");
+        Assert.NotEmpty(readiness);
+        Assert.All(readiness, call => Assert.Equal(LatestRevision, Value(call, "--revision")));
+    }
+
+    [Theory]
+    [InlineData("1.2.4")]
+    [InlineData("1.3.0")]
+    [InlineData("1.10.0")]
+    [InlineData("2.0.0-rc.1")]
+    [InlineData("1.2.4-rc.1")]
+    public async Task Install_refuses_to_replace_a_newer_version_because_migrations_only_go_forward(string deployedVersion)
+    {
+        ExistingInstallation(deployedVersion: deployedVersion);
+
+        var (exitCode, output) = await Install();
+
+        Assert.Equal(1, exitCode);
+        var refusal = Assert.Single(output.Split('\n'), line => line.Contains(deployedVersion));
+        Assert.Contains("1.2.3", refusal);
+        Assert.Empty(Changes());
+    }
+
+    [Theory]
+    [InlineData("0.9.0")]
+    [InlineData("1.2.0")]
+    [InlineData("1.2.3-rc.1")]
+    [InlineData("1.2.3")]
+    public async Task Install_upgrades_an_older_or_the_same_version(string deployedVersion)
+    {
+        ExistingInstallation(deployedVersion: deployedVersion);
+
+        var (exitCode, _) = await Install();
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("ghcr.io/pnieuwenhuis/overseer:1.2.3", Value(Call("containerapp", "update"), "--image"));
+    }
+
+    [Fact]
+    public async Task Re_running_install_after_it_stopped_partway_creates_the_rest_in_the_installations_region()
+    {
+        // The PostgreSQL server ran into a quota, so neither it nor anything after it exists.
+        _az.Respond(["group", "list"], "swedencentral\noverseer\n")
+            .Respond(["containerapp", "list"], "-\n");
+        ExistingResources(Resources.ResourceGroups | Resources.Identity | Resources.KeyVault | Resources.Network);
+
+        var (exitCode, output) = await Install();
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            ["containerapp create", "containerapp env create", "monitor log-analytics workspace create", "postgres flexible-server create", "postgres flexible-server db create"],
+            Changes().Select(Command).Where(command => command.EndsWith(" create")).Order());
+        Assert.All(_az.Calls.Where(call => call.Contains("--location")), call => Assert.Equal("swedencentral", Value(call, "--location")));
+        // The Container App is new, so is its password.
+        var credentials = ResetPasswordOutput.Parse(output);
+        Assert.Equal("overseer", credentials.Username);
+    }
+
+    /// <summary>
+    /// Azure as an earlier install of <paramref name="deployedVersion"/> in <paramref name="region"/> left it: every
+    /// resource exists. Prefix and subscription are the defaults.
+    /// </summary>
+    private void ExistingInstallation(string region = "westeurope", string deployedVersion = "1.2.0")
+    {
+        _az.Respond(["group", "list"], $"{region}\noverseer\n")
+            .Respond(["containerapp", "list"], $"ghcr.io/pnieuwenhuis/overseer:{deployedVersion}\n")
+            .Respond(["containerapp", "update"], PortalHost + "\n");
+        ExistingResources(Resources.All);
+    }
+
+    [Flags]
+    private enum Resources
+    {
+        ResourceGroups = 1,
+        Identity = 2,
+        KeyVault = 4,
+        Network = 8,
+        Database = 16,
+        ContainerAppsEnvironment = 32,
+        All = 63,
+    }
+
+    /// <summary>
+    /// Makes <paramref name="resources"/> exist, the way the installer's scripts look for them. The fake ignores
+    /// <c>--query</c>, so a listing answers every name it is filtered for.
+    /// </summary>
+    private void ExistingResources(Resources resources)
+    {
+        if (resources.HasFlag(Resources.ResourceGroups))
+        {
+            _az.Respond(["group", "exists"], "true\n")
+                .Respond(["group", "show"], "overseer\n");
+        }
+        if (resources.HasFlag(Resources.Identity))
+        {
+            _az.Respond(["identity", "list"], $"{IdentityId}\n{IdentityPrincipalId}\n{IdentityClientId}\n")
+                .Respond(["role", "assignment", "list"], "/subscriptions/x/providers/Microsoft.Authorization/roleAssignments/y\n");
+        }
+        if (resources.HasFlag(Resources.KeyVault))
+        {
+            _az.Respond(["keyvault", "list"], "overseer-kv-0123abcd\n")
+                .Respond(["keyvault", "show"], VaultUri + "\n");
+        }
+        if (resources.HasFlag(Resources.Network))
+        {
+            _az.Respond(["network", "vnet", "list"], "overseer-vnet\n")
+                .Respond(["network", "vnet", "subnet", "list"], "container-apps\npostgres\n");
+        }
+        if (resources.HasFlag(Resources.Database))
+        {
+            _az.Respond(["postgres", "flexible-server", "list"], "overseer-db-0123abcd\n")
+                .Respond(["postgres", "flexible-server", "db", "list"], "overseer\n");
+        }
+        if (resources.HasFlag(Resources.ContainerAppsEnvironment))
+        {
+            _az.Respond(["monitor", "log-analytics", "workspace", "list"], "5c4b3a29-0000-4000-8000-000000000000\n")
+                .Respond(["containerapp", "env", "list"], "overseer-env\n");
+        }
+    }
+
+    /// <summary>The calls that change something in Azure, as opposed to looking.</summary>
+    private IReadOnlyList<IReadOnlyList<string>> Changes() =>
+        _az.Calls.Where(call => Command(call).Split(' ').Last() is not ("list" or "show" or "exists")).ToList();
+
+    /// <summary>The command a call runs, such as <c>containerapp env create</c>: its arguments up to the first option.</summary>
+    private static string Command(IReadOnlyList<string> call) => string.Join(' ', call.TakeWhile(argument => !argument.StartsWith("--")));
 
     private IReadOnlyList<IReadOnlyList<string>> Calls(params string[] command) =>
         _az.Calls.Where(call => call.Take(command.Length).SequenceEqual(command)).ToList();
