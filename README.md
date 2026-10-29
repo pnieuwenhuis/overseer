@@ -45,6 +45,23 @@ It finds the installation in the subscription your Azure CLI uses, sets the new 
 
 If the restart fails, it still prints the password, with the `az` command to restart the Container App yourself: the hash is set, and the next restart makes it the only one that works. Running reset-password again would replace it.
 
+### Uninstalling
+
+To remove an installation, and stop paying for it, run uninstall with the same `--prefix` as install:
+
+```sh
+overseer uninstall [--prefix overseer] [--yes]
+```
+
+It finds the installation in the subscription your Azure CLI uses and lists what it removes. Only after you type the prefix (or with `--yes`, for scripts) does it remove it:
+
+1. the Managed Identity's role assignments, so the running Overseer loses its rights on the Sandbox resource group first, and none are left orphaned;
+2. `<prefix>-sandboxes-rg`, with every Sandbox still in it;
+3. `<prefix>-rg`, with the Portal, the database and the Key Vault with its secrets. This takes 10 to 20 minutes. Its Log Analytics workspace is deleted for good first: deleting the group would only soft-delete it, and a later install would recover the old logs;
+4. the soft-deleted Key Vault, purged, so that a later install with the same prefix can create it again.
+
+This can't be undone. It removes only resource groups tagged `overseer-prefix=<prefix>`: a group of the same name without that tag isn't Overseer's, and uninstall says so and leaves it alone. With nothing installed it says there is nothing to remove, and succeeds. A failing step stops it with the Azure error; running it again removes what is left. It needs Owner on the subscription, or Contributor plus User Access Administrator, as install does.
+
 ## Running Overseer locally
 
 You need the .NET 10 SDK and Docker.
@@ -137,7 +154,7 @@ dotnet test
 
 Docker must be running: the server tests start Overseer in-process against a real PostgreSQL through Testcontainers.
 
-The install and Azure reset-password tests run `overseer install` and `overseer reset-password` against a fake `az` (`tests/Overseer.Tests/FakeAzureCli.cs`), so they need bash but no Azure. An opt-in smoke test installs for real into the subscription your Azure CLI is logged in to, with a fresh prefix, logs in to the Portal, resets the password (after which only the new one logs in), runs install again (which must keep the password and create no new revision) and deletes everything afterwards (about half an hour, and a little cost). It needs a released version whose image is published, such as a prerelease tag pushed for the purpose:
+The install, uninstall and Azure reset-password tests run `overseer install`, `overseer uninstall` and `overseer reset-password` against a fake `az` (`tests/Overseer.Tests/FakeAzureCli.cs`), so they need bash but no Azure. An opt-in smoke test installs for real into the subscription your Azure CLI is logged in to, with a fresh prefix, logs in to the Portal, resets the password (after which only the new one logs in), runs install again (which must keep the password and create no new revision), uninstalls, installs again with the same prefix (which must succeed and log in) and uninstalls again. It deletes whatever a failure left behind (about an hour and a half, and a little cost). It needs a released version whose image is published, such as a prerelease tag pushed for the purpose:
 
 ```sh
 TEST_INSTALL_VERSION=0.2.0-rc.1 dotnet test --filter InstallSmokeTest

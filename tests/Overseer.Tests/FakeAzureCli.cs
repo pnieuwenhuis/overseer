@@ -114,7 +114,7 @@ public sealed class FakeAzureCli : IDisposable
 
     /// <summary>The calls that change something in Azure, as opposed to looking.</summary>
     public IReadOnlyList<IReadOnlyList<string>> Changes =>
-        Calls.Where(call => Command(call).Split(' ').Last() is not ("list" or "show" or "exists")).ToList();
+        Calls.Where(call => Command(call).Split(' ').Last() is not ("list" or "list-deleted" or "show" or "exists")).ToList();
 
     /// <summary>The command a call runs, such as <c>containerapp env create</c>: its arguments up to the first option.</summary>
     public static string Command(IReadOnlyList<string> call) => string.Join(' ', call.TakeWhile(argument => !argument.StartsWith("--")));

@@ -32,15 +32,6 @@ public class CliTests : IDisposable
     }
 
     [Fact]
-    public async Task A_command_that_is_not_built_yet_says_so_and_fails()
-    {
-        var (exitCode, output) = await Run("uninstall");
-
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("not implemented yet", output);
-    }
-
-    [Fact]
     public async Task Version_prints_the_version_stamped_into_the_executable()
     {
         var (exitCode, output) = await Run("--version");
