@@ -47,6 +47,8 @@ It finds the installation in the subscription your Azure CLI uses, sets the new 
 
 If the restart fails, it still prints the password, with the `az` command to restart the Container App yourself: the hash is set, and the next restart makes it the only one that works. Running reset-password again would replace it.
 
+After 5 failed logins in a row, the Portal refuses every login for 15 minutes, even one with the correct password, and its login page says until when. A wrong username counts as a failed login too. The count is kept in memory only, so a restart (including the one reset-password does) also ends a lockout.
+
 ### Uninstalling
 
 To remove an installation, and stop paying for it, run uninstall with the same `--prefix` as install:

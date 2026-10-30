@@ -21,7 +21,7 @@ public sealed class PortalBrowser : IDisposable
     public async Task<HttpResponseMessage> LogInAsync(string username, string password, string loginPage = "/login")
     {
         var form = await Http.GetStringAsync(loginPage, TestContext.Current.CancellationToken);
-        var antiforgeryToken = Regex.Match(form, "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value;
+        var antiforgeryToken = AntiforgeryToken(form);
 
         return await Http.PostAsync(loginPage, new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -32,6 +32,20 @@ public sealed class PortalBrowser : IDisposable
         }), TestContext.Current.CancellationToken);
     }
 
+    /// <summary>Uses the "Log out" button in the header of the Portal's home page, the way a browser would.</summary>
+    public async Task<HttpResponseMessage> LogOutAsync()
+    {
+        var page = await Http.GetStringAsync("/", TestContext.Current.CancellationToken);
+        var logOutForm = Regex.Match(page, "<form[^>]*action=\"logout\"[^>]*>.*?</form>", RegexOptions.Singleline).Value;
+        Assert.Contains("Log out", logOutForm);
+        var antiforgeryToken = AntiforgeryToken(logOutForm);
+
+        return await Http.PostAsync("/logout", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = antiforgeryToken,
+        }), TestContext.Current.CancellationToken);
+    }
+
     /// <summary>Opens the Portal's home page and tells whether Overseer showed it or sent the client to log in.</summary>
     public async Task<bool> IsLoggedInAsync()
     {
@@ -39,6 +53,9 @@ public sealed class PortalBrowser : IDisposable
         response.EnsureSuccessStatusCode();
         return response.RequestMessage!.RequestUri!.AbsolutePath != "/login";
     }
+
+    private static string AntiforgeryToken(string form) =>
+        Regex.Match(form, "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value;
 
     public void Dispose() => Http.Dispose();
 }

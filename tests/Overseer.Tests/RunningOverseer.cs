@@ -58,8 +58,10 @@ public sealed class RunningOverseer : IAsyncDisposable
 
     /// <param name="environment">Overrides the test defaults; a <c>null</c> value removes that variable.</param>
     /// <param name="logs">Also receives everything the server logs.</param>
+    /// <param name="time">The server's clock, such as a <c>FakeTimeProvider</c> the test advances.</param>
     public static async Task<RunningOverseer> StartAsync(
-        string connectionString, IReadOnlyDictionary<string, string?>? environment = null, ILoggerProvider? logs = null)
+        string connectionString, IReadOnlyDictionary<string, string?>? environment = null, ILoggerProvider? logs = null,
+        TimeProvider? time = null)
     {
         var defaults = new Dictionary<string, string?>
         {
@@ -76,7 +78,8 @@ public sealed class RunningOverseer : IAsyncDisposable
         var app = await OverseerServer.StartAsync(
             defaults.Where(variable => variable.Value is not null).ToDictionary(),
             TestContext.Current.CancellationToken,
-            logs);
+            logs,
+            time);
 
         return new RunningOverseer(app);
     }
@@ -84,6 +87,9 @@ public sealed class RunningOverseer : IAsyncDisposable
     /// <inheritdoc cref="PortalBrowser.LogInAsync"/>
     public Task<HttpResponseMessage> LogInAsync(string username = Username, string password = Password, string loginPage = "/login") =>
         _browser.LogInAsync(username, password, loginPage);
+
+    /// <inheritdoc cref="PortalBrowser.LogOutAsync"/>
+    public Task<HttpResponseMessage> LogOutAsync() => _browser.LogOutAsync();
 
     /// <inheritdoc cref="PortalBrowser.IsLoggedInAsync"/>
     public Task<bool> IsLoggedInAsync() => _browser.IsLoggedInAsync();

@@ -2,6 +2,12 @@
 
 <header class="shell-header">
     <span class="shell-name">Overseer @OverseerVersion.Current</span>
+    <AuthorizeView>
+        <form method="post" action="logout" class="shell-log-out">
+            <AntiforgeryToken />
+            <button type="submit">Log out</button>
+        </form>
+    </AuthorizeView>
 </header>
 
 <main class="shell-main">

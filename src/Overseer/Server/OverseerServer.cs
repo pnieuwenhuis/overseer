@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
@@ -13,7 +14,9 @@ namespace Overseer.Server;
 public static class OverseerServer
 {
     /// <param name="logs">Also receives everything the server logs, next to the console.</param>
-    public static WebApplication Build(IReadOnlyDictionary<string, string?> environment, ILoggerProvider? logs = null)
+    /// <param name="time">The clock, instead of the system's.</param>
+    public static WebApplication Build(
+        IReadOnlyDictionary<string, string?> environment, ILoggerProvider? logs = null, TimeProvider? time = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -33,8 +36,9 @@ public static class OverseerServer
         builder.Services.AddDatabase(builder.Configuration);
 
         builder.Services.AddSingleton(services => UserCredential.FromConfiguration(services.GetRequiredService<IConfiguration>()));
+        builder.Services.AddSingleton<AccountLockout>();
 
-        builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton(time ?? TimeProvider.System);
         builder.Services.AddSandboxes(builder.Configuration, environment);
         builder.Services.AddSecrets(builder.Configuration, environment);
         builder.Services.AddSmokeTest(builder.Configuration);
@@ -71,6 +75,16 @@ public static class OverseerServer
 
         app.MapStaticAssets();
         app.MapSmokeTest();
+        app.MapPost("/logout", async (HttpContext context, IAntiforgery antiforgery) =>
+        {
+            // Only the Portal's own "Log out" button, so another site can't end the session.
+            if (!await antiforgery.IsRequestValidAsync(context))
+            {
+                return Results.BadRequest();
+            }
+            await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            return Results.LocalRedirect("/login");
+        });
         // Every page requires the logged-in user; only the login page opts out with [AllowAnonymous].
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode()
@@ -82,9 +96,10 @@ public static class OverseerServer
     /// <summary>Builds the server, brings the database schema up to date, and starts listening.</summary>
     /// <inheritdoc cref="Build"/>
     public static async Task<WebApplication> StartAsync(
-        IReadOnlyDictionary<string, string?> environment, CancellationToken cancellationToken, ILoggerProvider? logs = null)
+        IReadOnlyDictionary<string, string?> environment, CancellationToken cancellationToken, ILoggerProvider? logs = null,
+        TimeProvider? time = null)
     {
-        var app = Build(environment, logs);
+        var app = Build(environment, logs, time);
         try
         {
             // Fail on a missing credential before touching the database: without it nobody can log in.

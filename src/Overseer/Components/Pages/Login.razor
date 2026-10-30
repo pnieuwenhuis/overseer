@@ -2,9 +2,11 @@
 @attribute [AllowAnonymous]
 @attribute [ExcludeFromInteractiveRouting]
 @using System.Diagnostics.CodeAnalysis
+@using System.Globalization
 @using Microsoft.AspNetCore.Authentication
 @using Overseer.Login
 @inject UserCredential Credential
+@inject AccountLockout Lockout
 @inject NavigationManager Navigation
 
 <PageTitle>Log in · Overseer</PageTitle>
@@ -13,9 +15,16 @@
 
 <form method="post" @formname="login" @onsubmit="LogInAsync" class="login-form">
     <AntiforgeryToken />
-    @if (_failed)
+    @switch (_result)
     {
-        <p class="login-error" role="alert">The username or password is incorrect.</p>
+        case LoginResult.Failed:
+            <p class="login-error" role="alert">The username or password is incorrect.</p>
+            break;
+        case LoginResult.LockedOut lockedOut:
+            <p class="login-error" role="alert">
+                The account is temporarily locked after too many failed logins. Try again after @UnlockTime(lockedOut.Until) UTC.
+            </p>
+            break;
     }
     <label>
         Username
@@ -41,18 +50,25 @@
     [SupplyParameterFromQuery]
     private string? ReturnUrl { get; set; }
 
-    private bool _failed;
+    private LoginResult? _result;
 
     private async Task LogInAsync()
     {
-        if (!Credential.Matches(Username ?? "", Password ?? ""))
+        _result = Lockout.TryLogIn(Username ?? "", Password ?? "");
+        if (_result is not LoginResult.LoggedIn)
         {
-            _failed = true;
             return;
         }
 
         await HttpContext.SignInAsync(Credential.CreatePrincipal());
         Navigation.NavigateTo(IsPortalPath(ReturnUrl) ? ReturnUrl : "/");
+    }
+
+    // Rounded up to the minute, so trying again at the time shown always works.
+    private static string UnlockTime(DateTimeOffset until)
+    {
+        var minute = new DateTimeOffset(until.UtcTicks - until.UtcTicks % TimeSpan.TicksPerMinute, TimeSpan.Zero);
+        return (minute < until ? minute.AddMinutes(1) : minute).ToString("HH:mm", CultureInfo.InvariantCulture);
     }
 
     // Only a path on this site, so a crafted link can't send the user elsewhere after logging in.
