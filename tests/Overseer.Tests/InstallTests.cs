@@ -330,7 +330,7 @@ public class InstallTests : IDisposable
         await using var server = OverseerServer.Build(ContainerAppEnvironment());
         var sandboxes = Assert.IsType<AzureSandboxProvider>(server.Services.GetService(typeof(ISandboxProvider)));
         Assert.Equal(
-            new AzureSandboxSettings(SubscriptionId, "overseer-sandboxes-rg", AzureSandboxSettings.DefaultVmSize, PrivateNetwork: true, ManagedIdentityClientId: IdentityClientId),
+            new AzureSandboxSettings(SubscriptionId, "overseer-sandboxes-rg", PrivateNetwork: true, ManagedIdentityClientId: IdentityClientId),
             sandboxes.Settings);
     }
 
@@ -347,7 +347,7 @@ public class InstallTests : IDisposable
         await using var server = OverseerServer.Build(settings);
         var sandboxes = Assert.IsType<AzureSandboxProvider>(server.Services.GetService(typeof(ISandboxProvider)));
         Assert.Equal(
-            new AzureSandboxSettings(SubscriptionId, "overseer-sandboxes-rg", AzureSandboxSettings.DefaultVmSize, PrivateNetwork: true, ManagedIdentityClientId: IdentityClientId),
+            new AzureSandboxSettings(SubscriptionId, "overseer-sandboxes-rg", PrivateNetwork: true, ManagedIdentityClientId: IdentityClientId),
             sandboxes.Settings);
     }
 

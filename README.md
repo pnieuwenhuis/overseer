@@ -110,6 +110,8 @@ The operating limits are whole numbers, each from 1 to a maximum. Saving rejects
 | Verification attempts per Task | 3          | 10          |
 | Maximum Sandbox lifetime       | 12 hours   | 48 hours    |
 
+Sandboxes are `Standard_D4s_v5` VMs (4 vCPUs, 16 GiB) by default. The Settings page offers `Standard_D2_v5` (2 vCPUs, 8 GiB) instead, and Azure spot instances, which cost less but which Azure evicts when it needs the capacity back. Eviction deletes the Sandbox's VM and disk; its network interface, public IP, network security group and SSH key stay until Overseer destroys the Sandbox. A change applies to the next Sandbox created; existing Sandboxes keep their size and priority. When Azure has no spot capacity or quota for the size, creating a Sandbox fails with Azure's error, as any other creation failure does.
+
 ## Configuration
 
 Configuration is what `serve` needs before it starts, unlike the Settings page. It is layered. Later layers override earlier ones:
@@ -130,7 +132,6 @@ Other environment variables aren't read as configuration. The only exception is 
 | Database identity | `Database:ManagedIdentityClientId` | `OVERSEER_DATABASE__MANAGEDIDENTITYCLIENTID` | none; the system-assigned identity, or your Azure CLI login                                |
 | Sandbox subscription | `SandboxProvider:Azure:SubscriptionId` | `OVERSEER_SANDBOXPROVIDER__AZURE__SUBSCRIPTIONID` | none; without any `SandboxProvider:Azure` setting, the fake Sandbox Provider (see [Sandboxes](#sandboxes)) |
 | Sandbox resource group | `SandboxProvider:Azure:ResourceGroup` | `OVERSEER_SANDBOXPROVIDER__AZURE__RESOURCEGROUP` | none; required with the subscription                                                    |
-| Sandbox VM size  | `SandboxProvider:Azure:VmSize`    | `OVERSEER_SANDBOXPROVIDER__AZURE__VMSIZE`   | `Standard_D4s_v5`                                                                           |
 | Private Sandboxes | `SandboxProvider:Azure:PrivateNetwork` | `OVERSEER_SANDBOXPROVIDER__AZURE__PRIVATENETWORK` | `false`: a public IP only you reach. `true`: deployed mode, no public IP (see [Sandboxes](#sandboxes)) |
 | Sandbox identity | `SandboxProvider:Azure:ManagedIdentityClientId` | `OVERSEER_SANDBOXPROVIDER__AZURE__MANAGEDIDENTITYCLIENTID` | none; your Azure CLI login. Set: the Azure CLI logs in as that user-assigned Managed Identity |
 | Key Vault        | `Secrets:KeyVaultUri`             | `OVERSEER_SECRETS__KEYVAULTURI`             | none; the local secrets file (see [Secrets](#secrets))                                      |
@@ -157,7 +158,7 @@ To work with real Sandboxes from your machine, configure the Azure Sandbox Provi
 { "SandboxProvider": { "Azure": { "SubscriptionId": "<subscription ID>", "ResourceGroup": "<resource group>" } } }
 ```
 
-`serve` then refuses to start without both, and logs where Sandboxes go. Like the installer, the provider manages Azure only through the Azure CLI (its scripts are in `src/Overseer/Sandboxes/Scripts`), logged in as you, which needs Contributor on the resource group. Each Sandbox is an Ubuntu 24.04 VM `sandbox-<id>` of the configured size, tagged with its owner (`overseer-owner-kind`, `overseer-owner-id`), with:
+`serve` then refuses to start without both, and logs where Sandboxes go. Like the installer, the provider manages Azure only through the Azure CLI (its scripts are in `src/Overseer/Sandboxes/Scripts`), logged in as you, which needs Contributor on the resource group. Each Sandbox is an Ubuntu 24.04 VM `sandbox-<id>` of the size chosen on the Settings page (see [Settings](#settings)), a spot VM with eviction policy Delete if spot instances are chosen there, tagged with its owner (`overseer-owner-kind`, `overseer-owner-id`), with:
 
 - its own network security group, public IP, network interface and 64 GiB OS disk, named after the VM, on the VNet `sandboxes` (10.41.0.0/16) that the provider creates in the resource group when it is missing. The security group lets in SSH only from your current public IPv4 address, as api.ipify.org sees it at creation, and nothing from the other Sandboxes on the VNet. A Sandbox created before your address changed is no longer reachable;
 - a fresh SSH key pair. The private key is kept in the secret store as `<vm>-ssh-key`, never in PostgreSQL, so Overseer still reaches the Sandbox after a restart. Overseer also generates the VM's SSH host key, hands it over through cloud-init and tags the VM with its fingerprint (`overseer-host-key`), so it never logs in to another machine;
@@ -171,7 +172,7 @@ In Azure, install configures deployed mode instead (`PrivateNetwork` and `Manage
 
 The image (`Dockerfile`) has the Azure CLI for this. A creation that fails, with the Azure error or cloud-init's, removes what it created. Commands run over SSH as `overseer`, with standard error merged into standard output. Destroying a Sandbox deletes the VM, its disk, network interface, public IP (if any) and network security group, then its key; the `sandboxes` VNet stays for the next one. Agent sessions in Azure Sandboxes come with the Agent Session module.
 
-Any Sandbox Provider must pass the contract suite in `tests/Overseer.Tests/SandboxProviderContract.cs`: derive from it once per implementation. The fake runs it in the default test run. The Azure provider runs it only when `TEST_SANDBOX_SUBSCRIPTION_ID` and `TEST_SANDBOX_RESOURCE_GROUP` name an existing resource group where your Azure CLI login has Contributor. It creates real Sandboxes one after the other and destroys each one, which takes about an hour and costs a little; its agent session tests are skipped until the Agent Session module exists:
+Any Sandbox Provider must pass the contract suite in `tests/Overseer.Tests/SandboxProviderContract.cs`: derive from it once per implementation. The fake runs it in the default test run. The Azure provider runs it only when `TEST_SANDBOX_SUBSCRIPTION_ID` and `TEST_SANDBOX_RESOURCE_GROUP` name an existing resource group where your Azure CLI login has Contributor. It creates real Sandboxes one after the other, one of them a spot `Standard_D2_v5` (the subscription needs spot quota for its region), and destroys each one, which takes about an hour and costs a little; its agent session tests are skipped until the Agent Session module exists:
 
 ```sh
 TEST_SANDBOX_SUBSCRIPTION_ID=$(az account show --query id --output tsv) TEST_SANDBOX_RESOURCE_GROUP=my-sandboxes-rg dotnet test --filter AzureSandboxProviderContract

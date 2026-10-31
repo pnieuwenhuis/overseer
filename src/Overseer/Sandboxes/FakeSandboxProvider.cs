@@ -6,6 +6,7 @@ namespace Overseer.Sandboxes;
 public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
 {
     private readonly ConcurrentDictionary<string, Sandbox> _sandboxes = new();
+    private readonly ConcurrentDictionary<string, SandboxMachine> _machines = new();
     private readonly ConcurrentDictionary<string, Sequence<CommandResult>> _commands = new();
     private readonly ConcurrentDictionary<AgentRole, Sequence<FakeAgentSession>> _agentSessions = new();
     private readonly ConcurrentQueue<string> _creationFailures = new();
@@ -28,7 +29,15 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     /// <summary>How long creating a Sandbox takes, success or failure, like a VM booting. None by default.</summary>
     public TimeSpan ProvisioningDelay { get; set; } = TimeSpan.Zero;
 
-    public async Task<Sandbox> CreateAsync(SandboxOwner owner, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
+    /// <summary>The machine the Sandbox was created on, also after it has been destroyed.</summary>
+    /// <exception cref="InvalidOperationException">This provider never created the Sandbox.</exception>
+    public SandboxMachine MachineOf(Sandbox sandbox) =>
+        _machines.TryGetValue(sandbox.ResourceId, out var machine)
+            ? machine
+            : throw new InvalidOperationException($"Sandbox {sandbox.ResourceId} was never created.");
+
+    public async Task<Sandbox> CreateAsync(
+        SandboxOwner owner, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
     {
         await Task.Delay(ProvisioningDelay, time, cancellationToken);
         if (_creationFailures.TryDequeue(out var error))
@@ -37,6 +46,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         }
 
         var sandbox = new Sandbox($"fake-sandbox-{Guid.NewGuid():N}", owner);
+        _machines[sandbox.ResourceId] = machine;
         _sandboxes[sandbox.ResourceId] = sandbox;
         return sandbox;
     }

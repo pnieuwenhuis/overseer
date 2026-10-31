@@ -8,7 +8,6 @@ public static class SandboxProviderConfiguration
     public const string AzureSection = "SandboxProvider:Azure";
     public const string SubscriptionIdKey = $"{AzureSection}:SubscriptionId";
     public const string ResourceGroupKey = $"{AzureSection}:ResourceGroup";
-    public const string VmSizeKey = $"{AzureSection}:VmSize";
     public const string PrivateNetworkKey = $"{AzureSection}:PrivateNetwork";
     public const string ManagedIdentityClientIdKey = $"{AzureSection}:ManagedIdentityClientId";
 
@@ -49,7 +48,6 @@ public static class SandboxProviderConfiguration
         return new AzureSandboxSettings(
             subscriptionId.ToString(),
             Required(configuration, ResourceGroupKey, "the resource group Sandboxes are created in"),
-            configuration[VmSizeKey] is { Length: > 0 } size ? size : AzureSandboxSettings.DefaultVmSize,
             configuration.GetValue<bool>(PrivateNetworkKey),
             configuration[ManagedIdentityClientIdKey] is { Length: > 0 } clientId ? clientId : null);
     }

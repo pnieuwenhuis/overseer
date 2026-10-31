@@ -1,6 +1,7 @@
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Persistence;
+using Overseer.Sandboxes;
 
 namespace Overseer.Settings;
 
@@ -20,14 +21,38 @@ public sealed class SettingsStore(IDbContextFactory<OverseerDbContext> databases
             TimeSpan.FromHours(values[OperatingLimit.MaxSandboxLifetime]));
     }
 
+    private const string SandboxVmSizeKey = "Sandboxes:VmSize";
+    private const string SandboxSpotKey = "Sandboxes:Spot";
+
+    /// <summary>The machine the next Sandbox is created on; the default for what was never saved or is no longer valid.</summary>
+    public async Task<SandboxMachine> GetSandboxMachineAsync(CancellationToken cancellationToken)
+    {
+        var saved = await ReadAsync([SandboxVmSizeKey, SandboxSpotKey], cancellationToken);
+        return new SandboxMachine(
+            saved.TryGetValue(SandboxVmSizeKey, out var size) && SandboxMachine.IsVmSize(size) ? size : SandboxMachine.Default.VmSize,
+            saved.TryGetValue(SandboxSpotKey, out var text) && bool.TryParse(text, out var spot) ? spot : SandboxMachine.Default.Spot);
+    }
+
+    /// <summary>Saves the machine later Sandboxes are created on, as the user chose it; nothing if the VM size isn't one of the choices.</summary>
+    /// <returns>Why the choice was rejected; null when it was saved.</returns>
+    public async Task<string?> SaveSandboxMachineAsync(string? vmSize, bool spot, CancellationToken cancellationToken)
+    {
+        if (!SandboxMachine.IsVmSize(vmSize))
+        {
+            return $"The VM size must be one of {string.Join(" and ", SandboxMachine.VmSizes.Select(size => size.Name))}.";
+        }
+        await SaveAsync(new Dictionary<string, string>
+        {
+            [SandboxVmSizeKey] = vmSize,
+            [SandboxSpotKey] = spot ? "true" : "false",
+        }, cancellationToken);
+        return null;
+    }
+
     /// <summary>The current value of each operating limit, in its unit; its default if the saved value is no longer valid.</summary>
     public async Task<IReadOnlyDictionary<OperatingLimit, int>> GetOperatingLimitValuesAsync(CancellationToken cancellationToken)
     {
-        var keys = OperatingLimit.All.Select(limit => limit.Key).ToList();
-        await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        var saved = await database.Settings
-            .Where(setting => keys.Contains(setting.Key))
-            .ToDictionaryAsync(setting => setting.Key, setting => setting.Value, cancellationToken);
+        var saved = await ReadAsync([.. OperatingLimit.All.Select(limit => limit.Key)], cancellationToken);
 
         return OperatingLimit.All.ToDictionary(
             limit => limit,
@@ -57,18 +82,33 @@ public sealed class SettingsStore(IDbContextFactory<OverseerDbContext> databases
             return errors;
         }
 
+        await SaveAsync(
+            values.ToDictionary(pair => pair.Key.Key, pair => pair.Value.ToString(CultureInfo.InvariantCulture)), cancellationToken);
+        return errors;
+    }
+
+    /// <summary>The saved value of each of the settings that has one.</summary>
+    private async Task<Dictionary<string, string>> ReadAsync(IReadOnlyCollection<string> keys, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        return await database.Settings
+            .Where(setting => keys.Contains(setting.Key))
+            .ToDictionaryAsync(setting => setting.Key, setting => setting.Value, cancellationToken);
+    }
+
+    /// <summary>Saves the settings together, in one transaction.</summary>
+    private async Task SaveAsync(IReadOnlyDictionary<string, string> settings, CancellationToken cancellationToken)
+    {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-        foreach (var (limit, value) in values)
+        foreach (var (key, value) in settings)
         {
             // An upsert, so two first saves at once can't both insert the same setting.
-            var text = value.ToString(CultureInfo.InvariantCulture);
             await database.Database.ExecuteSqlAsync(
-                $"""INSERT INTO "Settings" ("Key", "Value") VALUES ({limit.Key}, {text}) ON CONFLICT ("Key") DO UPDATE SET "Value" = excluded."Value" """,
+                $"""INSERT INTO "Settings" ("Key", "Value") VALUES ({key}, {value}) ON CONFLICT ("Key") DO UPDATE SET "Value" = excluded."Value" """,
                 cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
-        return errors;
     }
 }
 

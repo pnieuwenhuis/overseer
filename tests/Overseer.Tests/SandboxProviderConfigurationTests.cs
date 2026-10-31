@@ -22,7 +22,7 @@ public class SandboxProviderConfigurationTests : IDisposable
     }
 
     [Fact]
-    public async Task With_a_subscription_and_a_Sandbox_resource_group_Sandboxes_are_Azure_VMs_of_the_default_size()
+    public async Task With_a_subscription_and_a_Sandbox_resource_group_Sandboxes_are_Azure_VMs()
     {
         File.WriteAllText(LocalConfigFile, $$"""
             { "SandboxProvider": { "Azure": { "SubscriptionId": "{{Subscription}}", "ResourceGroup": "overseer-sandboxes-rg" } } }
@@ -31,21 +31,7 @@ public class SandboxProviderConfigurationTests : IDisposable
         await using var app = Build();
 
         var azure = Assert.IsType<AzureSandboxProvider>(app.Services.GetRequiredService<ISandboxProvider>());
-        Assert.Equal(new AzureSandboxSettings(Subscription, "overseer-sandboxes-rg", "Standard_D4s_v5"), azure.Settings);
-    }
-
-    [Fact]
-    public async Task The_VM_size_can_be_configured()
-    {
-        await using var app = Build(new()
-        {
-            ["OVERSEER_SANDBOXPROVIDER__AZURE__SUBSCRIPTIONID"] = Subscription,
-            ["OVERSEER_SANDBOXPROVIDER__AZURE__RESOURCEGROUP"] = "overseer-sandboxes-rg",
-            ["OVERSEER_SANDBOXPROVIDER__AZURE__VMSIZE"] = "Standard_D8s_v5",
-        });
-
-        var azure = Assert.IsType<AzureSandboxProvider>(app.Services.GetRequiredService<ISandboxProvider>());
-        Assert.Equal("Standard_D8s_v5", azure.Settings.VmSize);
+        Assert.Equal(new AzureSandboxSettings(Subscription, "overseer-sandboxes-rg"), azure.Settings);
     }
 
     [Fact]

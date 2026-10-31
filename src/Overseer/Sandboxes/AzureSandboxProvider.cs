@@ -4,7 +4,10 @@ using Overseer.Secrets;
 
 namespace Overseer.Sandboxes;
 
-/// <summary>How the Azure Sandbox Provider reaches Azure and its Sandboxes: where they go, and how big they are.</summary>
+/// <summary>
+/// How the Azure Sandbox Provider reaches Azure and its Sandboxes, and where they go. How big each Sandbox is, and
+/// whether it is a spot instance, comes with its creation (<see cref="SandboxMachine"/>).
+/// </summary>
 /// <param name="SubscriptionId">The ID of the subscription holding the Sandbox resource group.</param>
 /// <param name="PrivateNetwork">
 /// Deployed mode: Sandboxes have no public IP, and Overseer reaches them by private IP over the peering install makes
@@ -12,11 +15,7 @@ namespace Overseer.Sandboxes;
 /// </param>
 /// <param name="ManagedIdentityClientId">The user-assigned Managed Identity the Azure CLI logs in as; null for the CLI's own login.</param>
 public sealed record AzureSandboxSettings(
-    string SubscriptionId, string ResourceGroup, string VmSize, bool PrivateNetwork = false, string? ManagedIdentityClientId = null)
-{
-    /// <summary>4 vCPUs and 16 GiB: enough for Docker, a build and a browser at once.</summary>
-    public const string DefaultVmSize = "Standard_D4s_v5";
-}
+    string SubscriptionId, string ResourceGroup, bool PrivateNetwork = false, string? ManagedIdentityClientId = null);
 
 /// <summary>
 /// Sandboxes as Azure VMs in the Sandbox resource group, managed only through the Azure CLI. In local mode (ADR 0004)
@@ -66,12 +65,13 @@ public sealed class AzureSandboxProvider(
     /// <summary>How to reach each Sandbox, by VM name, so that only the first command after a restart asks Azure.</summary>
     private readonly ConcurrentDictionary<string, SshTarget> _targets = new();
 
-    public async Task<Sandbox> CreateAsync(SandboxOwner owner, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
+    public async Task<Sandbox> CreateAsync(
+        SandboxOwner owner, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
     {
         var name = $"sandbox-{Guid.NewGuid():N}";
         try
         {
-            await ProvisionAsync(name, owner, cancellationToken);
+            await ProvisionAsync(name, owner, machine, cancellationToken);
             return new Sandbox(ResourceId(name), owner);
         }
         catch (Exception exception)
@@ -95,7 +95,7 @@ public sealed class AzureSandboxProvider(
     }
 
     /// <summary>Creates the Sandbox's VM and what it needs, and waits until it is set up.</summary>
-    private async Task ProvisionAsync(string name, SandboxOwner owner, CancellationToken cancellationToken)
+    private async Task ProvisionAsync(string name, SandboxOwner owner, SandboxMachine machine, CancellationToken cancellationToken)
     {
         var userKey = SshKeyPair.Generate();
         var hostKey = SshKeyPair.Generate();
@@ -115,7 +115,8 @@ public sealed class AzureSandboxProvider(
             }
             var created = await RunAsync("create-sandbox", new Dictionary<string, string>(ScriptParameters(name))
             {
-                ["Size"] = settings.VmSize,
+                ["Size"] = machine.VmSize,
+                ["Spot"] = machine.Spot ? "true" : "false",
                 ["Username"] = Username,
                 ["OwnerKind"] = owner.Kind.ToString(),
                 ["OwnerId"] = owner.Id.ToString(),

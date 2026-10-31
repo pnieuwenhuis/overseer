@@ -126,5 +126,5 @@ public class FakeSandboxProviderTests
     }
 
     private Task<Sandbox> CreateAsync() =>
-        _provider.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), [], TestContext.Current.CancellationToken);
+        _provider.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), SandboxMachine.Default, [], TestContext.Current.CancellationToken);
 }

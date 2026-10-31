@@ -68,6 +68,19 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_spot_Sandbox_of_the_smaller_size_is_listed_and_runs_commands()
+    {
+        var owner = NewIntent();
+        var sandbox = await CreateAsync(owner, new SandboxMachine("Standard_D2_v5", Spot: true));
+        GivenCommand("nproc", new CommandResult(0, "2\n"));
+
+        var result = await Provider.RunCommandAsync(sandbox, "nproc", TestContext.Current.CancellationToken);
+
+        Assert.Contains(new Sandbox(sandbox.ResourceId, owner), await Provider.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(new CommandResult(0, "2"), result with { Output = result.Output.Trim() });
+    }
+
+    [Fact]
     public async Task An_agent_turn_streams_updates_and_ends_with_its_outcome()
     {
         Assert.SkipWhen(AgentSessionsSkipReason is not null, AgentSessionsSkipReason ?? "");
@@ -140,9 +153,10 @@ public abstract class SandboxProviderContract : IAsyncDisposable
         _created.Remove(sandbox);
     }
 
-    private async Task<Sandbox> CreateAsync(SandboxOwner owner)
+    private async Task<Sandbox> CreateAsync(SandboxOwner owner, SandboxMachine? machine = null)
     {
-        var sandbox = await Provider.CreateAsync(owner, ["pnieuwenhuis/overseer"], TestContext.Current.CancellationToken);
+        var sandbox = await Provider.CreateAsync(
+            owner, machine ?? SandboxMachine.Default, ["pnieuwenhuis/overseer"], TestContext.Current.CancellationToken);
         _created.Add(sandbox);
         return sandbox;
     }
@@ -193,7 +207,7 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
             $"Set {SubscriptionVariable} and {ResourceGroupVariable} to an existing resource group to run the Azure Sandbox Provider contract.");
         var secrets = new FileSecretStore(Path.Combine(_directory, "secrets.json"));
         _azure = new AzureSandboxProvider(
-            new AzureSandboxSettings(subscription, resourceGroup, AzureSandboxSettings.DefaultVmSize),
+            new AzureSandboxSettings(subscription, resourceGroup),
             OverseerCli.ProcessEnvironment(),
             secrets,
             secrets,

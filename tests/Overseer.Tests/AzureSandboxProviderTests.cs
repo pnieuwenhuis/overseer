@@ -31,7 +31,7 @@ public sealed class AzureSandboxProviderTests : IDisposable
     {
         var owner = new SandboxOwner(SandboxOwnerKind.RepositorySetup, Guid.NewGuid());
 
-        var sandbox = await Provider().CreateAsync(owner, ["pnieuwenhuis/overseer"], TestContext.Current.CancellationToken);
+        var sandbox = await Provider().CreateAsync(owner, SandboxMachine.Default, ["pnieuwenhuis/overseer"], TestContext.Current.CancellationToken);
 
         var vm = _az.CallTo("vm", "create");
         Assert.Equal(Subscription, FakeAzureCli.Value(vm, "--subscription"));
@@ -45,13 +45,40 @@ public sealed class AzureSandboxProviderTests : IDisposable
     }
 
     [Theory]
-    [InlineData(null, "Standard_D4s_v5")]
-    [InlineData("Standard_D8s_v5", "Standard_D8s_v5")]
-    public async Task A_Sandbox_has_the_configured_VM_size_or_the_default(string? configured, string expected)
+    [InlineData("Standard_D2_v5")]
+    [InlineData("Standard_D4s_v5")]
+    public async Task A_Sandbox_is_a_regular_VM_of_the_size_it_is_created_with(string vmSize)
     {
-        await CreateAsync(Provider(configured));
+        await CreateAsync(Provider(), new SandboxMachine(vmSize, Spot: false));
 
-        Assert.Equal(expected, FakeAzureCli.Value(_az.CallTo("vm", "create"), "--size"));
+        var vm = _az.CallTo("vm", "create");
+        Assert.Equal(vmSize, FakeAzureCli.Value(vm, "--size"));
+        Assert.Equal("Regular", FakeAzureCli.Value(vm, "--priority"));
+        Assert.DoesNotContain("--eviction-policy", vm);
+    }
+
+    [Fact]
+    public async Task A_spot_Sandbox_is_a_spot_VM_that_eviction_deletes()
+    {
+        await CreateAsync(Provider(), new SandboxMachine("Standard_D2_v5", Spot: true));
+
+        var vm = _az.CallTo("vm", "create");
+        Assert.Equal("Standard_D2_v5", FakeAzureCli.Value(vm, "--size"));
+        Assert.Equal("Spot", FakeAzureCli.Value(vm, "--priority"));
+        Assert.Equal("Delete", FakeAzureCli.Value(vm, "--eviction-policy"));
+    }
+
+    [Fact]
+    public async Task Without_spot_capacity_creation_fails_with_the_Azure_error_and_leaves_nothing_of_the_Sandbox_behind()
+    {
+        _az.Fail(["vm", "create"],
+            "ERROR: (SkuNotAvailable) The requested VM size for resource 'Following SKUs have failed for Capacity Restrictions: Standard_D2_v5' is currently not available in location 'westeurope'.");
+
+        var failure = await Assert.ThrowsAsync<SandboxCreationFailedException>(() =>
+            CreateAsync(Provider(), new SandboxMachine("Standard_D2_v5", Spot: true)));
+
+        Assert.Contains("(SkuNotAvailable) The requested VM size for resource 'Following SKUs have failed for Capacity Restrictions: Standard_D2_v5'", failure.Message);
+        await AssertRemovedAsync(FakeAzureCli.Value(_az.CallTo("vm", "create"), "--name"));
     }
 
     [Fact]
@@ -350,8 +377,10 @@ public sealed class AzureSandboxProviderTests : IDisposable
         return await task;
     }
 
-    private Task<Sandbox> CreateAsync(AzureSandboxProvider provider) =>
-        provider.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), ["pnieuwenhuis/overseer"], TestContext.Current.CancellationToken);
+    private Task<Sandbox> CreateAsync(AzureSandboxProvider provider, SandboxMachine? machine = null) =>
+        provider.CreateAsync(
+            new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), machine ?? SandboxMachine.Default, ["pnieuwenhuis/overseer"],
+            TestContext.Current.CancellationToken);
 
     private static string VirtualMachine(Sandbox sandbox) => sandbox.ResourceId.Split('/').Last();
 
@@ -372,9 +401,8 @@ public sealed class AzureSandboxProviderTests : IDisposable
         return publicKey.Trim();
     }
 
-    private AzureSandboxProvider Provider(
-        string? vmSize = null, TimeProvider? time = null, bool privateNetwork = false, string? managedIdentityClientId = null) => new(
-        new AzureSandboxSettings(Subscription, ResourceGroup, vmSize ?? AzureSandboxSettings.DefaultVmSize, privateNetwork, managedIdentityClientId),
+    private AzureSandboxProvider Provider(TimeProvider? time = null, bool privateNetwork = false, string? managedIdentityClientId = null) => new(
+        new AzureSandboxSettings(Subscription, ResourceGroup, privateNetwork, managedIdentityClientId),
         _az.Environment(),
         _secrets,
         _secrets,

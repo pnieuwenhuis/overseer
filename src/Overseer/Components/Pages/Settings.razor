@@ -1,6 +1,7 @@
 @page "/settings"
 @attribute [ExcludeFromInteractiveRouting]
 @using System.Globalization
+@using Overseer.Sandboxes
 @using Overseer.Settings
 @inject SettingsStore Store
 
@@ -36,6 +37,38 @@
     </form>
 }
 
+<h2>Sandboxes</h2>
+
+@if (_machine is not null)
+{
+    <form method="post" @formname="sandbox-machine" @onsubmit="SaveMachineAsync" class="settings-form">
+        <AntiforgeryToken />
+        @if (_machineSaved)
+        {
+            <p class="settings-saved" role="status">The Sandbox settings are saved.</p>
+        }
+        @if (_machineError is not null)
+        {
+            <p class="settings-error" role="alert">@_machineError</p>
+        }
+        <p class="settings-note">A change applies to the next Sandbox created; existing Sandboxes keep what they have.</p>
+        <label>
+            VM size
+            <select name="SandboxVmSize">
+                @foreach (var size in SandboxMachine.VmSizes)
+                {
+                    <option value="@size.Name" selected="@(size.Name == _machine.VmSize)">@size.Name (@size.Description)</option>
+                }
+            </select>
+        </label>
+        <label class="settings-checkbox">
+            <input name="SandboxSpot" type="checkbox" value="true" checked="@_machine.Spot" />
+            Use spot instances: cheaper, but Azure may evict a Sandbox when it needs the capacity back, which deletes it
+        </label>
+        <button type="submit">Save</button>
+    </form>
+}
+
 @code {
     [CascadingParameter]
     private HttpContext HttpContext { get; set; } = default!;
@@ -66,7 +99,23 @@
     private IReadOnlyDictionary<OperatingLimit, string> _errors = new Dictionary<OperatingLimit, string>();
     private bool _saved;
 
-    protected override async Task OnInitializedAsync() => _values = await CurrentValuesAsync();
+    [SupplyParameterFromForm(FormName = "sandbox-machine")]
+    private string? SandboxVmSize { get; set; }
+
+    // A browser leaves out an unchecked checkbox.
+    [SupplyParameterFromForm(FormName = "sandbox-machine")]
+    private bool SandboxSpot { get; set; }
+
+    // What the Sandboxes form shows: always what is saved, since a rejected choice can't be shown in its fields.
+    private SandboxMachine? _machine;
+    private string? _machineError;
+    private bool _machineSaved;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _values = await CurrentValuesAsync();
+        _machine = await Store.GetSandboxMachineAsync(HttpContext.RequestAborted);
+    }
 
     private async Task SaveAsync()
     {
@@ -80,6 +129,13 @@
         _errors = await Store.SaveOperatingLimitsAsync(submitted, HttpContext.RequestAborted);
         _saved = _errors.Count == 0;
         _values = _saved ? await CurrentValuesAsync() : submitted;
+    }
+
+    private async Task SaveMachineAsync()
+    {
+        _machineError = await Store.SaveSandboxMachineAsync(SandboxVmSize, SandboxSpot, HttpContext.RequestAborted);
+        _machineSaved = _machineError is null;
+        _machine = await Store.GetSandboxMachineAsync(HttpContext.RequestAborted);
     }
 
     private async Task<IReadOnlyDictionary<OperatingLimit, string?>> CurrentValuesAsync()

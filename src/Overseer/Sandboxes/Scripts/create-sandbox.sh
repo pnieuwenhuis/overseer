@@ -2,13 +2,16 @@
 # network security group that lets in SSH only from Overseer's address (the developer's public IP, or a deployed
 # Overseer's subnet) and nothing from the other Sandboxes on the sandboxes VNet, a public IP unless on the private network,
 # a network interface on that VNet, and the OS disk. The VM is tagged with its owner and the fingerprint of the SSH host
-# key its cloud-init installs. Prints the VM's IP address: the public one, or else the private one.
+# key its cloud-init installs. A spot VM is deleted when Azure evicts it, rather than kept deallocated: nothing brings an
+# evicted Sandbox back, and its disk would cost money for nothing. Prints the VM's IP address: the public one, or else the
+# private one.
 set -euo pipefail
 
 subscription_id={{SubscriptionId}}
 resource_group={{ResourceGroup}}
 vm={{VirtualMachine}}
 size={{Size}}
+spot={{Spot}}
 username={{Username}}
 owner_kind={{OwnerKind}}
 owner_id={{OwnerId}}
@@ -77,11 +80,18 @@ else
     --output none
 fi
 
+if [ "$spot" = true ]; then
+  priority=(--priority Spot --eviction-policy Delete)
+else
+  priority=(--priority Regular)
+fi
+
 az vm create \
   --subscription "$subscription_id" \
   --resource-group "$resource_group" \
   --name "$vm" \
   --size "$size" \
+  "${priority[@]}" \
   --image Canonical:ubuntu-24_04-lts:server:latest \
   --nics "$vm-nic" \
   --os-disk-name "$vm-disk" \

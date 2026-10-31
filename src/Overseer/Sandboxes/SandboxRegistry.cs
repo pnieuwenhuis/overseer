@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Overseer.Persistence;
+using Overseer.Settings;
 
 namespace Overseer.Sandboxes;
 
@@ -7,12 +8,18 @@ namespace Overseer.Sandboxes;
 /// Creates and destroys Sandboxes through the configured Sandbox Provider, and keeps a record of each one in PostgreSQL.
 /// Orchestration goes through here rather than to the provider, so no Sandbox goes unrecorded.
 /// </summary>
-public sealed class SandboxRegistry(ISandboxProvider provider, IDbContextFactory<OverseerDbContext> databases, TimeProvider time)
+public sealed class SandboxRegistry(
+    ISandboxProvider provider, SettingsStore settings, IDbContextFactory<OverseerDbContext> databases, TimeProvider time)
 {
+    /// <summary>
+    /// Creates a Sandbox holding the Repositories in scope, tagged with its owner, on the machine the Settings say now.
+    /// Completes once the Sandbox is ready for use.
+    /// </summary>
     /// <inheritdoc cref="ISandboxProvider.CreateAsync"/>
     public async Task<Sandbox> CreateAsync(SandboxOwner owner, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
     {
-        var sandbox = await provider.CreateAsync(owner, repositoriesInScope, cancellationToken);
+        var machine = await settings.GetSandboxMachineAsync(cancellationToken);
+        var sandbox = await provider.CreateAsync(owner, machine, repositoriesInScope, cancellationToken);
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         database.Sandboxes.Add(new SandboxRecord
         {

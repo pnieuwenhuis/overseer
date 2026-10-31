@@ -120,15 +120,15 @@ public static class OverseerServer
                     break;
                 case AzureSandboxProvider { Settings.PrivateNetwork: true } azure:
                     app.Logger.LogInformation(
-                        "Sandboxes are Azure VMs of size {VmSize} in the resource group {ResourceGroup} of the subscription {SubscriptionId}, " +
+                        "Sandboxes are Azure VMs in the resource group {ResourceGroup} of the subscription {SubscriptionId}, " +
                         "without a public IP: reached over SSH by private IP, through the Sandbox VNet's peering with Overseer's.",
-                        azure.Settings.VmSize, azure.Settings.ResourceGroup, azure.Settings.SubscriptionId);
+                        azure.Settings.ResourceGroup, azure.Settings.SubscriptionId);
                     break;
                 case AzureSandboxProvider azure:
                     app.Logger.LogInformation(
-                        "Sandboxes are Azure VMs of size {VmSize} in the resource group {ResourceGroup} of the subscription {SubscriptionId}, " +
+                        "Sandboxes are Azure VMs in the resource group {ResourceGroup} of the subscription {SubscriptionId}, " +
                         "reached over SSH from this machine's public IP address only.",
-                        azure.Settings.VmSize, azure.Settings.ResourceGroup, azure.Settings.SubscriptionId);
+                        azure.Settings.ResourceGroup, azure.Settings.SubscriptionId);
                     break;
             }
             switch (app.Services.GetRequiredService<ISecretReader>())
