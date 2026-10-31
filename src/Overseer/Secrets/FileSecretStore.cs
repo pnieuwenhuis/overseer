@@ -30,6 +30,12 @@ public sealed class FileSecretStore(string path) : ISecretStore, ISecretReader
         return (await LoadAsync(cancellationToken)).ContainsKey(name);
     }
 
+    public async Task<IReadOnlyList<string>> ListAsync(string prefix, CancellationToken cancellationToken)
+    {
+        SecretName.Validate(prefix);
+        return [.. (await LoadAsync(cancellationToken)).Keys.Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))];
+    }
+
     public async Task<string?> ReadAsync(string name, CancellationToken cancellationToken)
     {
         SecretName.Validate(name);

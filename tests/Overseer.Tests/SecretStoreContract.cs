@@ -80,6 +80,28 @@ public abstract class SecretStoreContract<TBackend> : IAsyncDisposable where TBa
         Assert.False(await Store.IsSetAsync(name, TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task Listing_names_the_set_secrets_that_start_with_a_prefix()
+    {
+        var prefix = NewName();
+        var first = NewName(prefix);
+        var second = NewName(prefix);
+        var removed = NewName(prefix);
+        var other = NewName();
+        await Store.SetAsync(second, "sk-second", TestContext.Current.CancellationToken);
+        await Store.SetAsync(first.ToUpperInvariant(), "sk-first", TestContext.Current.CancellationToken);
+        await Store.SetAsync(removed, "sk-removed", TestContext.Current.CancellationToken);
+        await Store.SetAsync(other, "sk-other", TestContext.Current.CancellationToken);
+        await Store.SetAsync(prefix, "sk-prefix", TestContext.Current.CancellationToken);
+        await Store.RemoveAsync(removed, TestContext.Current.CancellationToken);
+
+        var listed = await Store.ListAsync($"{prefix.ToUpperInvariant()}-", TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new[] { first, second }.Order(StringComparer.Ordinal),
+            listed.Select(name => name.ToLowerInvariant()).Order(StringComparer.Ordinal));
+    }
+
     // Key Vault's rule, enforced by every backend, so a name that works locally also works in Azure.
     [Theory]
     [InlineData("")]
@@ -101,9 +123,9 @@ public abstract class SecretStoreContract<TBackend> : IAsyncDisposable where TBa
             Store.SetAsync(new string('a', 128), "github_pat_11ABC", TestContext.Current.CancellationToken));
     }
 
-    private string NewName()
+    private string NewName(string prefix = "test")
     {
-        var name = $"test-{Guid.NewGuid():N}";
+        var name = $"{prefix}-{Guid.NewGuid():N}";
         _names.Add(name);
         return name;
     }

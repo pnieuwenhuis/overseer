@@ -2,7 +2,6 @@ using System.Net;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using Microsoft.Extensions.DependencyInjection;
 using Overseer.Sandboxes;
 
 namespace Overseer.Tests;
@@ -34,9 +33,9 @@ public class AgentHarnessConfigurationTests(PostgresServer postgres)
         await overseer.LogInAsync();
         var page = await overseer.Http.GetStringAsync("/settings", TestContext.Current.CancellationToken);
 
-        var received = await StartAgentSessionAsync(overseer, AgentRole.Reviewer);
+        var received = await overseer.StartAgentSessionAsync(AgentRole.Reviewer);
 
-        Assert.Equal(new AgentSessionStart(received.Sandbox, AgentRole.Reviewer, Editor(page), Picker(page, AgentRole.Reviewer)), received);
+        Assert.Equal((AgentRole.Reviewer, Editor(page), Picker(page, AgentRole.Reviewer)), (received.Role, received.HarnessJson, received.Model));
     }
 
     [Fact]
@@ -68,12 +67,12 @@ public class AgentHarnessConfigurationTests(PostgresServer postgres)
     {
         await using var overseer = await RunningOverseer.StartAsync(await postgres.CreateEmptyDatabaseAsync());
         await overseer.LogInAsync();
-        var before = await StartAgentSessionAsync(overseer, AgentRole.Developer);
+        var before = await overseer.StartAgentSessionAsync(AgentRole.Developer);
 
         using var response = await SaveAsync(overseer, Gateway);
 
-        var analyst = await StartAgentSessionAsync(overseer, AgentRole.Analyst);
-        var developer = await StartAgentSessionAsync(overseer, AgentRole.Developer);
+        var analyst = await overseer.StartAgentSessionAsync(AgentRole.Analyst);
+        var developer = await overseer.StartAgentSessionAsync(AgentRole.Developer);
         Assert.Equal((AgentRole.Analyst, Gateway, "gateway/claude-opus-5-5"), (analyst.Role, analyst.HarnessJson, analyst.Model));
         Assert.Equal((AgentRole.Developer, Gateway, "gateway/gpt-5.5-mini"), (developer.Role, developer.HarnessJson, developer.Model));
         Assert.Equal(AgentRole.Developer, before.Role);
@@ -144,7 +143,7 @@ public class AgentHarnessConfigurationTests(PostgresServer postgres)
         Assert.Equal(GatewayModels.With(AgentRole.Developer, "gateway/claude-sonnet-5-5"), Pickers(page));
         var expected = JsonNode.Parse(Gateway.Replace("\"model\": \"gateway/gpt-5.5-mini\"", "\"model\": \"gateway/claude-sonnet-5-5\""));
         Assert.True(JsonNode.DeepEquals(expected, JsonNode.Parse(Editor(page))), Editor(page));
-        var developer = await StartAgentSessionAsync(overseer, AgentRole.Developer);
+        var developer = await overseer.StartAgentSessionAsync(AgentRole.Developer);
         Assert.Equal((Editor(page), "gateway/claude-sonnet-5-5"), (developer.HarnessJson, developer.Model));
     }
 
@@ -176,7 +175,7 @@ public class AgentHarnessConfigurationTests(PostgresServer postgres)
         Assert.DoesNotContain("The models are saved.", page);
         Assert.Equal(GatewayModels, Pickers(page));
         Assert.Equal(Gateway, Editor(page));
-        Assert.Equal("gateway/claude-opus-5-5", (await StartAgentSessionAsync(overseer, AgentRole.Analyst)).Model);
+        Assert.Equal("gateway/claude-opus-5-5", (await overseer.StartAgentSessionAsync(AgentRole.Analyst)).Model);
     }
 
     [Fact]
@@ -193,7 +192,7 @@ public class AgentHarnessConfigurationTests(PostgresServer postgres)
         Assert.Contains("The default agent harness configuration is restored.", page);
         Assert.Equal(Editor(original), Editor(page));
         Assert.Equal(Pickers(original), Pickers(page));
-        var reviewer = await StartAgentSessionAsync(overseer, AgentRole.Reviewer);
+        var reviewer = await overseer.StartAgentSessionAsync(AgentRole.Reviewer);
         Assert.Equal((Editor(original), Picker(original, AgentRole.Reviewer)), (reviewer.HarnessJson, reviewer.Model));
     }
 
@@ -208,7 +207,7 @@ public class AgentHarnessConfigurationTests(PostgresServer postgres)
         Assert.Equal(rejected, Editor(page));
         Assert.Equal(Pickers(settings), Pickers(page));
         Assert.NotEqual(rejected, Editor(settings));
-        var session = await StartAgentSessionAsync(overseer, AgentRole.Developer);
+        var session = await overseer.StartAgentSessionAsync(AgentRole.Developer);
         Assert.Equal(Editor(settings), session.HarnessJson);
     }
 
@@ -254,18 +253,6 @@ public class AgentHarnessConfigurationTests(PostgresServer postgres)
     /// <summary>The model each role's picker shows.</summary>
     private static Dictionary<AgentRole, string> Pickers(string page) =>
         Enum.GetValues<AgentRole>().ToDictionary(role => role, role => Picker(page, role));
-
-    /// <summary>Starts an agent session in a new Sandbox, as orchestration does, and tells what the session received.</summary>
-    private static async Task<AgentSessionStart> StartAgentSessionAsync(RunningOverseer overseer, AgentRole role)
-    {
-        var sandboxes = overseer.Services.GetRequiredService<SandboxRegistry>();
-        var sandbox = await sandboxes.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), [], TestContext.Current.CancellationToken);
-        await using var session = await sandboxes.StartAgentSessionAsync(sandbox, role, TestContext.Current.CancellationToken);
-        return Fake(overseer).AgentSessionsStarted.Last();
-    }
-
-    private static FakeSandboxProvider Fake(RunningOverseer overseer) =>
-        (FakeSandboxProvider)overseer.Services.GetRequiredService<ISandboxProvider>();
 
     /// <summary>The text in the <c>opencode.json</c> editor, as a browser would read it.</summary>
     private static string Editor(string page) =>

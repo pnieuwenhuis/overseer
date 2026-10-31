@@ -98,3 +98,18 @@
     gap: 1rem;
     justify-content: space-between;
 }
+
+.provider-tokens {
+    border-collapse: collapse;
+}
+
+.provider-tokens th,
+.provider-tokens td {
+    padding: 0.25rem 1rem 0.25rem 0;
+    text-align: left;
+}
+
+.settings-warning {
+    color: #8a5a00;
+    margin: 0;
+}

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Overseer.GitHub;
+using Overseer.Sandboxes;
 using Overseer.Secrets;
 
 namespace Overseer.Tests;
@@ -70,6 +71,47 @@ public class SecretLeakTests(PostgresServer postgres)
             Assert.DoesNotContain(value, logged);
         }
     }
+
+    [Fact]
+    public async Task Model_provider_tokens_entered_in_the_Portal_and_passed_to_agent_sessions_reach_neither_the_database_nor_the_logs()
+    {
+        var logs = new CapturedLogs();
+        await using var overseer = await RunningOverseer.StartAsync(await postgres.CreateEmptyDatabaseAsync(), TraceEverything, logs);
+        await overseer.LogInAsync();
+        const string replaced = "sk-gateway-REPLACED0123456789";
+        const string kept = "sk-gateway-KEPT0123456789";
+        const string removed = "foundry-REMOVED0123456789";
+
+        (await SaveProviderTokenAsync(overseer, "gateway", replaced)).Dispose();
+        (await SaveProviderTokenAsync(overseer, "gateway", kept)).Dispose();
+        (await SaveProviderTokenAsync(overseer, "azure-foundry", removed)).Dispose();
+        var sandboxes = overseer.Services.GetRequiredService<SandboxRegistry>();
+        var sandbox = await sandboxes.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), [], TestContext.Current.CancellationToken);
+        await (await sandboxes.StartAgentSessionAsync(sandbox, AgentRole.Developer, TestContext.Current.CancellationToken)).DisposeAsync();
+        (await overseer.SubmitFormAsync("/settings", "provider-token-remove", new Dictionary<string, string> { ["RemoveProviderToken"] = "azure-foundry" })).Dispose();
+        await (await sandboxes.StartAgentSessionAsync(sandbox, AgentRole.Developer, TestContext.Current.CancellationToken)).DisposeAsync();
+        var started = overseer.Sandboxes.AgentSessionsStarted;
+        Assert.Equal(kept, started[0].Environment["GATEWAY_API_KEY"]);
+        Assert.Equal(removed, started[0].Environment["AZURE_FOUNDRY_API_KEY"]);
+
+        var database = string.Join("\n", await overseer.DumpDatabaseAsync());
+        var logged = string.Join("\n", logs.Entries);
+        Assert.Contains("<MigrationId>", database);
+        Assert.Contains("model-provider-token-gateway", logged);
+        Assert.Contains("model-provider-token-azure-foundry", logged);
+        foreach (var value in new[] { replaced, kept, removed })
+        {
+            Assert.DoesNotContain(value, database);
+            Assert.DoesNotContain(value, logged);
+        }
+    }
+
+    private static Task<HttpResponseMessage> SaveProviderTokenAsync(RunningOverseer overseer, string name, string token) =>
+        overseer.SubmitFormAsync("/settings", "provider-token", new Dictionary<string, string>
+        {
+            ["ProviderTokenName"] = name,
+            ["ProviderToken"] = token,
+        });
 
     private static readonly Dictionary<string, string?> TraceEverything = new()
     {

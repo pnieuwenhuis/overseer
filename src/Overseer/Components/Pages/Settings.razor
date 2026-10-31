@@ -4,12 +4,14 @@
 @using Markdig
 @using Markdig.Extensions.EmphasisExtras
 @using Overseer.GitHub
+@using Overseer.ModelProviders
 @using Overseer.Repositories
 @using Overseer.Sandboxes
 @using Overseer.Settings
 @inject SettingsStore Store
 @inject GitHubTokenStore GitHubTokens
 @inject ConfiguredRepositories Repositories
+@inject ModelProviderTokens ProviderTokens
 
 <PageTitle>Settings · Overseer</PageTitle>
 
@@ -157,6 +159,16 @@
             {
                 <p class="settings-error" role="alert">@_harnessError</p>
             }
+            @if (UnprovidedVariables is [_, ..] unprovided)
+            {
+                <p class="settings-warning" role="status">
+                    The configuration references the environment @(unprovided.Count == 1 ? "variable" : "variables")
+                    @for (var index = 0; index < unprovided.Count; index++)
+                    {
+                        @(index == 0 ? " " : index == unprovided.Count - 1 ? " and " : ", ")<code>@unprovided[index]</code>
+                    }, which no provider token provides.
+                </p>
+            }
             <label>
                 JSON
                 <textarea name="AgentHarness" rows="24" spellcheck="false">@_harnessJson</textarea>
@@ -167,6 +179,75 @@
             <AntiforgeryToken />
             <p class="settings-note">Overseer's own configuration, which sets a model for every role, replaces yours.</p>
             <button type="submit">Restore the default</button>
+        </form>
+    </div>
+}
+
+<h2>Model provider tokens</h2>
+
+@if (_providerTokens is not null)
+{
+    <div class="settings-form settings-form-wide">
+        @if (_providerTokenNotice is not null)
+        {
+            <p class="settings-saved" role="status">@_providerTokenNotice</p>
+        }
+        @if (_providerTokenError is not null)
+        {
+            <p class="settings-error" role="alert">@_providerTokenError</p>
+        }
+        <p class="settings-note">
+            Keys for the model providers in <code>opencode.json</code>, such as Azure Foundry or an AI gateway. Every agent
+            session gets each one as its environment variable, which <code>opencode.json</code> references as
+            <code>{env:NAME}</code>. Once stored, a token is never shown again.
+        </p>
+        @if (_providerTokens.Count == 0)
+        {
+            <p class="settings-note">No provider tokens are stored.</p>
+        }
+        else
+        {
+            <form method="post" @formname="provider-token-remove" @onsubmit="RemoveProviderTokenAsync">
+                <AntiforgeryToken />
+                <table class="provider-tokens">
+                    <thead>
+                        <tr><th>Name</th><th>Environment variable</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var token in _providerTokens)
+                        {
+                            <tr>
+                                <td>@token.Name</td>
+                                <td><code>@token.EnvironmentVariable</code></td>
+                                <td><button type="submit" name="RemoveProviderToken" value="@token.Name" aria-label="Remove @token.Name">Remove</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </form>
+        }
+        <form method="post" @formname="provider-token" @onsubmit="SaveProviderTokenAsync" class="settings-form">
+            <AntiforgeryToken />
+            <h3>Add or replace a token</h3>
+            <label>
+                Name
+                <input name="ProviderTokenName" value="@_providerTokenNameInput" list="provider-token-names" placeholder="azure-foundry" autocomplete="off" spellcheck="false" required />
+            </label>
+            <datalist id="provider-token-names">
+                @foreach (var token in _providerTokens)
+                {
+                    <option value="@token.Name"></option>
+                }
+            </datalist>
+            <label>
+                Token
+                <input name="ProviderToken" type="password" autocomplete="off" spellcheck="false" required />
+            </label>
+            <p class="settings-note">
+                The environment variable is the name in capitals, with dashes as underscores, followed by <code>_API_KEY</code>:
+                <code>anthropic</code> gives <code>ANTHROPIC_API_KEY</code>. A name already stored replaces that token.
+            </p>
+            <button type="submit">Save</button>
         </form>
     </div>
 }
@@ -360,6 +441,13 @@
     private string? _harnessError;
     private string? _harnessNotice;
 
+    // The environment variables the configuration in use references that no stored provider token provides: an agent
+    // session would start without them, so the page warns, but saving such a configuration is allowed.
+    private IReadOnlyList<string> UnprovidedVariables =>
+        _harness is null || _providerTokens is null
+            ? []
+            : [.. _harness.EnvironmentVariables.Except(_providerTokens.Select(token => token.EnvironmentVariable), StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+
     [SupplyParameterFromForm(FormName = "agent-harness")]
     private string? AgentHarness { get; set; }
 
@@ -391,6 +479,22 @@
     private IEnumerable<string> ModelSuggestions =>
         Enum.GetValues<AgentRole>().SelectMany(role => new[] { _harness!.ModelOf(role), AgentHarnessConfiguration.Default.ModelOf(role) })
             .Distinct().Order(StringComparer.Ordinal);
+
+    [SupplyParameterFromForm(FormName = "provider-token")]
+    private string? ProviderTokenName { get; set; }
+
+    [SupplyParameterFromForm(FormName = "provider-token")]
+    private string? ProviderToken { get; set; }
+
+    // The Remove button pressed: the token's name.
+    [SupplyParameterFromForm(FormName = "provider-token-remove")]
+    private string? RemoveProviderToken { get; set; }
+
+    private IReadOnlyList<ModelProviderToken>? _providerTokens;
+    // What the name field shows: empty, or what the user entered when it was refused. The token field always starts empty.
+    private string? _providerTokenNameInput;
+    private string? _providerTokenNotice;
+    private string? _providerTokenError;
 
     [SupplyParameterFromForm(FormName = "github-token")]
     private string? GitHubToken { get; set; }
@@ -427,7 +531,23 @@
         _machine = await Store.GetSandboxMachineAsync(HttpContext.RequestAborted);
         _guidelines = await Store.GetReviewGuidelinesAsync(HttpContext.RequestAborted);
         await LoadHarnessAsync();
+        _providerTokens = await ProviderTokens.ListAsync(HttpContext.RequestAborted);
         _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
+    }
+
+    private async Task SaveProviderTokenAsync()
+    {
+        switch (await ProviderTokens.SaveAsync(ProviderTokenName, ProviderToken, HttpContext.RequestAborted))
+        {
+            case ModelProviderTokenSaving.Stored stored:
+                _providerTokenNotice = $"The provider token {stored.Token.Name} is {(stored.Replaced ? "replaced" : "added")}.";
+                break;
+            case ModelProviderTokenSaving.Refused refused:
+                _providerTokenError = refused.Error;
+                _providerTokenNameInput = ProviderTokenName;
+                break;
+        }
+        _providerTokens = await ProviderTokens.ListAsync(HttpContext.RequestAborted);
     }
 
     private async Task SubmitGuidelinesAsync()
@@ -540,6 +660,20 @@
             GitHubTokens.DiscardFailed();
             _gitHubNotice = "The token is discarded.";
         }
+    }
+
+    private async Task RemoveProviderTokenAsync()
+    {
+        if (await ProviderTokens.RemoveAsync(RemoveProviderToken, HttpContext.RequestAborted) is { } removed)
+        {
+            _providerTokenNotice = $"The provider token {removed.Name} is removed.";
+        }
+        else
+        {
+            // Removed in another tab since the page was opened.
+            _providerTokenError = $"No provider token named {RemoveProviderToken} is stored.";
+        }
+        _providerTokens = await ProviderTokens.ListAsync(HttpContext.RequestAborted);
     }
 
     private async Task CheckGitHubTokenAsync()

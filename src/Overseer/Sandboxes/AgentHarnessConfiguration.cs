@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace Overseer.Sandboxes;
 
@@ -9,7 +10,7 @@ namespace Overseer.Sandboxes;
 /// The agent harness configuration: the <c>opencode.json</c> agents run with. It defines an OpenCode agent per role,
 /// named after the role in lower case, and sets the model of each.
 /// </summary>
-public sealed class AgentHarnessConfiguration
+public sealed partial class AgentHarnessConfiguration
 {
     // Declared before Default, which is parsed with them.
     // Strict JSON, and no property twice, so what Overseer reads is what OpenCode reads.
@@ -36,6 +37,17 @@ public sealed class AgentHarnessConfiguration
 
     /// <summary>The model the agent in <paramref name="role"/> uses, as OpenCode names it: <c>provider/model</c>.</summary>
     public string ModelOf(AgentRole role) => _models[role];
+
+    /// <summary>
+    /// The environment variables the configuration references as <c>{env:NAME}</c>, which OpenCode replaces with their
+    /// values, in order of first reference.
+    /// </summary>
+    public IReadOnlyList<string> EnvironmentVariables =>
+        [.. EnvironmentReference().Matches(Json).Select(reference => reference.Groups[1].Value).Distinct(StringComparer.Ordinal)];
+
+    // As OpenCode finds them: anywhere in the text, before it parses the JSON.
+    [GeneratedRegex(@"\{env:([^}]+)\}")]
+    private static partial Regex EnvironmentReference();
 
     /// <summary>The name of the OpenCode agent for <paramref name="role"/>.</summary>
     public static string AgentName(AgentRole role) => role.ToString().ToLowerInvariant();

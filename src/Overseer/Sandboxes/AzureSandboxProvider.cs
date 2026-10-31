@@ -144,7 +144,8 @@ public sealed class AzureSandboxProvider(
 
     /// <exception cref="NotSupportedException">Always, for now: agents run in Azure Sandboxes once the Agent Session module is built.</exception>
     public Task<IAgentSession> StartAgentSessionAsync(
-        Sandbox sandbox, AgentRole role, AgentHarnessConfiguration harness, CancellationToken cancellationToken) =>
+        Sandbox sandbox, AgentRole role, AgentHarnessConfiguration harness, IReadOnlyDictionary<string, string> environment,
+        CancellationToken cancellationToken) =>
         throw new NotSupportedException("Agent sessions in Azure Sandboxes are not built yet: they come with the Agent Session module.");
 
     public Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken) => RemoveAsync(VirtualMachine(sandbox), cancellationToken);

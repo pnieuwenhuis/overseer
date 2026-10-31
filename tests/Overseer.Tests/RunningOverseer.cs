@@ -10,6 +10,7 @@ using Npgsql;
 using Overseer.GitHub;
 using Overseer.Login;
 using Overseer.Persistence;
+using Overseer.Sandboxes;
 using Overseer.Secrets;
 using Overseer.Server;
 
@@ -91,6 +92,18 @@ public sealed class RunningOverseer : IAsyncDisposable
             services => new FakeGitHubGateway(services.GetRequiredService<ISecretReader>()));
 
         return new RunningOverseer(app, connectionString);
+    }
+
+    /// <summary>What the server's Sandbox Provider, the fake, was asked for and plays.</summary>
+    public FakeSandboxProvider Sandboxes => (FakeSandboxProvider)_app.Services.GetRequiredService<ISandboxProvider>();
+
+    /// <summary>Starts an agent session in a new Sandbox, as orchestration does, stops it, and tells what it was started with.</summary>
+    public async Task<AgentSessionStart> StartAgentSessionAsync(AgentRole role)
+    {
+        var sandboxes = _app.Services.GetRequiredService<SandboxRegistry>();
+        var sandbox = await sandboxes.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), [], TestContext.Current.CancellationToken);
+        await using var session = await sandboxes.StartAgentSessionAsync(sandbox, role, TestContext.Current.CancellationToken);
+        return Sandboxes.AgentSessionsStarted.Last();
     }
 
     /// <inheritdoc cref="PortalBrowser.LogInAsync"/>

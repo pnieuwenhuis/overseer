@@ -24,8 +24,13 @@ public interface ISandboxProvider
     /// Starts an agent in the given role, configured by <paramref name="harness"/> and running its role's agent with that
     /// agent's model, ready for its first message. Dispose the session to stop the agent.
     /// </summary>
+    /// <param name="environment">
+    /// Environment variables the agent runs with, which <paramref name="harness"/> may reference, such as model provider
+    /// tokens. Their values are secrets: never log them.
+    /// </param>
     Task<IAgentSession> StartAgentSessionAsync(
-        Sandbox sandbox, AgentRole role, AgentHarnessConfiguration harness, CancellationToken cancellationToken);
+        Sandbox sandbox, AgentRole role, AgentHarnessConfiguration harness, IReadOnlyDictionary<string, string> environment,
+        CancellationToken cancellationToken);
 
     /// <summary>Removes the Sandbox and everything created with it.</summary>
     Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken);

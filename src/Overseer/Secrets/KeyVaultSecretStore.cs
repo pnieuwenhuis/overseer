@@ -50,6 +50,22 @@ public sealed class KeyVaultSecretStore(SecretClient client) : ISecretStore, ISe
     public async Task<bool> IsSetAsync(string name, CancellationToken cancellationToken) =>
         await ReadAsync(name, cancellationToken) is not null;
 
+    public async Task<IReadOnlyList<string>> ListAsync(string prefix, CancellationToken cancellationToken)
+    {
+        SecretName.Validate(prefix);
+        // Key Vault lists every secret, never with its value, and not the removed ones. A disabled secret can't be read,
+        // so it isn't set as far as Overseer is concerned.
+        var names = new List<string>();
+        await foreach (var secret in client.GetPropertiesOfSecretsAsync(cancellationToken))
+        {
+            if (secret.Enabled != false && secret.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                names.Add(secret.Name);
+            }
+        }
+        return names;
+    }
+
     public async Task<string?> ReadAsync(string name, CancellationToken cancellationToken)
     {
         SecretName.Validate(name);

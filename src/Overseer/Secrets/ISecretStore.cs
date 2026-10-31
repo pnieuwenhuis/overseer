@@ -17,6 +17,11 @@ public interface ISecretStore
 
     /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid <see cref="SecretName"/>.</exception>
     Task<bool> IsSetAsync(string name, CancellationToken cancellationToken);
+
+    /// <summary>The names of the secrets that are set and start with <paramref name="prefix"/>, ignoring case; never their values.</summary>
+    /// <returns>Each name as it was first set.</returns>
+    /// <exception cref="ArgumentException"><paramref name="prefix"/> is not a valid <see cref="SecretName"/>.</exception>
+    Task<IReadOnlyList<string>> ListAsync(string prefix, CancellationToken cancellationToken);
 }
 
 /// <summary>

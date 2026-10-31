@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using Overseer.ModelProviders;
 using Overseer.Persistence;
+using Overseer.Secrets;
 using Overseer.Settings;
 
 namespace Overseer.Sandboxes;
@@ -9,7 +11,12 @@ namespace Overseer.Sandboxes;
 /// Orchestration goes through here rather than to the provider, so no Sandbox goes unrecorded.
 /// </summary>
 public sealed class SandboxRegistry(
-    ISandboxProvider provider, SettingsStore settings, IDbContextFactory<OverseerDbContext> databases, TimeProvider time)
+    ISandboxProvider provider,
+    SettingsStore settings,
+    ModelProviderTokens providerTokens,
+    ISecretReader secrets,
+    IDbContextFactory<OverseerDbContext> databases,
+    TimeProvider time)
 {
     /// <summary>
     /// Creates a Sandbox holding the Repositories in scope, tagged with its owner, on the machine the Settings say now.
@@ -32,10 +39,25 @@ public sealed class SandboxRegistry(
         return sandbox;
     }
 
-    /// <summary>Starts an agent in the given role, with the agent harness configuration the Settings hold now.</summary>
+    /// <summary>
+    /// Starts an agent in the given role, with the agent harness configuration the Settings hold now, and every model
+    /// provider token stored now in its environment variable.
+    /// </summary>
     /// <inheritdoc cref="ISandboxProvider.StartAgentSessionAsync"/>
-    public async Task<IAgentSession> StartAgentSessionAsync(Sandbox sandbox, AgentRole role, CancellationToken cancellationToken) =>
-        await provider.StartAgentSessionAsync(sandbox, role, await settings.GetAgentHarnessAsync(cancellationToken), cancellationToken);
+    public async Task<IAgentSession> StartAgentSessionAsync(Sandbox sandbox, AgentRole role, CancellationToken cancellationToken)
+    {
+        var harness = await settings.GetAgentHarnessAsync(cancellationToken);
+        var environment = new Dictionary<string, string>();
+        foreach (var token in await providerTokens.ListAsync(cancellationToken))
+        {
+            // Null when the token was removed since it was listed.
+            if (await secrets.ReadAsync(token.SecretName, cancellationToken) is { } value)
+            {
+                environment[token.EnvironmentVariable] = value;
+            }
+        }
+        return await provider.StartAgentSessionAsync(sandbox, role, harness, environment, cancellationToken);
+    }
 
     /// <summary>Destroys the Sandbox and records when; the record itself is kept.</summary>
     public async Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken)

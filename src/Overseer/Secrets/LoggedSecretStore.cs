@@ -16,4 +16,6 @@ internal sealed class LoggedSecretStore(ISecretStore backend, ILogger<LoggedSecr
     }
 
     public Task<bool> IsSetAsync(string name, CancellationToken cancellationToken) => backend.IsSetAsync(name, cancellationToken);
+
+    public Task<IReadOnlyList<string>> ListAsync(string prefix, CancellationToken cancellationToken) => backend.ListAsync(prefix, cancellationToken);
 }

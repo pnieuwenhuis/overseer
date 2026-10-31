@@ -6,6 +6,8 @@ namespace Overseer.Tests;
 /// <summary>Scripting the fake Sandbox Provider, as orchestration tests and offline work will.</summary>
 public class FakeSandboxProviderTests
 {
+    private static readonly Dictionary<string, string> NoEnvironment = [];
+
     private readonly FakeTimeProvider _time = new();
     private readonly FakeSandboxProvider _provider;
 
@@ -43,7 +45,7 @@ public class FakeSandboxProviderTests
         _provider.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
             new FakeAgentTurn(["Reading the README"], new AgentOutcome.AskedQuestion("Which database should it use?")),
             new FakeAgentTurn(["Writing the Spec"], new AgentOutcome.Done())));
-        await using var session = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Analyst, AgentHarnessConfiguration.Default, TestContext.Current.CancellationToken);
+        await using var session = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Analyst, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken);
 
         var asking = await session.SendAsync("Refine the Intent", TestContext.Current.CancellationToken);
         Assert.Equal(["Reading the README"], await asking.Updates.ToListAsync(TestContext.Current.CancellationToken));
@@ -116,12 +118,12 @@ public class FakeSandboxProviderTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _provider.RunCommandAsync(sandbox, "dotnet test", TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, AgentHarnessConfiguration.Default, TestContext.Current.CancellationToken));
+            _provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken));
     }
 
     private async Task<AgentTurn> SendFirstMessageAsync(Sandbox sandbox, AgentRole role)
     {
-        await using var session = await _provider.StartAgentSessionAsync(sandbox, role, AgentHarnessConfiguration.Default, TestContext.Current.CancellationToken);
+        await using var session = await _provider.StartAgentSessionAsync(sandbox, role, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken);
         return await session.SendAsync("Start", TestContext.Current.CancellationToken);
     }
 

@@ -62,10 +62,11 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     }
 
     public Task<IAgentSession> StartAgentSessionAsync(
-        Sandbox sandbox, AgentRole role, AgentHarnessConfiguration harness, CancellationToken cancellationToken)
+        Sandbox sandbox, AgentRole role, AgentHarnessConfiguration harness, IReadOnlyDictionary<string, string> environment,
+        CancellationToken cancellationToken)
     {
         EnsureExists(sandbox);
-        _agentSessionsStarted.Enqueue(new AgentSessionStart(sandbox, role, harness.Json, harness.ModelOf(role)));
+        _agentSessionsStarted.Enqueue(new AgentSessionStart(sandbox, role, harness.Json, harness.ModelOf(role), new Dictionary<string, string>(environment)));
         var script = _agentSessions.TryGetValue(role, out var sessions) ? sessions.Next() : new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()));
         return Task.FromResult<IAgentSession>(new ScriptedAgentSession(script));
     }
@@ -132,7 +133,9 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
 /// <summary>An agent session the fake started, with what a real one would hand the agent.</summary>
 /// <param name="HarnessJson">The <c>opencode.json</c> the agent runs with.</param>
 /// <param name="Model">The model of the role's agent in that configuration.</param>
-public sealed record AgentSessionStart(Sandbox Sandbox, AgentRole Role, string HarnessJson, string Model);
+/// <param name="Environment">The environment variables the agent runs with, such as model provider tokens.</param>
+public sealed record AgentSessionStart(
+    Sandbox Sandbox, AgentRole Role, string HarnessJson, string Model, IReadOnlyDictionary<string, string> Environment);
 
 /// <summary>A scripted agent session: its turns in order, the last one repeating.</summary>
 public sealed record FakeAgentSession(params FakeAgentTurn[] Turns);
