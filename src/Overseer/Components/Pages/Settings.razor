@@ -1,6 +1,8 @@
 @page "/settings"
 @attribute [ExcludeFromInteractiveRouting]
 @using System.Globalization
+@using Markdig
+@using Markdig.Extensions.EmphasisExtras
 @using Overseer.Sandboxes
 @using Overseer.Settings
 @inject SettingsStore Store
@@ -69,6 +71,41 @@
     </form>
 }
 
+<h2>Review Guidelines</h2>
+
+@if (_guidelines is not null)
+{
+    <form method="post" @formname="review-guidelines" @onsubmit="SubmitGuidelinesAsync" class="settings-form settings-form-wide">
+        <AntiforgeryToken />
+        @if (_guidelinesSaved)
+        {
+            <p class="settings-saved" role="status">The Review Guidelines are saved.</p>
+        }
+        <p class="settings-note">
+            What the Reviewer checks in every review, in every repository. Guidance for one repository belongs in that repository.
+        </p>
+        <label>
+            Markdown
+            <textarea name="ReviewGuidelines" rows="16" spellcheck="true">@_guidelines</textarea>
+        </label>
+        <span class="settings-buttons">
+            <button type="submit" name="ReviewGuidelinesAction" value="preview">Preview</button>
+            <button type="submit" name="ReviewGuidelinesAction" value="save">Save</button>
+        </span>
+    </form>
+    <h3>Preview</h3>
+    <section class="settings-preview" aria-label="Review Guidelines preview">
+        @if (_guidelines == "")
+        {
+            <p class="settings-note">Nothing to preview.</p>
+        }
+        else
+        {
+            @((MarkupString)Markdown.ToHtml(_guidelines, PreviewPipeline))
+        }
+    </section>
+}
+
 @code {
     [CascadingParameter]
     private HttpContext HttpContext { get; set; } = default!;
@@ -111,10 +148,44 @@
     private string? _machineError;
     private bool _machineSaved;
 
+    [SupplyParameterFromForm(FormName = "review-guidelines")]
+    private string? ReviewGuidelines { get; set; }
+
+    // Which button submitted the Review Guidelines: "save", or "preview" to show them rendered without saving.
+    [SupplyParameterFromForm(FormName = "review-guidelines")]
+    private string? ReviewGuidelinesAction { get; set; }
+
+    // What the Review Guidelines editor and preview show: what is saved, or what was submitted for a preview.
+    private string? _guidelines;
+    private bool _guidelinesSaved;
+
+    // GitHub's extensions to Markdown, without heading ids that could clash with the page's. HTML in the Markdown shows as
+    // text, so the preview can't run scripts or restyle the page.
+    private static readonly MarkdownPipeline PreviewPipeline = new MarkdownPipelineBuilder()
+        .UsePipeTables().UseTaskLists().UseAutoLinks().UseEmphasisExtras(EmphasisExtraOptions.Strikethrough)
+        .DisableHtml()
+        .Build();
+
     protected override async Task OnInitializedAsync()
     {
         _values = await CurrentValuesAsync();
         _machine = await Store.GetSandboxMachineAsync(HttpContext.RequestAborted);
+        _guidelines = await Store.GetReviewGuidelinesAsync(HttpContext.RequestAborted);
+    }
+
+    private async Task SubmitGuidelinesAsync()
+    {
+        if (ReviewGuidelinesAction == "save")
+        {
+            await Store.SaveReviewGuidelinesAsync(ReviewGuidelines, HttpContext.RequestAborted);
+            _guidelinesSaved = true;
+            _guidelines = await Store.GetReviewGuidelinesAsync(HttpContext.RequestAborted);
+        }
+        else
+        {
+            // Previewed as saving would keep them.
+            _guidelines = Overseer.Settings.ReviewGuidelines.FromEditor(ReviewGuidelines);
+        }
     }
 
     private async Task SaveAsync()

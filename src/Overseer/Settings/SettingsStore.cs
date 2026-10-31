@@ -49,6 +49,19 @@ public sealed class SettingsStore(IDbContextFactory<OverseerDbContext> databases
         return null;
     }
 
+    private const string ReviewGuidelinesKey = "Review:Guidelines";
+
+    /// <summary>The Review Guidelines as Markdown, which the Reviewer receives with every review; empty while none were saved.</summary>
+    public async Task<string> GetReviewGuidelinesAsync(CancellationToken cancellationToken)
+    {
+        var saved = await ReadAsync([ReviewGuidelinesKey], cancellationToken);
+        return saved.GetValueOrDefault(ReviewGuidelinesKey, "");
+    }
+
+    /// <summary>Saves the Review Guidelines as the user wrote them, kept as <see cref="ReviewGuidelines.FromEditor"/> says.</summary>
+    public Task SaveReviewGuidelinesAsync(string? guidelines, CancellationToken cancellationToken) =>
+        SaveAsync(new Dictionary<string, string> { [ReviewGuidelinesKey] = ReviewGuidelines.FromEditor(guidelines) }, cancellationToken);
+
     /// <summary>The current value of each operating limit, in its unit; its default if the saved value is no longer valid.</summary>
     public async Task<IReadOnlyDictionary<OperatingLimit, int>> GetOperatingLimitValuesAsync(CancellationToken cancellationToken)
     {

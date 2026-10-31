@@ -112,6 +112,8 @@ The operating limits are whole numbers, each from 1 to a maximum. Saving rejects
 
 Sandboxes are `Standard_D4s_v5` VMs (4 vCPUs, 16 GiB) by default. The Settings page offers `Standard_D2_v5` (2 vCPUs, 8 GiB) instead, and Azure spot instances, which cost less but which Azure evicts when it needs the capacity back. Eviction deletes the Sandbox's VM and disk; its network interface, public IP, network security group and SSH key stay until Overseer destroys the Sandbox. A change applies to the next Sandbox created; existing Sandboxes keep their size and priority. When Azure has no spot capacity or quota for the size, creating a Sandbox fails with Azure's error, as any other creation failure does.
 
+The Review Guidelines are Markdown, empty until you write them; the Reviewer will receive them with every review (`SettingsStore.GetReviewGuidelinesAsync`). Preview renders what is in the editor without saving it, as CommonMark with GitHub's tables, task lists, autolinks and strikethrough. HTML in them shows as text in the preview. They are stored with LF line breaks, and saving nothing but whitespace leaves them empty.
+
 ## Configuration
 
 Configuration is what `serve` needs before it starts, unlike the Settings page. It is layered. Later layers override earlier ones:
