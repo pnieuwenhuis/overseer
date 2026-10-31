@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using Overseer.GitHub;
 using Overseer.Login;
 using Overseer.Persistence;
@@ -19,10 +20,12 @@ public sealed class RunningOverseer : IAsyncDisposable
 {
     private readonly WebApplication _app;
     private readonly PortalBrowser _browser;
+    private readonly string _connectionString;
 
-    private RunningOverseer(WebApplication app)
+    private RunningOverseer(WebApplication app, string connectionString)
     {
         _app = app;
+        _connectionString = connectionString;
         var address = app.Services.GetRequiredService<IServer>().Features.GetRequiredFeature<IServerAddressesFeature>().Addresses.Single();
         _browser = new PortalBrowser(new Uri(address));
     }
@@ -87,7 +90,7 @@ public sealed class RunningOverseer : IAsyncDisposable
             time,
             services => new FakeGitHubGateway(services.GetRequiredService<ISecretReader>()));
 
-        return new RunningOverseer(app);
+        return new RunningOverseer(app, connectionString);
     }
 
     /// <inheritdoc cref="PortalBrowser.LogInAsync"/>
@@ -109,5 +112,9 @@ public sealed class RunningOverseer : IAsyncDisposable
         _browser.Dispose();
         await _app.StopAsync();
         await _app.DisposeAsync();
+        // Npgsql keeps idle connections open for minutes after the server is gone. With a database per test, they would
+        // add up to more than the test PostgreSQL's 100 connections in a full run.
+        await using var connection = new NpgsqlConnection(_connectionString);
+        NpgsqlConnection.ClearPool(connection);
     }
 }
