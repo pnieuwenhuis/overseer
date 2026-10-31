@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Components;
+using Overseer.GitHub;
 using Overseer.Login;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
@@ -16,8 +17,10 @@ public static class OverseerServer
 {
     /// <param name="logs">Also receives everything the server logs, next to the console.</param>
     /// <param name="time">The clock, instead of the system's.</param>
+    /// <param name="gitHub">Creates the GitHub Gateway, instead of the one that calls GitHub.</param>
     public static WebApplication Build(
-        IReadOnlyDictionary<string, string?> environment, ILoggerProvider? logs = null, TimeProvider? time = null)
+        IReadOnlyDictionary<string, string?> environment, ILoggerProvider? logs = null, TimeProvider? time = null,
+        Func<IServiceProvider, IGitHubGateway>? gitHub = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -44,6 +47,8 @@ public static class OverseerServer
         builder.Services.AddSandboxes(builder.Configuration, environment);
         builder.Services.AddSecrets(builder.Configuration, environment);
         builder.Services.AddSmokeTest(builder.Configuration);
+        builder.Services.AddSingleton(gitHub ?? (services => new GitHubGateway(services.GetRequiredService<ISecretReader>())));
+        builder.Services.AddSingleton<GitHubTokenStore>();
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(options =>
@@ -99,9 +104,9 @@ public static class OverseerServer
     /// <inheritdoc cref="Build"/>
     public static async Task<WebApplication> StartAsync(
         IReadOnlyDictionary<string, string?> environment, CancellationToken cancellationToken, ILoggerProvider? logs = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null, Func<IServiceProvider, IGitHubGateway>? gitHub = null)
     {
-        var app = Build(environment, logs, time);
+        var app = Build(environment, logs, time, gitHub);
         try
         {
             // Fail on a missing credential before touching the database: without it nobody can log in.

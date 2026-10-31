@@ -3,9 +3,11 @@
 @using System.Globalization
 @using Markdig
 @using Markdig.Extensions.EmphasisExtras
+@using Overseer.GitHub
 @using Overseer.Sandboxes
 @using Overseer.Settings
 @inject SettingsStore Store
+@inject GitHubTokenStore GitHubTokens
 
 <PageTitle>Settings · Overseer</PageTitle>
 
@@ -106,6 +108,83 @@
     </section>
 }
 
+<h2>GitHub</h2>
+
+<div class="settings-form">
+    @switch (_gitHubSaving)
+    {
+        case GitHubTokenSaving.Stored:
+            <p class="settings-saved" role="status">The GitHub token is saved.</p>
+            break;
+        case GitHubTokenSaving.Refused refused:
+            <p class="settings-error" role="alert">@refused.Error</p>
+            break;
+    }
+    @if (GitHubTokens.FailedCheck is { } failedCheck)
+    {
+        <form method="post" @formname="github-token-failed" @onsubmit="ResolveFailedGitHubTokenAsync" class="settings-form">
+            <AntiforgeryToken />
+            <p class="settings-error" role="alert">The token you entered fails the check: @failedCheck</p>
+            <p class="settings-note">
+                @(_gitHubTokenSet ? "The token in use stays" : "No token is stored") unless you store this one anyway.
+            </p>
+            <span class="settings-buttons">
+                <button type="submit" name="FailedGitHubTokenAction" value="store">Store it anyway</button>
+                <button type="submit" name="FailedGitHubTokenAction" value="discard">Discard it</button>
+            </span>
+        </form>
+    }
+    @if (_gitHubNotice is not null)
+    {
+        <p class="settings-saved" role="status">@_gitHubNotice</p>
+    }
+    @if (_gitHubError is not null)
+    {
+        <p class="settings-error" role="alert">@_gitHubError</p>
+    }
+    <p class="github-token-status">
+        @switch (_gitHubTokenSet ? _gitHubTokenCheck : null)
+        {
+            case null when !_gitHubTokenSet:
+                @:No GitHub token is set.
+                break;
+            case null:
+                @:A GitHub token is set.
+                break;
+            case GitHubTokenCheck.Works works:
+                @:A GitHub token is set, and works as <code>@works.Login</code>.
+                break;
+            case GitHubTokenCheck.Fails fails:
+                @:A GitHub token is set, but fails: @fails.Error
+                break;
+        }
+    </p>
+    <form method="post" @formname="github-token" @onsubmit="SaveGitHubTokenAsync" class="settings-form">
+        <AntiforgeryToken />
+        <p class="settings-note">
+            A fine-grained token that Overseer and its agents work with GitHub as. Once stored, it is never shown again.
+        </p>
+        <label>
+            @(_gitHubTokenSet ? "New token" : "Token")
+            <input name="GitHubToken" type="password" autocomplete="off" spellcheck="false" required />
+        </label>
+        <button type="submit">@(_gitHubTokenSet ? "Replace" : "Set")</button>
+    </form>
+    @if (_gitHubTokenSet)
+    {
+        <span class="settings-buttons">
+            <form method="post" @formname="github-token-check" @onsubmit="CheckGitHubTokenAsync">
+                <AntiforgeryToken />
+                <button type="submit">Check with GitHub</button>
+            </form>
+            <form method="post" @formname="github-token-remove" @onsubmit="RemoveGitHubTokenAsync">
+                <AntiforgeryToken />
+                <button type="submit">Remove the GitHub token</button>
+            </form>
+        </span>
+    }
+</div>
+
 @code {
     [CascadingParameter]
     private HttpContext HttpContext { get; set; } = default!;
@@ -166,8 +245,24 @@
         .DisableHtml()
         .Build();
 
+    [SupplyParameterFromForm(FormName = "github-token")]
+    private string? GitHubToken { get; set; }
+
+    // Which button submitted the token that failed the check: "store" it anyway, or "discard" it.
+    [SupplyParameterFromForm(FormName = "github-token-failed")]
+    private string? FailedGitHubTokenAction { get; set; }
+
+    // Whether a GitHub token is in use, and what GitHub said about it, if it was asked during this request: opening the
+    // page doesn't ask GitHub, so it neither waits for GitHub nor fails with it.
+    private bool _gitHubTokenSet;
+    private GitHubTokenCheck? _gitHubTokenCheck;
+    private GitHubTokenSaving? _gitHubSaving;
+    private string? _gitHubNotice;
+    private string? _gitHubError;
+
     protected override async Task OnInitializedAsync()
     {
+        _gitHubTokenSet = await GitHubTokens.IsSetAsync(HttpContext.RequestAborted);
         _values = await CurrentValuesAsync();
         _machine = await Store.GetSandboxMachineAsync(HttpContext.RequestAborted);
         _guidelines = await Store.GetReviewGuidelinesAsync(HttpContext.RequestAborted);
@@ -207,6 +302,53 @@
         _machineError = await Store.SaveSandboxMachineAsync(SandboxVmSize, SandboxSpot, HttpContext.RequestAborted);
         _machineSaved = _machineError is null;
         _machine = await Store.GetSandboxMachineAsync(HttpContext.RequestAborted);
+    }
+
+    private async Task SaveGitHubTokenAsync()
+    {
+        _gitHubSaving = await GitHubTokens.SaveAsync(GitHubToken, HttpContext.RequestAborted);
+        if (_gitHubSaving is GitHubTokenSaving.Stored stored)
+        {
+            _gitHubTokenSet = true;
+            _gitHubTokenCheck = new GitHubTokenCheck.Works(stored.Login);
+        }
+    }
+
+    private async Task ResolveFailedGitHubTokenAsync()
+    {
+        if (FailedGitHubTokenAction == "store")
+        {
+            // Nothing to store when the token was discarded or replaced in another tab since.
+            if (await GitHubTokens.StoreFailedAsync(HttpContext.RequestAborted) is { } check)
+            {
+                _gitHubNotice = "The GitHub token is saved.";
+                _gitHubTokenSet = true;
+                _gitHubTokenCheck = check;
+            }
+            else
+            {
+                _gitHubError = "No token is waiting to be stored anymore: enter it again.";
+            }
+        }
+        else
+        {
+            GitHubTokens.DiscardFailed();
+            _gitHubNotice = "The token is discarded.";
+        }
+    }
+
+    private async Task CheckGitHubTokenAsync()
+    {
+        _gitHubTokenCheck = await GitHubTokens.CheckAsync(HttpContext.RequestAborted);
+        // Removed in another tab since the page was opened.
+        _gitHubTokenSet = _gitHubTokenCheck is not null;
+    }
+
+    private async Task RemoveGitHubTokenAsync()
+    {
+        await GitHubTokens.RemoveAsync(HttpContext.RequestAborted);
+        _gitHubTokenSet = false;
+        _gitHubNotice = "The GitHub token is removed.";
     }
 
     private async Task<IReadOnlyDictionary<OperatingLimit, string?>> CurrentValuesAsync()

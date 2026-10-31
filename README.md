@@ -114,6 +114,8 @@ Sandboxes are `Standard_D4s_v5` VMs (4 vCPUs, 16 GiB) by default. The Settings p
 
 The Review Guidelines are Markdown, empty until you write them; the Reviewer will receive them with every review (`SettingsStore.GetReviewGuidelinesAsync`). Preview renders what is in the editor without saving it, as CommonMark with GitHub's tables, task lists, autolinks and strikethrough. HTML in them shows as text in the preview. They are stored with LF line breaks, and saving nothing but whitespace leaves them empty.
 
+The GitHub token is the fine-grained token Overseer and its agents work with GitHub as. It is a secret (see [Secrets](#secrets)): the Settings page says whether one is set and lets you check it with GitHub, which says the login it works as or why it fails, and lets you set, replace and remove it, but never shows it. Saving a token first checks it with GitHub. A token that works replaces the one in use; one that fails is kept, in memory only, until you store it anyway or discard it, and until then the token in use stays. A restart forgets it.
+
 ## Configuration
 
 Configuration is what `serve` needs before it starts, unlike the Settings page. It is layered. Later layers override earlier ones:
@@ -195,6 +197,14 @@ Every backend must pass the contract suite in `tests/Overseer.Tests/SecretStoreC
 
 ```sh
 TEST_KEYVAULT_URI=https://my-vault.vault.azure.net/ dotnet test --filter KeyVaultSecretStoreContract
+```
+
+### GitHub
+
+The GitHub Gateway (`IGitHubGateway`) is the only component that calls the GitHub API, at api.github.com. It reads the GitHub token itself, through `ISecretReader`, and its requests are never logged. Tests use `FakeGitHubGateway` (`tests/Overseer.Tests`), which `RunningOverseer` gives every test server and which tests script to accept or reject tokens. Both pass the contract suite in `tests/Overseer.Tests/GitHubGatewayContract.cs`. The real gateway runs it only when `TEST_GITHUB_TOKEN` holds a token GitHub accepts and `TEST_GITHUB_LOGIN` the login it works as, such as your GitHub CLI's:
+
+```sh
+TEST_GITHUB_TOKEN=$(gh auth token) TEST_GITHUB_LOGIN=$(gh api user --jq .login) dotnet test --filter GitHubGatewayContractAgainstGitHub
 ```
 
 ## Tests

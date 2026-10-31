@@ -6,8 +6,10 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Overseer.GitHub;
 using Overseer.Login;
 using Overseer.Persistence;
+using Overseer.Secrets;
 using Overseer.Server;
 
 namespace Overseer.Tests;
@@ -38,6 +40,9 @@ public sealed class RunningOverseer : IAsyncDisposable
 
     /// <summary>The server's services, for what the Portal can't reach yet, such as the secret store.</summary>
     public IServiceProvider Services => _app.Services;
+
+    /// <summary>The GitHub the server works with, which the test scripts; the server never calls the real GitHub.</summary>
+    public FakeGitHubGateway GitHub => (FakeGitHubGateway)_app.Services.GetRequiredService<IGitHubGateway>();
 
     /// <summary>A fresh connection to Overseer's database; dispose it when done.</summary>
     public OverseerDbContext OpenDatabase() =>
@@ -79,7 +84,8 @@ public sealed class RunningOverseer : IAsyncDisposable
             defaults.Where(variable => variable.Value is not null).ToDictionary(),
             TestContext.Current.CancellationToken,
             logs,
-            time);
+            time,
+            services => new FakeGitHubGateway(services.GetRequiredService<ISecretReader>()));
 
         return new RunningOverseer(app);
     }
