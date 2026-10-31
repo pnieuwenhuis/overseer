@@ -81,3 +81,20 @@
 .github-token-status {
     margin: 0;
 }
+
+.configured-repositories {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    list-style: none;
+    margin: 0;
+    max-width: 24rem;
+    padding: 0;
+}
+
+.configured-repositories li {
+    align-items: center;
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+}

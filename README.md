@@ -99,7 +99,7 @@ Schema migrations are applied at startup, so an empty database gets the schema o
 
 ## Settings
 
-The Portal's Settings page (in the navigation) holds what you change while Overseer runs. They are stored in PostgreSQL, so they survive restarts and upgrades; secrets are not settings and stay in the secret store (see [Secrets](#secrets)). Server-side code reads them through `SettingsStore`, which goes to the database on every read, so a saved change applies without a restart, and returns a setting's default while none is saved.
+The Portal's Settings page (in the navigation) holds what you change while Overseer runs. They are stored in PostgreSQL, so they survive restarts and upgrades; secrets are not settings and stay in the secret store (see [Secrets](#secrets)). Server-side code reads them through `SettingsStore`, which goes to the database on every read, so a saved change applies without a restart, and returns a setting's default while none is saved; the Configured Repositories have their own table and are read through `ConfiguredRepositories`.
 
 The operating limits are whole numbers, each from 1 to a maximum. Saving rejects a value that is missing, not a whole number or out of range, says why, and then saves none of them:
 
@@ -115,6 +115,8 @@ Sandboxes are `Standard_D4s_v5` VMs (4 vCPUs, 16 GiB) by default. The Settings p
 The Review Guidelines are Markdown, empty until you write them; the Reviewer will receive them with every review (`SettingsStore.GetReviewGuidelinesAsync`). Preview renders what is in the editor without saving it, as CommonMark with GitHub's tables, task lists, autolinks and strikethrough. HTML in them shows as text in the preview. They are stored with LF line breaks, and saving nothing but whitespace leaves them empty.
 
 The GitHub token is the fine-grained token Overseer and its agents work with GitHub as. It is a secret (see [Secrets](#secrets)): the Settings page says whether one is set and lets you check it with GitHub, which says the login it works as or why it fails, and lets you set, replace and remove it, but never shows it. Saving a token first checks it with GitHub. A token that works replaces the one in use; one that fails is kept, in memory only, until you store it anyway or discard it, and until then the token in use stays. A restart forgets it.
+
+The Configured Repositories are the GitHub repositories that make up the software Overseer builds. Add one as `owner/name` or by pasting its GitHub URL (a page of the repository or a `git clone` URL works too); it is stored as `owner/name` in GitHub's own case. Adding first asks GitHub, through the GitHub Gateway, whether the GitHub token can reach the repository, and refuses it when no token is set, when GitHub knows no such repository that the token can reach (for a private repository GitHub doesn't say whether it is missing or out of the token's reach), or with GitHub's error when GitHub refuses the token. Reaching means reading: whether the token may push is not checked. A repository that is already configured, in whatever case, is refused; the database's key ignores case, as GitHub does. Removing one takes it off the list; nothing changes on GitHub.
 
 ## Configuration
 
@@ -201,7 +203,7 @@ TEST_KEYVAULT_URI=https://my-vault.vault.azure.net/ dotnet test --filter KeyVaul
 
 ### GitHub
 
-The GitHub Gateway (`IGitHubGateway`) is the only component that calls the GitHub API, at api.github.com. It reads the GitHub token itself, through `ISecretReader`, and its requests are never logged. Tests use `FakeGitHubGateway` (`tests/Overseer.Tests`), which `RunningOverseer` gives every test server and which tests script to accept or reject tokens. Both pass the contract suite in `tests/Overseer.Tests/GitHubGatewayContract.cs`. The real gateway runs it only when `TEST_GITHUB_TOKEN` holds a token GitHub accepts and `TEST_GITHUB_LOGIN` the login it works as, such as your GitHub CLI's:
+The GitHub Gateway (`IGitHubGateway`) is the only component that calls the GitHub API, at api.github.com. It reads the GitHub token itself, through `ISecretReader`, and its requests are never logged. Tests use `FakeGitHubGateway` (`tests/Overseer.Tests`), which `RunningOverseer` gives every test server and which tests script to accept or reject tokens and to have repositories, reachable by every token or only one. Both pass the contract suite in `tests/Overseer.Tests/GitHubGatewayContract.cs`. The real gateway runs it only when `TEST_GITHUB_TOKEN` holds a token GitHub accepts and `TEST_GITHUB_LOGIN` the login it works as, such as your GitHub CLI's:
 
 ```sh
 TEST_GITHUB_TOKEN=$(gh auth token) TEST_GITHUB_LOGIN=$(gh api user --jq .login) dotnet test --filter GitHubGatewayContractAgainstGitHub

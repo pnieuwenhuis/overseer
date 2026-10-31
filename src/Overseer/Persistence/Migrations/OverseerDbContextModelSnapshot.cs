@@ -17,10 +17,22 @@ namespace Overseer.Persistence.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
+                .HasAnnotation("Npgsql:CollationDefinition:case_insensitive", "und-u-ks-level2,und-u-ks-level2,icu,False")
                 .HasAnnotation("ProductVersion", "10.0.4")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("Overseer.Repositories.ConfiguredRepositoryRecord", b =>
+                {
+                    b.Property<string>("FullName")
+                        .HasColumnType("text")
+                        .UseCollation("case_insensitive");
+
+                    b.HasKey("FullName");
+
+                    b.ToTable("ConfiguredRepositories");
+                });
 
             modelBuilder.Entity("Overseer.Sandboxes.SandboxRecord", b =>
                 {

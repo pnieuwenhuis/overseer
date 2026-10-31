@@ -6,6 +6,7 @@ using Overseer.Components;
 using Overseer.GitHub;
 using Overseer.Login;
 using Overseer.Persistence;
+using Overseer.Repositories;
 using Overseer.Sandboxes;
 using Overseer.Secrets;
 using Overseer.Settings;
@@ -49,6 +50,7 @@ public static class OverseerServer
         builder.Services.AddSmokeTest(builder.Configuration);
         builder.Services.AddSingleton(gitHub ?? (services => new GitHubGateway(services.GetRequiredService<ISecretReader>())));
         builder.Services.AddSingleton<GitHubTokenStore>();
+        builder.Services.AddSingleton<ConfiguredRepositories>();
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(options =>

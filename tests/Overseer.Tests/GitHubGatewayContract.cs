@@ -57,6 +57,47 @@ public abstract class GitHubGatewayContract : IDisposable
         Assert.IsType<GitHubTokenCheck.Fails>(await Gateway.CheckTokenAsync(TestContext.Current.CancellationToken));
     }
 
+    /// <summary>A public repository on GitHub, which every token GitHub accepts can reach.</summary>
+    protected static readonly RepositoryName PublicRepository = new("octocat", "Hello-World");
+
+    [Fact]
+    public async Task A_repository_the_token_can_reach_is_reachable_by_GitHubs_name_for_it()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+
+        var check = await Gateway.CheckRepositoryAsync(new RepositoryName("OCTOCAT", "hello-world"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(new GitHubRepositoryCheck.Reachable(PublicRepository), check);
+    }
+
+    [Fact]
+    public async Task A_repository_that_does_not_exist_is_not_found()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+
+        var check = await Gateway.CheckRepositoryAsync(
+            new RepositoryName("octocat", $"no-such-repository-{Guid.NewGuid():N}"), TestContext.Current.CancellationToken);
+
+        Assert.IsType<GitHubRepositoryCheck.NotFound>(check);
+    }
+
+    [Fact]
+    public async Task Without_a_stored_token_a_repository_is_not_checked()
+    {
+        Assert.Null(await Gateway.CheckRepositoryAsync(PublicRepository, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task With_an_unknown_stored_token_checking_a_repository_fails_with_GitHubs_error()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, UnknownToken, TestContext.Current.CancellationToken);
+
+        var check = await Gateway.CheckRepositoryAsync(PublicRepository, TestContext.Current.CancellationToken);
+
+        var fails = Assert.IsType<GitHubRepositoryCheck.Fails>(check);
+        Assert.Contains("Bad credentials", fails.Error);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_directory))
@@ -75,6 +116,7 @@ public sealed class FakeGitHubGatewayContract : GitHubGatewayContract
     {
         _gateway = new FakeGitHubGateway(Secrets);
         _gateway.AcceptToken(WorkingToken.Token, WorkingToken.Login);
+        _gateway.AddRepository(PublicRepository.ToString());
     }
 
     protected override IGitHubGateway Gateway => _gateway;

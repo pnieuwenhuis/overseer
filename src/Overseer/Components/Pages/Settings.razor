@@ -4,10 +4,12 @@
 @using Markdig
 @using Markdig.Extensions.EmphasisExtras
 @using Overseer.GitHub
+@using Overseer.Repositories
 @using Overseer.Sandboxes
 @using Overseer.Settings
 @inject SettingsStore Store
 @inject GitHubTokenStore GitHubTokens
+@inject ConfiguredRepositories Repositories
 
 <PageTitle>Settings · Overseer</PageTitle>
 
@@ -185,6 +187,51 @@
     }
 </div>
 
+<h2>Repositories</h2>
+
+@if (_repositories is not null)
+{
+    <div class="settings-form settings-form-wide">
+        @if (_repositoryNotice is not null)
+        {
+            <p class="settings-saved" role="status">@_repositoryNotice</p>
+        }
+        @if (_repositoryError is not null)
+        {
+            <p class="settings-error" role="alert">@_repositoryError</p>
+        }
+        <p class="settings-note">The GitHub repositories that make up the software Overseer builds.</p>
+        @if (_repositories.Count == 0)
+        {
+            <p class="settings-note">No repositories are configured.</p>
+        }
+        else
+        {
+            <form method="post" @formname="repository-remove" @onsubmit="RemoveRepositoryAsync">
+                <AntiforgeryToken />
+                <ul class="configured-repositories">
+                    @foreach (var repository in _repositories)
+                    {
+                        <li>
+                            <a href="@repository.WebUrl" target="_blank" rel="noopener noreferrer">@repository</a>
+                            <button type="submit" name="RemoveRepository" value="@repository" aria-label="Remove @repository">Remove</button>
+                        </li>
+                    }
+                </ul>
+            </form>
+        }
+        <form method="post" @formname="repository-add" @onsubmit="AddRepositoryAsync" class="settings-form">
+            <AntiforgeryToken />
+            <label>
+                Repository
+                <input name="Repository" value="@_repositoryInput" placeholder="owner/name or GitHub URL" autocomplete="off" spellcheck="false" required />
+            </label>
+            <p class="settings-note">GitHub must confirm that the GitHub token can reach it.</p>
+            <button type="submit">Add</button>
+        </form>
+    </div>
+}
+
 @code {
     [CascadingParameter]
     private HttpContext HttpContext { get; set; } = default!;
@@ -260,12 +307,26 @@
     private string? _gitHubNotice;
     private string? _gitHubError;
 
+    [SupplyParameterFromForm(FormName = "repository-add")]
+    private string? Repository { get; set; }
+
+    // The Remove button pressed: the repository's owner/name.
+    [SupplyParameterFromForm(FormName = "repository-remove")]
+    private string? RemoveRepository { get; set; }
+
+    private IReadOnlyList<RepositoryName>? _repositories;
+    // What the repository field shows: empty, or what the user entered when it was refused.
+    private string? _repositoryInput;
+    private string? _repositoryNotice;
+    private string? _repositoryError;
+
     protected override async Task OnInitializedAsync()
     {
         _gitHubTokenSet = await GitHubTokens.IsSetAsync(HttpContext.RequestAborted);
         _values = await CurrentValuesAsync();
         _machine = await Store.GetSandboxMachineAsync(HttpContext.RequestAborted);
         _guidelines = await Store.GetReviewGuidelinesAsync(HttpContext.RequestAborted);
+        _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
     }
 
     private async Task SubmitGuidelinesAsync()
@@ -349,6 +410,36 @@
         await GitHubTokens.RemoveAsync(HttpContext.RequestAborted);
         _gitHubTokenSet = false;
         _gitHubNotice = "The GitHub token is removed.";
+    }
+
+    private async Task AddRepositoryAsync()
+    {
+        switch (await Repositories.AddAsync(Repository, HttpContext.RequestAborted))
+        {
+            case RepositoryAdding.Added added:
+                _repositoryNotice = $"{added.Repository} is added.";
+                break;
+            case RepositoryAdding.Refused refused:
+                _repositoryError = refused.Error;
+                _repositoryInput = Repository;
+                break;
+        }
+        _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
+    }
+
+    private async Task RemoveRepositoryAsync()
+    {
+        if (RepositoryName.TryParse(RemoveRepository, out var repository)
+            && await Repositories.RemoveAsync(repository, HttpContext.RequestAborted))
+        {
+            _repositoryNotice = $"{repository} is removed.";
+        }
+        else
+        {
+            // Removed in another tab since the page was opened.
+            _repositoryError = $"{RemoveRepository} is not a Configured Repository.";
+        }
+        _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
     }
 
     private async Task<IReadOnlyDictionary<OperatingLimit, string?>> CurrentValuesAsync()
