@@ -3,6 +3,10 @@
 <header class="shell-header">
     <span class="shell-name">Overseer @OverseerVersion.Current</span>
     <AuthorizeView>
+        <nav class="shell-nav">
+            <NavLink href="" Match="NavLinkMatch.All">Home</NavLink>
+            <NavLink href="settings">Settings</NavLink>
+        </nav>
         <form method="post" action="logout" class="shell-log-out">
             <AntiforgeryToken />
             <button type="submit">Log out</button>

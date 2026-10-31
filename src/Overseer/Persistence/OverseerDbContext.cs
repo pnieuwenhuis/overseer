@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Overseer.Sandboxes;
+using Overseer.Settings;
 
 namespace Overseer.Persistence;
 
@@ -7,6 +8,7 @@ namespace Overseer.Persistence;
 public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> options) : DbContext(options)
 {
     public DbSet<SandboxRecord> Sandboxes => Set<SandboxRecord>();
+    public DbSet<SettingRecord> Settings => Set<SettingRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -15,5 +17,6 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             sandbox.Property(record => record.OwnerKind).HasConversion<string>();
             sandbox.HasIndex(record => record.ResourceId).IsUnique();
         });
+        modelBuilder.Entity<SettingRecord>().HasKey(setting => setting.Key);
     }
 }

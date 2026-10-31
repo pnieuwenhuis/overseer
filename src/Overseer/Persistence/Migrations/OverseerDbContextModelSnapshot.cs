@@ -52,6 +52,20 @@ namespace Overseer.Persistence.Migrations
 
                     b.ToTable("Sandboxes");
                 });
+
+            modelBuilder.Entity("Overseer.Settings.SettingRecord", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("Settings");
+                });
 #pragma warning restore 612, 618
         }
     }

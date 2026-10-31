@@ -31,6 +31,12 @@
     font-weight: 600;
 }
 
+.shell-nav {
+    display: flex;
+    gap: 1rem;
+    margin-left: 2rem;
+}
+
 .shell-log-out {
     margin: 0 0 0 auto;
 }

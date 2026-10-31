@@ -18,19 +18,12 @@ public sealed class PortalBrowser : IDisposable
 
     /// <summary>Fills in and submits the login form, the way a browser would.</summary>
     /// <param name="loginPage">The login page's address, including the query Overseer redirected with.</param>
-    public async Task<HttpResponseMessage> LogInAsync(string username, string password, string loginPage = "/login")
-    {
-        var form = await Http.GetStringAsync(loginPage, TestContext.Current.CancellationToken);
-        var antiforgeryToken = AntiforgeryToken(form);
-
-        return await Http.PostAsync(loginPage, new FormUrlEncodedContent(new Dictionary<string, string>
+    public Task<HttpResponseMessage> LogInAsync(string username, string password, string loginPage = "/login") =>
+        SubmitFormAsync(loginPage, "login", new Dictionary<string, string>
         {
-            ["_handler"] = "login",
-            ["__RequestVerificationToken"] = antiforgeryToken,
             ["Username"] = username,
             ["Password"] = password,
-        }), TestContext.Current.CancellationToken);
-    }
+        });
 
     /// <summary>Uses the "Log out" button in the header of the Portal's home page, the way a browser would.</summary>
     public async Task<HttpResponseMessage> LogOutAsync()
@@ -42,6 +35,20 @@ public sealed class PortalBrowser : IDisposable
 
         return await Http.PostAsync("/logout", new FormUrlEncodedContent(new Dictionary<string, string>
         {
+            ["__RequestVerificationToken"] = antiforgeryToken,
+        }), TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>Opens a Portal page and submits one of its forms with the given fields, the way a browser would.</summary>
+    /// <param name="formName">The form's <c>@formname</c>.</param>
+    public async Task<HttpResponseMessage> SubmitFormAsync(string page, string formName, IReadOnlyDictionary<string, string> fields)
+    {
+        var form = await Http.GetStringAsync(page, TestContext.Current.CancellationToken);
+        var antiforgeryToken = AntiforgeryToken(form);
+
+        return await Http.PostAsync(page, new FormUrlEncodedContent(new Dictionary<string, string>(fields)
+        {
+            ["_handler"] = formName,
             ["__RequestVerificationToken"] = antiforgeryToken,
         }), TestContext.Current.CancellationToken);
     }

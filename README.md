@@ -97,17 +97,30 @@ You need the .NET 10 SDK and Docker.
 
 Schema migrations are applied at startup, so an empty database gets the schema on the first run and later runs change nothing.
 
+## Settings
+
+The Portal's Settings page (in the navigation) holds what you change while Overseer runs. They are stored in PostgreSQL, so they survive restarts and upgrades; secrets are not settings and stay in the secret store (see [Secrets](#secrets)). Server-side code reads them through `SettingsStore`, which goes to the database on every read, so a saved change applies without a restart, and returns a setting's default while none is saved.
+
+The operating limits are whole numbers, each from 1 to a maximum. Saving rejects a value that is missing, not a whole number or out of range, says why, and then saves none of them:
+
+| Operating limit                | Default    | Maximum     |
+| ------------------------------ | ---------- | ----------- |
+| Maximum Active Intents         | 2          | 10          |
+| Refinement idle timeout        | 30 minutes | 480 minutes |
+| Verification attempts per Task | 3          | 10          |
+| Maximum Sandbox lifetime       | 12 hours   | 48 hours    |
+
 ## Configuration
 
-Settings are layered. Later layers override earlier ones:
+Configuration is what `serve` needs before it starts, unlike the Settings page. It is layered. Later layers override earlier ones:
 
 1. **Defaults**: `appsettings.json` next to the executable, plus `appsettings.Development.json` in the Development environment.
 2. **Local config file**: `~/.config/overseer/config.json` (`$XDG_CONFIG_HOME/overseer/config.json` when that is set). Set `OVERSEER_CONFIG_FILE` to use another path.
 3. **Environment variables** prefixed with `OVERSEER_`, with `__` separating sections.
 
-Other environment variables aren't read as settings. The only exception is `ASPNETCORE_ENVIRONMENT`, which picks the environment (Production when unset).
+Other environment variables aren't read as configuration. The only exception is `ASPNETCORE_ENVIRONMENT`, which picks the environment (Production when unset).
 
-| Setting          | Config file key                   | Environment variable                        | Default                                                                                     |
+| Configuration    | Config file key                   | Environment variable                        | Default                                                                                     |
 | ---------------- | --------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Database         | `ConnectionStrings:Overseer`      | `OVERSEER_CONNECTIONSTRINGS__OVERSEER`      | none; `serve` exits with a message when it is missing (the compose database in Development) |
 | Listen address   | `Urls`                            | `OVERSEER_URLS`                             | `http://localhost:5080`                                                                     |

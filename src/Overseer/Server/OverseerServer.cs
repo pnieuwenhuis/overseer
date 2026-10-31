@@ -7,6 +7,7 @@ using Overseer.Login;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
 using Overseer.Secrets;
+using Overseer.Settings;
 
 namespace Overseer.Server;
 
@@ -34,6 +35,7 @@ public static class OverseerServer
         }
 
         builder.Services.AddDatabase(builder.Configuration);
+        builder.Services.AddSingleton<SettingsStore>();
 
         builder.Services.AddSingleton(services => UserCredential.FromConfiguration(services.GetRequiredService<IConfiguration>()));
         builder.Services.AddSingleton<AccountLockout>();

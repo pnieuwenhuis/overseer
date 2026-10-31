@@ -1,0 +1,90 @@
+@page "/settings"
+@attribute [ExcludeFromInteractiveRouting]
+@using System.Globalization
+@using Overseer.Settings
+@inject SettingsStore Store
+
+<PageTitle>Settings · Overseer</PageTitle>
+
+<h1>Settings</h1>
+
+<h2>Operating limits</h2>
+
+@if (_values is not null)
+{
+    <form method="post" @formname="operating-limits" @onsubmit="SaveAsync" class="settings-form">
+        <AntiforgeryToken />
+        @if (_saved)
+        {
+            <p class="settings-saved" role="status">The operating limits are saved.</p>
+        }
+        @foreach (var (limit, field) in Fields)
+        {
+            <label>
+                @limit.Name
+                <span class="settings-value">
+                    <input name="@field" value="@_values[limit]" type="number" min="1" max="@limit.Maximum" step="1" required />
+                    @limit.Unit
+                </span>
+                @if (_errors.TryGetValue(limit, out var error))
+                {
+                    <span class="settings-error" role="alert">@error</span>
+                }
+            </label>
+        }
+        <button type="submit">Save</button>
+    </form>
+}
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [SupplyParameterFromForm(FormName = "operating-limits")]
+    private string? MaxActiveIntents { get; set; }
+
+    [SupplyParameterFromForm(FormName = "operating-limits")]
+    private string? RefinementIdleTimeout { get; set; }
+
+    [SupplyParameterFromForm(FormName = "operating-limits")]
+    private string? VerificationAttemptsPerTask { get; set; }
+
+    [SupplyParameterFromForm(FormName = "operating-limits")]
+    private string? MaxSandboxLifetime { get; set; }
+
+    // The form field of each operating limit.
+    private static readonly (OperatingLimit Limit, string Field)[] Fields =
+    [
+        (OperatingLimit.MaxActiveIntents, nameof(MaxActiveIntents)),
+        (OperatingLimit.RefinementIdleTimeout, nameof(RefinementIdleTimeout)),
+        (OperatingLimit.VerificationAttemptsPerTask, nameof(VerificationAttemptsPerTask)),
+        (OperatingLimit.MaxSandboxLifetime, nameof(MaxSandboxLifetime)),
+    ];
+
+    // What the form shows: the current values, or what was submitted when it was rejected.
+    private IReadOnlyDictionary<OperatingLimit, string?>? _values;
+    private IReadOnlyDictionary<OperatingLimit, string> _errors = new Dictionary<OperatingLimit, string>();
+    private bool _saved;
+
+    protected override async Task OnInitializedAsync() => _values = await CurrentValuesAsync();
+
+    private async Task SaveAsync()
+    {
+        var submitted = new Dictionary<OperatingLimit, string?>
+        {
+            [OperatingLimit.MaxActiveIntents] = MaxActiveIntents,
+            [OperatingLimit.RefinementIdleTimeout] = RefinementIdleTimeout,
+            [OperatingLimit.VerificationAttemptsPerTask] = VerificationAttemptsPerTask,
+            [OperatingLimit.MaxSandboxLifetime] = MaxSandboxLifetime,
+        };
+        _errors = await Store.SaveOperatingLimitsAsync(submitted, HttpContext.RequestAborted);
+        _saved = _errors.Count == 0;
+        _values = _saved ? await CurrentValuesAsync() : submitted;
+    }
+
+    private async Task<IReadOnlyDictionary<OperatingLimit, string?>> CurrentValuesAsync()
+    {
+        var current = await Store.GetOperatingLimitValuesAsync(HttpContext.RequestAborted);
+        return current.ToDictionary(pair => pair.Key, pair => (string?)pair.Value.ToString(CultureInfo.InvariantCulture));
+    }
+}
