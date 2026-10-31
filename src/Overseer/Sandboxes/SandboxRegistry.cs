@@ -32,6 +32,11 @@ public sealed class SandboxRegistry(
         return sandbox;
     }
 
+    /// <summary>Starts an agent in the given role, with the agent harness configuration the Settings hold now.</summary>
+    /// <inheritdoc cref="ISandboxProvider.StartAgentSessionAsync"/>
+    public async Task<IAgentSession> StartAgentSessionAsync(Sandbox sandbox, AgentRole role, CancellationToken cancellationToken) =>
+        await provider.StartAgentSessionAsync(sandbox, role, await settings.GetAgentHarnessAsync(cancellationToken), cancellationToken);
+
     /// <summary>Destroys the Sandbox and records when; the record itself is kept.</summary>
     public async Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken)
     {

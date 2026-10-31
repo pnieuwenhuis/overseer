@@ -62,6 +62,43 @@ public sealed class SettingsStore(IDbContextFactory<OverseerDbContext> databases
     public Task SaveReviewGuidelinesAsync(string? guidelines, CancellationToken cancellationToken) =>
         SaveAsync(new Dictionary<string, string> { [ReviewGuidelinesKey] = ReviewGuidelines.FromEditor(guidelines) }, cancellationToken);
 
+    private const string AgentHarnessKey = "Agents:Harness";
+
+    /// <summary>
+    /// The agent harness configuration agent sessions start with now; Overseer's default while none was saved, or if the
+    /// saved one is no longer valid.
+    /// </summary>
+    public async Task<AgentHarnessConfiguration> GetAgentHarnessAsync(CancellationToken cancellationToken)
+    {
+        var saved = await ReadAsync([AgentHarnessKey], cancellationToken);
+        return saved.TryGetValue(AgentHarnessKey, out var json) && AgentHarnessConfiguration.TryParse(json, out var harness, out _)
+            ? harness
+            : AgentHarnessConfiguration.Default;
+    }
+
+    /// <summary>Saves the agent harness configuration as the user wrote it; nothing if it isn't valid.</summary>
+    /// <returns>Why the configuration was rejected; null when it was saved.</returns>
+    public async Task<string?> SaveAgentHarnessAsync(string? json, CancellationToken cancellationToken)
+    {
+        if (!AgentHarnessConfiguration.TryParse(json, out var harness, out var error))
+        {
+            return error;
+        }
+        await SaveAsync(new Dictionary<string, string> { [AgentHarnessKey] = harness.Json }, cancellationToken);
+        return null;
+    }
+
+    /// <summary>Goes back to Overseer's default agent harness configuration, including the changes later versions make to it.</summary>
+    public Task RestoreDefaultAgentHarnessAsync(CancellationToken cancellationToken) => RemoveAsync(AgentHarnessKey, cancellationToken);
+
+    /// <summary>Changes the model of each role in the current agent harness configuration and saves it; nothing if a model is empty.</summary>
+    /// <returns>Why the models were rejected; null when they were saved.</returns>
+    public async Task<string?> SaveAgentModelsAsync(IReadOnlyDictionary<AgentRole, string?> models, CancellationToken cancellationToken)
+    {
+        var current = await GetAgentHarnessAsync(cancellationToken);
+        return await SaveAgentHarnessAsync(current.WithModels(models), cancellationToken);
+    }
+
     /// <summary>The current value of each operating limit, in its unit; its default if the saved value is no longer valid.</summary>
     public async Task<IReadOnlyDictionary<OperatingLimit, int>> GetOperatingLimitValuesAsync(CancellationToken cancellationToken)
     {
@@ -107,6 +144,13 @@ public sealed class SettingsStore(IDbContextFactory<OverseerDbContext> databases
         return await database.Settings
             .Where(setting => keys.Contains(setting.Key))
             .ToDictionaryAsync(setting => setting.Key, setting => setting.Value, cancellationToken);
+    }
+
+    /// <summary>Forgets a setting's saved value, so it has its default again.</summary>
+    private async Task RemoveAsync(string key, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await database.Settings.Where(setting => setting.Key == key).ExecuteDeleteAsync(cancellationToken);
     }
 
     /// <summary>Saves the settings together, in one transaction.</summary>

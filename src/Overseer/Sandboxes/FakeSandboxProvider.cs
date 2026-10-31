@@ -10,6 +10,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     private readonly ConcurrentDictionary<string, Sequence<CommandResult>> _commands = new();
     private readonly ConcurrentDictionary<AgentRole, Sequence<FakeAgentSession>> _agentSessions = new();
     private readonly ConcurrentQueue<string> _creationFailures = new();
+    private readonly ConcurrentQueue<AgentSessionStart> _agentSessionsStarted = new();
 
     /// <summary>Makes the next creation fail with <paramref name="error"/>. Call it again to fail the one after as well.</summary>
     public void FailNextCreation(string error) => _creationFailures.Enqueue(error);
@@ -28,6 +29,9 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
 
     /// <summary>How long creating a Sandbox takes, success or failure, like a VM booting. None by default.</summary>
     public TimeSpan ProvisioningDelay { get; set; } = TimeSpan.Zero;
+
+    /// <summary>What each agent session was started with, in the order they started, also after they stopped.</summary>
+    public IReadOnlyList<AgentSessionStart> AgentSessionsStarted => [.. _agentSessionsStarted];
 
     /// <summary>The machine the Sandbox was created on, also after it has been destroyed.</summary>
     /// <exception cref="InvalidOperationException">This provider never created the Sandbox.</exception>
@@ -57,9 +61,11 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         return Task.FromResult(_commands.TryGetValue(command, out var results) ? results.Next() : new CommandResult(0, ""));
     }
 
-    public Task<IAgentSession> StartAgentSessionAsync(Sandbox sandbox, AgentRole role, CancellationToken cancellationToken)
+    public Task<IAgentSession> StartAgentSessionAsync(
+        Sandbox sandbox, AgentRole role, AgentHarnessConfiguration harness, CancellationToken cancellationToken)
     {
         EnsureExists(sandbox);
+        _agentSessionsStarted.Enqueue(new AgentSessionStart(sandbox, role, harness.Json, harness.ModelOf(role)));
         var script = _agentSessions.TryGetValue(role, out var sessions) ? sessions.Next() : new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()));
         return Task.FromResult<IAgentSession>(new ScriptedAgentSession(script));
     }
@@ -122,6 +128,11 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         }
     }
 }
+
+/// <summary>An agent session the fake started, with what a real one would hand the agent.</summary>
+/// <param name="HarnessJson">The <c>opencode.json</c> the agent runs with.</param>
+/// <param name="Model">The model of the role's agent in that configuration.</param>
+public sealed record AgentSessionStart(Sandbox Sandbox, AgentRole Role, string HarnessJson, string Model);
 
 /// <summary>A scripted agent session: its turns in order, the last one repeating.</summary>
 public sealed record FakeAgentSession(params FakeAgentTurn[] Turns);

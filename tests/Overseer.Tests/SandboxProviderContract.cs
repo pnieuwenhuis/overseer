@@ -86,7 +86,7 @@ public abstract class SandboxProviderContract : IAsyncDisposable
         Assert.SkipWhen(AgentSessionsSkipReason is not null, AgentSessionsSkipReason ?? "");
         var sandbox = await CreateAsync(NewIntent());
         GivenAgentSession(AgentRole.Developer, (["READY"], new AgentOutcome.Done()));
-        await using var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, TestContext.Current.CancellationToken);
+        await using var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, AgentHarnessConfiguration.Default, TestContext.Current.CancellationToken);
 
         var turn = await session.SendAsync("Reply with the word READY, then finish without changing anything.", TestContext.Current.CancellationToken);
 
@@ -103,7 +103,7 @@ public abstract class SandboxProviderContract : IAsyncDisposable
         GivenAgentSession(AgentRole.Analyst,
             (["Which colour do you prefer?"], new AgentOutcome.AskedQuestion("Which colour do you prefer?")),
             (["You prefer Blue."], new AgentOutcome.Done()));
-        await using var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Analyst, TestContext.Current.CancellationToken);
+        await using var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Analyst, AgentHarnessConfiguration.Default, TestContext.Current.CancellationToken);
 
         var asking = await session.SendAsync("Ask me which colour I prefer, then wait for my answer.", TestContext.Current.CancellationToken);
         await asking.Updates.ToListAsync(TestContext.Current.CancellationToken);
@@ -121,7 +121,7 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     {
         Assert.SkipWhen(AgentSessionsSkipReason is not null, AgentSessionsSkipReason ?? "");
         var sandbox = await CreateAsync(NewIntent());
-        var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, TestContext.Current.CancellationToken);
+        var session = await Provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, AgentHarnessConfiguration.Default, TestContext.Current.CancellationToken);
 
         await session.DisposeAsync();
 

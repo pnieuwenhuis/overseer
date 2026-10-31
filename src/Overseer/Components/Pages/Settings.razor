@@ -110,6 +110,67 @@
     </section>
 }
 
+<h2>Agents</h2>
+
+@if (_harness is not null)
+{
+    <div class="settings-form settings-form-wide">
+        <p class="settings-note">
+            The agent harness configuration: the <code>opencode.json</code> every agent session starts with. A change applies
+            to the sessions started after it is saved.
+        </p>
+        <form method="post" @formname="agent-models" @onsubmit="SaveModelsAsync" class="settings-form">
+            <AntiforgeryToken />
+            <h3>Models</h3>
+            @if (_modelsSaved)
+            {
+                <p class="settings-saved" role="status">The models are saved.</p>
+            }
+            @if (_modelsError is not null)
+            {
+                <p class="settings-error" role="alert">@_modelsError</p>
+            }
+            @foreach (var (role, field) in ModelFields)
+            {
+                <label>
+                    @role
+                    <input name="@field" value="@_harness.ModelOf(role)" list="agent-model-suggestions" autocomplete="off" spellcheck="false" required />
+                </label>
+            }
+            <datalist id="agent-model-suggestions">
+                @foreach (var model in ModelSuggestions)
+                {
+                    <option value="@model"></option>
+                }
+            </datalist>
+            <p class="settings-note">As OpenCode names them: <code>provider/model</code>. Saving changes them in <code>opencode.json</code>.</p>
+            <button type="submit">Save models</button>
+        </form>
+        <form method="post" @formname="agent-harness" @onsubmit="SaveHarnessAsync" class="settings-form settings-form-wide">
+            <AntiforgeryToken />
+            <h3><code>opencode.json</code></h3>
+            @if (_harnessNotice is not null)
+            {
+                <p class="settings-saved" role="status">@_harnessNotice</p>
+            }
+            @if (_harnessError is not null)
+            {
+                <p class="settings-error" role="alert">@_harnessError</p>
+            }
+            <label>
+                JSON
+                <textarea name="AgentHarness" rows="24" spellcheck="false">@_harnessJson</textarea>
+            </label>
+            <button type="submit">Save</button>
+        </form>
+        <form method="post" @formname="agent-harness-default" @onsubmit="RestoreDefaultHarnessAsync" class="settings-form">
+            <AntiforgeryToken />
+            <p class="settings-note">Overseer's own configuration, which sets a model for every role, replaces yours.</p>
+            <button type="submit">Restore the default</button>
+        </form>
+    </div>
+}
+
 <h2>GitHub</h2>
 
 <div class="settings-form">
@@ -292,6 +353,45 @@
         .DisableHtml()
         .Build();
 
+    // The agent harness configuration in use, which the model pickers show; the editor shows its JSON, or what was submitted
+    // when it was rejected.
+    private AgentHarnessConfiguration? _harness;
+    private string? _harnessJson;
+    private string? _harnessError;
+    private string? _harnessNotice;
+
+    [SupplyParameterFromForm(FormName = "agent-harness")]
+    private string? AgentHarness { get; set; }
+
+    [SupplyParameterFromForm(FormName = "agent-models")]
+    private string? AnalystModel { get; set; }
+
+    [SupplyParameterFromForm(FormName = "agent-models")]
+    private string? DesignerModel { get; set; }
+
+    [SupplyParameterFromForm(FormName = "agent-models")]
+    private string? DeveloperModel { get; set; }
+
+    [SupplyParameterFromForm(FormName = "agent-models")]
+    private string? ReviewerModel { get; set; }
+
+    // The model picker field of each role.
+    private static readonly (AgentRole Role, string Field)[] ModelFields =
+    [
+        (AgentRole.Analyst, nameof(AnalystModel)),
+        (AgentRole.Designer, nameof(DesignerModel)),
+        (AgentRole.Developer, nameof(DeveloperModel)),
+        (AgentRole.Reviewer, nameof(ReviewerModel)),
+    ];
+
+    private string? _modelsError;
+    private bool _modelsSaved;
+
+    // The models the pickers suggest: those in use and those of Overseer's default.
+    private IEnumerable<string> ModelSuggestions =>
+        Enum.GetValues<AgentRole>().SelectMany(role => new[] { _harness!.ModelOf(role), AgentHarnessConfiguration.Default.ModelOf(role) })
+            .Distinct().Order(StringComparer.Ordinal);
+
     [SupplyParameterFromForm(FormName = "github-token")]
     private string? GitHubToken { get; set; }
 
@@ -326,6 +426,7 @@
         _values = await CurrentValuesAsync();
         _machine = await Store.GetSandboxMachineAsync(HttpContext.RequestAborted);
         _guidelines = await Store.GetReviewGuidelinesAsync(HttpContext.RequestAborted);
+        await LoadHarnessAsync();
         _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
     }
 
@@ -342,6 +443,49 @@
             // Previewed as saving would keep them.
             _guidelines = Overseer.Settings.ReviewGuidelines.FromEditor(ReviewGuidelines);
         }
+    }
+
+    private async Task SaveModelsAsync()
+    {
+        var picked = new Dictionary<AgentRole, string?>
+        {
+            [AgentRole.Analyst] = AnalystModel,
+            [AgentRole.Designer] = DesignerModel,
+            [AgentRole.Developer] = DeveloperModel,
+            [AgentRole.Reviewer] = ReviewerModel,
+        };
+        _modelsError = await Store.SaveAgentModelsAsync(picked, HttpContext.RequestAborted);
+        _modelsSaved = _modelsError is null;
+        await LoadHarnessAsync();
+    }
+
+    private async Task SaveHarnessAsync()
+    {
+        _harnessError = await Store.SaveAgentHarnessAsync(AgentHarness, HttpContext.RequestAborted);
+        await LoadHarnessAsync();
+        if (_harnessError is null)
+        {
+            _harnessNotice = "The agent harness configuration is saved.";
+        }
+        else
+        {
+            // Shown again for correction, with the line breaks it would be saved with.
+            _harnessJson = AgentHarness?.ReplaceLineEndings("\n");
+        }
+    }
+
+    private async Task RestoreDefaultHarnessAsync()
+    {
+        await Store.RestoreDefaultAgentHarnessAsync(HttpContext.RequestAborted);
+        _harnessNotice = "The default agent harness configuration is restored.";
+        await LoadHarnessAsync();
+    }
+
+    // Shows the agent harness configuration in use, in the pickers and the editor.
+    private async Task LoadHarnessAsync()
+    {
+        _harness = await Store.GetAgentHarnessAsync(HttpContext.RequestAborted);
+        _harnessJson = _harness.Json;
     }
 
     private async Task SaveAsync()
