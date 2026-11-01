@@ -381,6 +381,8 @@
             }
             <p class="settings-note">
                 Overseer creates it on GitHub, private and empty, with the GitHub token, and adds it to the Configured Repositories.
+                Then an agent writes its starter README, agent guidance (AGENTS.md) and Repository Manifest (.overseer.yml)
+                in a Sandbox, and pushes them to main.
             </p>
             <span class="settings-buttons">
                 <label>
@@ -402,6 +404,7 @@
             </label>
             <button type="submit">Create</button>
         </form>
+        <RepositorySetupProgress @rendermode="InteractiveServer" />
     </div>
 }
 
@@ -757,7 +760,8 @@
         switch (await Setups.StartAsync(SetupOwner, SetupName, SetupPurpose, SetupTechStack, HttpContext.RequestAborted))
         {
             case RepositorySetupStarting.Started started:
-                _repositoryNotice = $"{started.Setup.Repository} is created on GitHub and added to the Configured Repositories.";
+                _repositoryNotice =
+                    $"{started.Setup.Repository} is created on GitHub and added to the Configured Repositories. An agent now writes its starter files.";
                 break;
             case RepositorySetupStarting.Refused refused:
                 _setupError = refused.Error;

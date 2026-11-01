@@ -1,25 +1,105 @@
+using System.Collections.Concurrent;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Overseer.GitHub;
 using Overseer.Persistence;
+using Overseer.Sandboxes;
 
 namespace Overseer.Repositories;
 
 /// <summary>
 /// Repository Setups, kept in PostgreSQL: each creates a new GitHub repository through the GitHub Gateway and makes it a
-/// Configured Repository, and keeps the purpose and tech stack the user stated for the agent that writes its starter
-/// files. A Repository Setup is not an Intent, and takes no Active Intent slot.
+/// Configured Repository, then has an agent write its starter files in the background (<see cref="StarterFiles"/>). A
+/// Repository Setup is not an Intent, and takes no Active Intent slot.
 /// </summary>
-public sealed class RepositorySetups(IDbContextFactory<OverseerDbContext> databases, IGitHubGateway gitHub, TimeProvider time)
+public sealed class RepositorySetups(
+    IDbContextFactory<OverseerDbContext> databases, IGitHubGateway gitHub, StarterFiles starterFiles, SandboxRegistry sandboxes,
+    TimeProvider time, ILogger<RepositorySetups> logger) : IHostedService
 {
+    // Cancelled when serve stops: the agent parts running then are interrupted, and the next start marks them failed.
+    private readonly CancellationTokenSource _stopping = new();
+
+    // What runs in the background, which stopping waits for.
+    private readonly ConcurrentDictionary<Task, bool> _running = new();
+
+    /// <summary>
+    /// Marks the Repository Setups that a stop of serve interrupted as failed, so they can be retried, and destroys the
+    /// Sandboxes they left behind. Runs as serve starts, before the Portal takes requests, so no Retry comes first.
+    /// </summary>
+    async Task IHostedService.StartAsync(CancellationToken cancellationToken)
+    {
+        await using (var database = await databases.CreateDbContextAsync(cancellationToken))
+        {
+            var interrupted = await database.RepositorySetups
+                .Where(setup => setup.Phase == RepositorySetupPhase.ProvisioningSandbox || setup.Phase == RepositorySetupPhase.AgentWorking)
+                .ToListAsync(cancellationToken);
+            foreach (var setup in interrupted)
+            {
+                setup.Error = setup.Phase == RepositorySetupPhase.ProvisioningSandbox
+                    ? "Overseer restarted while a Sandbox was being provisioned for the agent. Retry to start the agent again."
+                    : "Overseer restarted while the agent was writing the starter files. Retry to start the agent again.";
+                setup.Phase = RepositorySetupPhase.Failed;
+            }
+            await database.SaveChangesAsync(cancellationToken);
+        }
+
+        // No Repository Setup runs yet, so every Sandbox one owns is left over, from a crash or a failed destruction.
+        // Those are listed now, before a Retry creates a new one, but destroyed in the background: in Azure that takes minutes.
+        var leftOver = await sandboxes.ListRecordedAsync(SandboxOwnerKind.RepositorySetup, cancellationToken);
+        if (leftOver.Count > 0)
+        {
+            Track(Task.Run(async () =>
+            {
+                foreach (var sandbox in leftOver)
+                {
+                    try
+                    {
+                        await sandboxes.DestroyAsync(sandbox, _stopping.Token);
+                    }
+                    catch (Exception exception) when (!_stopping.IsCancellationRequested)
+                    {
+                        logger.LogError(exception, "The left-over Sandbox {Sandbox} of a Repository Setup could not be destroyed.", sandbox.ResourceId);
+                    }
+                }
+            }));
+        }
+    }
+
+    async Task IHostedService.StopAsync(CancellationToken cancellationToken)
+    {
+        await _stopping.CancelAsync();
+        try
+        {
+            await Task.WhenAll(_running.Keys).WaitAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is OperationCanceledException or AggregateException)
+        {
+            // Stopping no longer waits; the next start marks what was running failed and destroys its Sandboxes.
+        }
+    }
+
+    private void Track(Task task)
+    {
+        _running[task] = true;
+        task.ContinueWith(done => _running.TryRemove(done, out _), TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Raised whenever a Repository Setup starts or changes phase, on the thread that changed it. Handlers must not
+    /// throw; read the Repository Setups again with <see cref="ListAsync"/>.
+    /// </summary>
+    public event Action? Changed;
+
     /// <summary>Every Repository Setup, the latest first.</summary>
     public async Task<IReadOnlyList<RepositorySetup>> ListAsync(CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         var stored = await database.RepositorySetups.OrderByDescending(setup => setup.StartedAt).ToListAsync(cancellationToken);
-        return [.. stored.Select(setup => new RepositorySetup(
-            setup.Id, RepositoryName.Parse(setup.Repository), setup.Purpose, setup.TechStack, setup.StartedAt))];
+        return [.. stored.Select(ToSetup)];
     }
+
+    private static RepositorySetup ToSetup(RepositorySetupRecord stored) => new(
+        stored.Id, RepositoryName.Parse(stored.Repository), stored.Purpose, stored.TechStack, stored.StartedAt, stored.Phase, stored.Error);
 
     /// <summary>
     /// Starts a Repository Setup for the new repository the user described: GitHub creates it, and only then is it
@@ -50,7 +130,8 @@ public sealed class RepositorySetups(IDbContextFactory<OverseerDbContext> databa
         switch (await gitHub.CreateRepositoryAsync(repository, cancellationToken))
         {
             case GitHubRepositoryCreation.Created created:
-                var setup = new RepositorySetup(Guid.NewGuid(), created.Repository, purpose, techStack, time.GetUtcNow());
+                var setup = new RepositorySetup(
+                    Guid.NewGuid(), created.Repository, purpose, techStack, time.GetUtcNow(), RepositorySetupPhase.ProvisioningSandbox, Error: null);
                 try
                 {
                     // The repository exists on GitHub now, so it is registered even if the user stops waiting.
@@ -62,6 +143,8 @@ public sealed class RepositorySetups(IDbContextFactory<OverseerDbContext> databa
                         $"GitHub created {created.Repository}, but Overseer could not register it: {exception.Message} " +
                         "Add it as a Configured Repository to use it.");
                 }
+                Changed?.Invoke();
+                Run(setup);
                 return new RepositorySetupStarting.Started(setup);
             case null:
                 return new RepositorySetupStarting.Refused("Set a GitHub token first: Overseer creates the repository on GitHub with it.");
@@ -70,6 +153,81 @@ public sealed class RepositorySetups(IDbContextFactory<OverseerDbContext> databa
             default:
                 throw new InvalidOperationException("GitHub either creates the repository or fails.");
         }
+    }
+
+    /// <summary>
+    /// Starts the agent part of a failed Repository Setup again, in a new Sandbox. The repository GitHub created is kept,
+    /// with whatever the agent pushed to it.
+    /// </summary>
+    /// <returns>Whether it started again: not when no such Repository Setup exists, or it hasn't failed.</returns>
+    public async Task<bool> RetryAsync(Guid id, CancellationToken cancellationToken)
+    {
+        RepositorySetup setup;
+        await using (var database = await databases.CreateDbContextAsync(cancellationToken))
+        {
+            // Only one of two Retries pressed at once finds it failed.
+            var retried = await database.RepositorySetups
+                .Where(record => record.Id == id && record.Phase == RepositorySetupPhase.Failed)
+                .ExecuteUpdateAsync(record => record
+                    .SetProperty(r => r.Phase, RepositorySetupPhase.ProvisioningSandbox)
+                    .SetProperty(r => r.Error, (string?)null), cancellationToken);
+            if (retried == 0)
+            {
+                return false;
+            }
+            var stored = await database.RepositorySetups.AsNoTracking().SingleAsync(record => record.Id == id, CancellationToken.None);
+            setup = ToSetup(stored);
+        }
+        Changed?.Invoke();
+        Run(setup);
+        return true;
+    }
+
+    /// <summary>Runs the Repository Setup's agent part in the background, from the phase of provisioning the Sandbox.</summary>
+    private void Run(RepositorySetup setup) => Track(Task.Run(async () =>
+    {
+        string? error;
+        try
+        {
+            error = await starterFiles.WriteAsync(
+                setup, () => EnterPhaseAsync(setup.Id, RepositorySetupPhase.AgentWorking, error: null, _stopping.Token), _stopping.Token);
+        }
+        catch (Exception exception) when (!_stopping.IsCancellationRequested)
+        {
+            logger.LogError(exception, "The Repository Setup of {Repository} failed.", setup.Repository);
+            error = exception.Message;
+        }
+        catch (Exception)
+        {
+            error = "";
+        }
+        // A failure as serve stops, such as an agent session the stop broke off, is the stop's doing: the phase is left
+        // as it is, and the next start marks the Repository Setup failed because of the restart.
+        if (error is not null && _stopping.IsCancellationRequested)
+        {
+            logger.LogWarning("Overseer stopped during the Repository Setup of {Repository}.", setup.Repository);
+            return;
+        }
+        try
+        {
+            await EnterPhaseAsync(setup.Id, error is null ? RepositorySetupPhase.Done : RepositorySetupPhase.Failed, error, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            // The next start of serve marks it failed.
+            logger.LogError(exception, "The Repository Setup of {Repository} could not be marked finished.", setup.Repository);
+        }
+    }));
+
+    private async Task EnterPhaseAsync(Guid id, RepositorySetupPhase phase, string? error, CancellationToken cancellationToken)
+    {
+        await using (var database = await databases.CreateDbContextAsync(cancellationToken))
+        {
+            await database.RepositorySetups
+                .Where(setup => setup.Id == id)
+                .ExecuteUpdateAsync(setup => setup.SetProperty(s => s.Phase, phase).SetProperty(s => s.Error, error), cancellationToken);
+        }
+        Changed?.Invoke();
     }
 
     /// <summary>Registers the Repository Setup's repository as a Configured Repository and keeps the Repository Setup, at once.</summary>
@@ -87,14 +245,38 @@ public sealed class RepositorySetups(IDbContextFactory<OverseerDbContext> databa
             Purpose = setup.Purpose,
             TechStack = setup.TechStack,
             StartedAt = setup.StartedAt,
+            Phase = setup.Phase,
         });
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 }
 
-/// <summary>A Repository Setup: the new repository, as GitHub names it, and what the user stated it is for and built with.</summary>
-public sealed record RepositorySetup(Guid Id, RepositoryName Repository, string Purpose, string TechStack, DateTimeOffset StartedAt);
+/// <summary>
+/// A Repository Setup: the new repository, as GitHub names it, what the user stated it is for and built with, and how far
+/// the agent part has come.
+/// </summary>
+/// <param name="Error">Why it failed; <c>null</c> unless <paramref name="Phase"/> is <see cref="RepositorySetupPhase.Failed"/>.</param>
+public sealed record RepositorySetup(
+    Guid Id, RepositoryName Repository, string Purpose, string TechStack, DateTimeOffset StartedAt, RepositorySetupPhase Phase, string? Error);
+
+/// <summary>
+/// Where a Repository Setup is, once GitHub has created its repository: a Repository Setup is kept only from then on.
+/// </summary>
+public enum RepositorySetupPhase
+{
+    /// <summary>Creating the Sandbox the agent works in, which takes minutes in Azure.</summary>
+    ProvisioningSandbox,
+
+    /// <summary>The agent is writing the starter files and pushing them to main.</summary>
+    AgentWorking,
+
+    /// <summary>The starter files, including the Repository Manifest, are on main.</summary>
+    Done,
+
+    /// <summary>The agent part failed; it can be retried.</summary>
+    Failed,
+}
 
 /// <summary>What starting a Repository Setup did.</summary>
 public abstract record RepositorySetupStarting
@@ -121,4 +303,8 @@ public sealed class RepositorySetupRecord
     public required string Purpose { get; init; }
     public required string TechStack { get; init; }
     public required DateTimeOffset StartedAt { get; init; }
+    public required RepositorySetupPhase Phase { get; set; }
+
+    /// <summary>Why the Repository Setup failed, when it did.</summary>
+    public string? Error { get; set; }
 }

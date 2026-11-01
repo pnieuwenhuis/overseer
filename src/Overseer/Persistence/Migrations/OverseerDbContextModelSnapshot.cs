@@ -40,6 +40,13 @@ namespace Overseer.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Error")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Phase")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("Purpose")
                         .IsRequired()
                         .HasColumnType("text");

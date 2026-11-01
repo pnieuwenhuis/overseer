@@ -73,7 +73,7 @@ The succession of agents that carry out the Tasks of one Intent's Approved Spec,
 _Avoid_: Team, crew
 
 **Sandbox**:
-A temporary, isolated machine holding the Repositories in scope, in which agents work on an Intent. Refinement gets its own; implementation and review share one for the rest of the Intent's life, until it is Paused, Cancelled or Done.
+A temporary, isolated machine holding the Repositories in scope, in which agents work on an Intent, or on a Repository Setup's new repository. Refinement gets its own; implementation and review share one for the rest of the Intent's life, until it is Paused, Cancelled or Done.
 _Avoid_: VM, workspace, environment, container
 
 ### Lifecycle

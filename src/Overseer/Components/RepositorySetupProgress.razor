@@ -1,0 +1,84 @@
+@* The Repository Setups and how far each has come, updated live as their phases change. *@
+@using Overseer.Repositories
+@implements IDisposable
+@inject RepositorySetups Setups
+
+@if (_setups is { Count: > 0 })
+{
+    <div class="repository-setups">
+        <h3>Repository Setups</h3>
+        @foreach (var setup in _setups)
+        {
+            <section class="repository-setup" data-repository="@setup.Repository" data-phase="@setup.Phase">
+                <h4><a href="@setup.Repository.WebUrl" target="_blank" rel="noopener noreferrer">@setup.Repository</a></h4>
+                <ol class="repository-setup-steps">
+                    <li class="step-done">Create the repository on GitHub</li>
+                    <li class="@StepClass(setup.Phase, RepositorySetupPhase.ProvisioningSandbox)">Provision a Sandbox</li>
+                    <li class="@StepClass(setup.Phase, RepositorySetupPhase.AgentWorking)">An agent writes the README, AGENTS.md and .overseer.yml, and pushes them to main</li>
+                </ol>
+                @if (setup.Phase == RepositorySetupPhase.Failed)
+                {
+                    <p class="repository-setup-status settings-error" role="alert">@setup.Error</p>
+                    @* A plain form, posted by the browser, so Retry works the same with or without the live connection. *@
+                    <form method="post" action="repository-setups/@setup.Id/retry">
+                        <AntiforgeryToken />
+                        <button type="submit" aria-label="Retry the Repository Setup of @setup.Repository">Retry</button>
+                    </form>
+                }
+                else
+                {
+                    <p class="repository-setup-status" role="status">@Status(setup.Phase)</p>
+                }
+            </section>
+        }
+    </div>
+}
+
+@code {
+    private IReadOnlyList<RepositorySetup>? _setups;
+    private readonly CancellationTokenSource _disposed = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Setups.Changed += OnChanged;
+        _setups = await Setups.ListAsync(_disposed.Token);
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        try
+        {
+            _setups = await Setups.ListAsync(_disposed.Token);
+            StateHasChanged();
+        }
+        catch (Exception exception) when (exception is OperationCanceledException or ObjectDisposedException)
+        {
+            // The page was closed meanwhile.
+        }
+    });
+
+    private static string Status(RepositorySetupPhase phase) => phase switch
+    {
+        RepositorySetupPhase.ProvisioningSandbox => "Provisioning a Sandbox for the agent. A new Sandbox takes a few minutes.",
+        RepositorySetupPhase.AgentWorking => "The agent is writing the starter files.",
+        RepositorySetupPhase.Done => "The starter files are on main.",
+        _ => "",
+    };
+
+    /// <summary>Whether the step of <paramref name="step"/> is done, under way or still to come, in <paramref name="phase"/>.</summary>
+    private static string StepClass(RepositorySetupPhase phase, RepositorySetupPhase step) => phase switch
+    {
+        RepositorySetupPhase.Done => "step-done",
+        RepositorySetupPhase.Failed => "step-stopped",
+        _ when phase == step => "step-current",
+        _ when phase > step => "step-done",
+        _ => "step-pending",
+    };
+
+    public void Dispose()
+    {
+        Setups.Changed -= OnChanged;
+        _disposed.Cancel();
+        _disposed.Dispose();
+    }
+}

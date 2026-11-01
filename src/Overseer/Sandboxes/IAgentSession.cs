@@ -21,8 +21,15 @@ public sealed class AgentTurn(IAsyncEnumerable<string> updates, Task<AgentOutcom
     public IAsyncEnumerable<string> Updates { get; } = updates;
 
     /// <summary>How the turn ended; completes when it does.</summary>
+    /// <exception cref="AgentSessionFailedException">The turn broke off without an outcome.</exception>
     public Task<AgentOutcome> Outcome { get; } = outcome;
 }
+
+/// <summary>
+/// An agent session broke off in the middle of a turn, as when the agent's process exits or the connection to the Sandbox
+/// drops. The message says what happened, to show the user.
+/// </summary>
+public sealed class AgentSessionFailedException(string message) : Exception(message);
 
 public enum AgentRole
 {

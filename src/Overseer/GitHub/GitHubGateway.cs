@@ -130,6 +130,40 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
         }
     }
 
+    public async Task<GitHubFileCheck?> CheckFileAsync(RepositoryName repository, string branch, string path, CancellationToken cancellationToken)
+    {
+        if (await secrets.ReadAsync(GitHubToken.SecretName, cancellationToken) is not { } token)
+        {
+            return null;
+        }
+        if (!GitHubToken.IsWellFormed(token))
+        {
+            return new GitHubFileCheck.Fails(GitHubToken.NotWellFormedError);
+        }
+
+        try
+        {
+            var filePath = string.Join('/', path.Split('/').Select(Uri.EscapeDataString));
+            using var request = Get(
+                $"repos/{Uri.EscapeDataString(repository.Owner)}/{Uri.EscapeDataString(repository.Name)}/contents/{filePath}" +
+                $"?ref={Uri.EscapeDataString(branch)}",
+                token);
+            using var response = await Http.SendAsync(request, cancellationToken);
+            // Also for a branch that doesn't exist, and for an empty repository ("This repository is empty.").
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                return new GitHubFileCheck.NotFound();
+            }
+            return response.IsSuccessStatusCode
+                ? new GitHubFileCheck.Found()
+                : new GitHubFileCheck.Fails(await ErrorAsync(response, cancellationToken));
+        }
+        catch (Exception exception) when (IsUnreachable(exception, cancellationToken))
+        {
+            return new GitHubFileCheck.Fails(UnreachableError(exception));
+        }
+    }
+
     /// <summary>A GET request to the GitHub API, authenticated with <paramref name="token"/>.</summary>
     private static HttpRequestMessage Get(string path, string token) => Request(HttpMethod.Get, path, token);
 

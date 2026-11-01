@@ -158,6 +158,55 @@ public abstract class GitHubGatewayContract : IAsyncDisposable
         Assert.Contains("Bad credentials", fails.Error);
     }
 
+    [Fact]
+    public async Task A_file_on_a_branch_is_found()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+
+        var check = await Gateway.CheckFileAsync(PublicRepository, "master", "README", TestContext.Current.CancellationToken);
+
+        Assert.IsType<GitHubFileCheck.Found>(check);
+    }
+
+    [Fact]
+    public async Task A_file_that_is_not_on_the_branch_is_not_found()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+
+        var check = await Gateway.CheckFileAsync(PublicRepository, "master", ".overseer.yml", TestContext.Current.CancellationToken);
+
+        Assert.IsType<GitHubFileCheck.NotFound>(check);
+    }
+
+    [Fact]
+    public async Task In_a_new_and_empty_repository_no_file_is_found()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var repository = NewRepositoryName();
+        Assert.IsType<GitHubRepositoryCreation.Created>(await CreateAsync(repository));
+
+        var check = await Gateway.CheckFileAsync(repository, "main", ".overseer.yml", TestContext.Current.CancellationToken);
+
+        Assert.IsType<GitHubFileCheck.NotFound>(check);
+    }
+
+    [Fact]
+    public async Task Without_a_stored_token_no_file_is_checked()
+    {
+        Assert.Null(await Gateway.CheckFileAsync(PublicRepository, "master", "README", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task With_an_unknown_stored_token_checking_a_file_fails_with_GitHubs_error()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, UnknownToken, TestContext.Current.CancellationToken);
+
+        var check = await Gateway.CheckFileAsync(PublicRepository, "master", "README", TestContext.Current.CancellationToken);
+
+        var fails = Assert.IsType<GitHubFileCheck.Fails>(check);
+        Assert.Contains("Bad credentials", fails.Error);
+    }
+
     /// <summary>A repository of the working token's user that doesn't exist yet.</summary>
     private RepositoryName NewRepositoryName() => new(WorkingToken.Login, $"overseer-contract-{Guid.NewGuid():N}");
 
@@ -198,6 +247,7 @@ public sealed class FakeGitHubGatewayContract : GitHubGatewayContract
         _gateway = new FakeGitHubGateway(Secrets);
         _gateway.AcceptToken(WorkingToken.Token, WorkingToken.Login);
         _gateway.AddRepository(PublicRepository.ToString());
+        _gateway.AddFile(PublicRepository.ToString(), "master", "README");
     }
 
     protected override IGitHubGateway Gateway => _gateway;
@@ -209,7 +259,7 @@ public sealed class FakeGitHubGatewayContract : GitHubGatewayContract
 /// Opt-in: runs against GitHub when <c>TEST_GITHUB_TOKEN</c> holds a token GitHub accepts, and <c>TEST_GITHUB_LOGIN</c>
 /// the login it works as. Creating repositories needs a fine-grained token with "Administration: Read and write" on all
 /// of the user's repositories; the tests create private repositories named <c>overseer-contract-...</c> and delete
-/// them again, with the same permission.
+/// them again, with the same permission. Checking for files needs "Contents: Read" as well.
 /// </summary>
 public sealed class GitHubGatewayContractAgainstGitHub : GitHubGatewayContract
 {

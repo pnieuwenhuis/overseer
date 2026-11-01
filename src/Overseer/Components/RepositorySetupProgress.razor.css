@@ -1,0 +1,53 @@
+.repository-setups {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.repository-setups h3,
+.repository-setup h4 {
+    margin: 0;
+}
+
+.repository-setup {
+    border: 1px solid #d0d7de;
+    border-radius: 0.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+}
+
+.repository-setup p {
+    margin: 0;
+}
+
+.repository-setup-steps {
+    margin: 0;
+    padding-left: 1.5rem;
+}
+
+.step-done {
+    color: #1d7a3a;
+}
+
+.step-done::marker {
+    content: "✓  ";
+}
+
+.step-current {
+    font-weight: 600;
+}
+
+.step-current::marker {
+    content: "…  ";
+}
+
+.step-pending,
+.step-stopped {
+    color: #57606a;
+}
+
+.repository-setup button {
+    align-self: flex-start;
+}

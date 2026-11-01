@@ -121,6 +121,61 @@ public class FakeSandboxProviderTests
             _provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task A_turn_can_break_off_with_an_error()
+    {
+        var sandbox = await CreateAsync();
+        _provider.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(
+            new FakeAgentTurn(["Writing README.md"], new AgentOutcome.Done()) { Failure = "opencode exited with code 1." }));
+
+        var turn = await SendFirstMessageAsync(sandbox, AgentRole.Developer);
+
+        Assert.Equal(["Writing README.md"], await turn.Updates.ToListAsync(TestContext.Current.CancellationToken));
+        var failure = await Assert.ThrowsAsync<AgentSessionFailedException>(() => turn.Outcome);
+        Assert.Equal("opencode exited with code 1.", failure.Message);
+    }
+
+    [Fact]
+    public async Task An_endless_turn_goes_on_until_the_session_is_stopped()
+    {
+        var sandbox = await CreateAsync();
+        _provider.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(FakeAgentTurn.Endless("Thinking")));
+        var session = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken);
+
+        var turn = await session.SendAsync("Start", TestContext.Current.CancellationToken);
+        Assert.Equal(["Thinking"], await turn.Updates.ToListAsync(TestContext.Current.CancellationToken));
+        Assert.False(turn.Outcome.IsCompleted);
+
+        await session.DisposeAsync();
+        await Assert.ThrowsAsync<AgentSessionFailedException>(() => turn.Outcome);
+    }
+
+    [Fact]
+    public async Task The_messages_sent_to_agents_and_the_repositories_Sandboxes_hold_are_recorded()
+    {
+        var owner = new SandboxOwner(SandboxOwnerKind.RepositorySetup, Guid.NewGuid());
+        var sandbox = await _provider.CreateAsync(owner, SandboxMachine.Default, ["acme/web"], TestContext.Current.CancellationToken);
+
+        await SendFirstMessageAsync(sandbox, AgentRole.Developer);
+
+        Assert.Equal(["acme/web"], _provider.RepositoriesInScopeOf(sandbox));
+        Assert.Equal([new AgentMessage(sandbox, AgentRole.Developer, "Start")], _provider.MessagesSent);
+    }
+
+    [Fact]
+    public async Task Destruction_can_fail_leaving_the_Sandbox_and_succeed_on_retry()
+    {
+        var sandbox = await CreateAsync();
+        _provider.FailNextDestruction("Azure could not be reached.");
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => _provider.DestroyAsync(sandbox, TestContext.Current.CancellationToken));
+
+        Assert.Equal("Azure could not be reached.", failure.Message);
+        Assert.Equal([sandbox], await _provider.ListAsync(TestContext.Current.CancellationToken));
+        await _provider.DestroyAsync(sandbox, TestContext.Current.CancellationToken);
+        Assert.Empty(await _provider.ListAsync(TestContext.Current.CancellationToken));
+    }
+
     private async Task<AgentTurn> SendFirstMessageAsync(Sandbox sandbox, AgentRole role)
     {
         await using var session = await _provider.StartAgentSessionAsync(sandbox, role, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken);

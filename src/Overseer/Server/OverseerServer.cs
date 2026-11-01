@@ -52,7 +52,9 @@ public static class OverseerServer
         builder.Services.AddSingleton(gitHub ?? (services => new GitHubGateway(services.GetRequiredService<ISecretReader>())));
         builder.Services.AddSingleton<GitHubTokenStore>();
         builder.Services.AddSingleton<ConfiguredRepositories>();
+        builder.Services.AddSingleton<StarterFiles>();
         builder.Services.AddSingleton<RepositorySetups>();
+        builder.Services.AddHostedService(services => services.GetRequiredService<RepositorySetups>());
         builder.Services.AddSingleton<ModelProviderTokens>();
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
@@ -97,6 +99,17 @@ public static class OverseerServer
             await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
             return Results.LocalRedirect("/login");
         });
+        // The Retry button of a failed Repository Setup, on the Settings page.
+        app.MapPost("/repository-setups/{id:guid}/retry", async (Guid id, HttpContext context, IAntiforgery antiforgery, RepositorySetups setups) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+            {
+                return Results.BadRequest();
+            }
+            // Not retried when it isn't failed, as after a second press: the Settings page shows where it is.
+            await setups.RetryAsync(id, context.RequestAborted);
+            return Results.LocalRedirect("/settings");
+        }).RequireAuthorization();
         // Every page requires the logged-in user; only the login page opts out with [AllowAnonymous].
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode()

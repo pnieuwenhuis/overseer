@@ -59,6 +59,16 @@ public sealed class SandboxRegistry(
         return await provider.StartAgentSessionAsync(sandbox, role, harness, environment, cancellationToken);
     }
 
+    /// <summary>The Sandboxes of an owner of <paramref name="ownerKind"/> that are recorded and not recorded destroyed.</summary>
+    public async Task<IReadOnlyList<Sandbox>> ListRecordedAsync(SandboxOwnerKind ownerKind, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        var records = await database.Sandboxes
+            .Where(record => record.OwnerKind == ownerKind && record.DestroyedAt == null)
+            .ToListAsync(cancellationToken);
+        return [.. records.Select(record => new Sandbox(record.ResourceId, new SandboxOwner(record.OwnerKind, record.OwnerId)))];
+    }
+
     /// <summary>Destroys the Sandbox and records when; the record itself is kept.</summary>
     public async Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken)
     {

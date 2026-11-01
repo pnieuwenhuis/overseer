@@ -24,6 +24,34 @@ public interface IGitHubGateway
     /// </summary>
     /// <returns>What GitHub did; <c>null</c> when no GitHub token is set.</returns>
     Task<GitHubRepositoryCreation?> CreateRepositoryAsync(RepositoryName repository, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Checks, with the GitHub token Overseer uses, whether <paramref name="path"/> is on <paramref name="branch"/> of
+    /// <paramref name="repository"/>.
+    /// </summary>
+    /// <param name="path">The file's path from the repository's root, such as <c>.overseer.yml</c>.</param>
+    /// <returns>What GitHub says; <c>null</c> when no GitHub token is set.</returns>
+    Task<GitHubFileCheck?> CheckFileAsync(RepositoryName repository, string branch, string path, CancellationToken cancellationToken);
+}
+
+/// <summary>What GitHub says about a file on a branch.</summary>
+public abstract record GitHubFileCheck
+{
+    private GitHubFileCheck()
+    {
+    }
+
+    /// <summary>The file is on the branch.</summary>
+    public sealed record Found : GitHubFileCheck;
+
+    /// <summary>
+    /// The token finds no such file: the file isn't on the branch, the branch doesn't exist (as in an empty repository),
+    /// or the repository doesn't exist or can't be reached. GitHub doesn't say which.
+    /// </summary>
+    public sealed record NotFound : GitHubFileCheck;
+
+    /// <summary>GitHub refused the request, as for a token it rejects, or could not be asked; <paramref name="Error"/> says why.</summary>
+    public sealed record Fails(string Error) : GitHubFileCheck;
 }
 
 /// <summary>What GitHub did when asked to create a repository.</summary>

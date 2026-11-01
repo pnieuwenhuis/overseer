@@ -113,6 +113,22 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
         return new GitHubRepositoryCreation.Created(repository);
     }
 
+    // By owner/name in lower case, then branch and path: the files on the repositories' branches.
+    private readonly ConcurrentDictionary<(string Repository, string Branch, string Path), bool> _files = new();
+
+    /// <summary>Makes <paramref name="path"/> be on <paramref name="branch"/> of the repository <paramref name="ownerAndName"/>.</summary>
+    public void AddFile(string ownerAndName, string branch, string path) =>
+        _files[(Key(RepositoryName.Parse(ownerAndName)), branch, path)] = true;
+
+    public async Task<GitHubFileCheck?> CheckFileAsync(RepositoryName repository, string branch, string path, CancellationToken cancellationToken) =>
+        await CheckRepositoryAsync(repository, cancellationToken) switch
+        {
+            null => null,
+            GitHubRepositoryCheck.Fails fails => new GitHubFileCheck.Fails(fails.Error),
+            GitHubRepositoryCheck.Reachable when _files.ContainsKey((Key(repository), branch, path)) => new GitHubFileCheck.Found(),
+            _ => new GitHubFileCheck.NotFound(),
+        };
+
     private static string Key(RepositoryName repository) => repository.ToString().ToLowerInvariant();
 
     private sealed record FakeRepository(RepositoryName Name, string? ReachableBy);

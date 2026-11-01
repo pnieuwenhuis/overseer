@@ -1,15 +1,14 @@
 using System.Net;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Overseer.GitHub;
 using Overseer.Repositories;
+
+using static Overseer.Tests.RepositorySetupPortal;
 
 namespace Overseer.Tests;
 
 public class RepositorySetupTests(PostgresServer postgres)
 {
-    private const string Token = "github_pat_11WORKING0123456789";
-
     [Fact]
     public async Task A_Repository_Setup_creates_the_repository_on_GitHub_and_adds_it_to_the_Configured_Repositories()
     {
@@ -146,33 +145,6 @@ public class RepositorySetupTests(PostgresServer postgres)
         Assert.Empty(Listed(page));
     }
 
-    /// <summary>A running Overseer, logged in, with a GitHub token set that GitHub accepts.</summary>
-    private async Task<RunningOverseer> StartWithTokenAsync(string? connectionString = null)
-    {
-        var overseer = await RunningOverseer.StartAsync(connectionString ?? await postgres.CreateEmptyDatabaseAsync());
-        await overseer.LogInAsync();
-        overseer.GitHub.AcceptToken(Token, "octocat");
-        overseer.GitHub.AddOrganization("acme");
-        using var saved = await overseer.SubmitFormAsync("/settings", "github-token", new Dictionary<string, string> { ["GitHubToken"] = Token });
-        Assert.Contains("The GitHub token is saved.", await saved.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        return overseer;
-    }
-
-    /// <summary>Fills in the Settings page's new repository form and starts the Repository Setup.</summary>
-    private static Task<HttpResponseMessage> StartSetupAsync(
-        RunningOverseer overseer, string owner, string name,
-        string purpose = "The public website of Acme.", string techStack = "Astro and TypeScript, deployed to Azure Static Web Apps.") =>
-        overseer.SubmitFormAsync("/settings", "repository-setup", new Dictionary<string, string>
-        {
-            ["SetupOwner"] = owner,
-            ["SetupName"] = name,
-            ["SetupPurpose"] = purpose,
-            ["SetupTechStack"] = techStack,
-        });
-
-    /// <summary>The Configured Repositories the Settings page lists, in its order.</summary>
-    private static IReadOnlyList<string> Listed(string page) =>
-        Regex.Match(page, "<ul[^>]*class=\"configured-repositories\"[^>]*>(.*?)</ul>", RegexOptions.Singleline) is { Success: true } list
-            ? [.. Regex.Matches(list.Groups[1].Value, "<a[^>]*>(.*?)</a>", RegexOptions.Singleline).Select(match => WebUtility.HtmlDecode(match.Groups[1].Value.Trim()))]
-            : [];
+    private Task<RunningOverseer> StartWithTokenAsync(string? connectionString = null) =>
+        RepositorySetupPortal.StartWithTokenAsync(postgres, connectionString);
 }
