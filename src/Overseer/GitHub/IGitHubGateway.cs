@@ -17,6 +17,30 @@ public interface IGitHubGateway
     /// <summary>Checks that the GitHub token Overseer uses can reach <paramref name="repository"/>.</summary>
     /// <returns>What GitHub says about the repository; <c>null</c> when no GitHub token is set.</returns>
     Task<GitHubRepositoryCheck?> CheckRepositoryAsync(RepositoryName repository, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Creates <paramref name="repository"/> on GitHub, empty and private, with the GitHub token Overseer uses: for the
+    /// token's user when the owner is that user, otherwise in the organization the owner names.
+    /// </summary>
+    /// <returns>What GitHub did; <c>null</c> when no GitHub token is set.</returns>
+    Task<GitHubRepositoryCreation?> CreateRepositoryAsync(RepositoryName repository, CancellationToken cancellationToken);
+}
+
+/// <summary>What GitHub did when asked to create a repository.</summary>
+public abstract record GitHubRepositoryCreation
+{
+    private GitHubRepositoryCreation()
+    {
+    }
+
+    /// <summary>GitHub created the repository, which it names <paramref name="Repository"/>.</summary>
+    public sealed record Created(RepositoryName Repository) : GitHubRepositoryCreation;
+
+    /// <summary>
+    /// GitHub created nothing, as when the name is taken or the token may not create repositories for the owner, or could
+    /// not be asked; <paramref name="Error"/> is GitHub's error.
+    /// </summary>
+    public sealed record Fails(string Error) : GitHubRepositoryCreation;
 }
 
 /// <summary>What GitHub says about a repository, asked with the GitHub token Overseer uses.</summary>

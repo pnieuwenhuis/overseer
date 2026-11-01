@@ -52,6 +52,7 @@ public static class OverseerServer
         builder.Services.AddSingleton(gitHub ?? (services => new GitHubGateway(services.GetRequiredService<ISecretReader>())));
         builder.Services.AddSingleton<GitHubTokenStore>();
         builder.Services.AddSingleton<ConfiguredRepositories>();
+        builder.Services.AddSingleton<RepositorySetups>();
         builder.Services.AddSingleton<ModelProviderTokens>();
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)

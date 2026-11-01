@@ -122,6 +122,8 @@ The GitHub token is the fine-grained token Overseer and its agents work with Git
 
 The Configured Repositories are the GitHub repositories that make up the software Overseer builds. Add one as `owner/name` or by pasting its GitHub URL (a page of the repository or a `git clone` URL works too); it is stored as `owner/name` in GitHub's own case. Adding first asks GitHub, through the GitHub Gateway, whether the GitHub token can reach the repository, and refuses it when no token is set, when GitHub knows no such repository that the token can reach (for a private repository GitHub doesn't say whether it is missing or out of the token's reach), or with GitHub's error when GitHub refuses the token. Reaching means reading: whether the token may push is not checked. A repository that is already configured, in whatever case, is refused; the database's key ignores case, as GitHub does. Removing one takes it off the list; nothing changes on GitHub.
 
+A Repository Setup creates a new repository instead: give its owner (your login or an organization), name, purpose and tech stack, all required. Overseer creates it on GitHub, private and empty, through the GitHub Gateway, then adds it to the Configured Repositories and keeps the Repository Setup with its purpose and tech stack in PostgreSQL, for the agent that writes the starter files. GitHub creates it for the token's user when the owner is that user, and in the organization otherwise. When GitHub refuses, for instance because the name is taken or the fine-grained token may not create repositories for that owner (that needs "Administration: Read and write" on all repositories of the owner), the Settings page shows GitHub's error and nothing is registered or kept. A Repository Setup is not an Intent and takes no Active Intent slot.
+
 ## Configuration
 
 Configuration is what `serve` needs before it starts, unlike the Settings page. It is layered. Later layers override earlier ones:
@@ -207,11 +209,13 @@ TEST_KEYVAULT_URI=https://my-vault.vault.azure.net/ dotnet test --filter KeyVaul
 
 ### GitHub
 
-The GitHub Gateway (`IGitHubGateway`) is the only component that calls the GitHub API, at api.github.com. It reads the GitHub token itself, through `ISecretReader`, and its requests are never logged. Tests use `FakeGitHubGateway` (`tests/Overseer.Tests`), which `RunningOverseer` gives every test server and which tests script to accept or reject tokens and to have repositories, reachable by every token or only one. Both pass the contract suite in `tests/Overseer.Tests/GitHubGatewayContract.cs`. The real gateway runs it only when `TEST_GITHUB_TOKEN` holds a token GitHub accepts and `TEST_GITHUB_LOGIN` the login it works as, such as your GitHub CLI's:
+The GitHub Gateway (`IGitHubGateway`) is the only component that calls the GitHub API, at api.github.com. It reads the GitHub token itself, through `ISecretReader`, and its requests are never logged. Tests use `FakeGitHubGateway` (`tests/Overseer.Tests`), which `RunningOverseer` gives every test server and which tests script to accept or reject tokens, to have repositories, reachable by every token or only one, and to have organizations. It creates repositories for the token's user and in its organizations, or refuses an owner as scripted, and records what it creates. Both pass the contract suite in `tests/Overseer.Tests/GitHubGatewayContract.cs`. The real gateway runs it only when `TEST_GITHUB_TOKEN` holds a token GitHub accepts and `TEST_GITHUB_LOGIN` the login it works as, such as your GitHub CLI's:
 
 ```sh
 TEST_GITHUB_TOKEN=$(gh auth token) TEST_GITHUB_LOGIN=$(gh api user --jq .login) dotnet test --filter GitHubGatewayContractAgainstGitHub
 ```
+
+The contract creates private repositories named `overseer-contract-<id>` for that login, and deletes them after each test. It also checks that creating one for `octocat`, another user, fails; creating one in an organization is not covered. That needs a fine-grained token with "Administration: Read and write" on all of your repositories, or a GitHub CLI login with the `delete_repo` scope (`gh auth refresh -s delete_repo`). A repository it could not delete fails the test, naming it, so you can delete it by hand.
 
 ## Tests
 

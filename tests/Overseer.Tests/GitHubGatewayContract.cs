@@ -1,11 +1,15 @@
+using System.Net.Http.Headers;
 using Overseer.GitHub;
 using Overseer.Secrets;
 
 namespace Overseer.Tests;
 
 /// <summary>What every GitHub Gateway must do. Derive from this once per implementation.</summary>
-public abstract class GitHubGatewayContract : IDisposable
+public abstract class GitHubGatewayContract : IAsyncDisposable
 {
+    // The repositories a test created, which are deleted again after it.
+    private readonly List<RepositoryName> _created = [];
+
     private readonly string _directory = Path.Combine(Path.GetTempPath(), $"overseer-{Guid.NewGuid():N}");
 
     protected GitHubGatewayContract()
@@ -98,8 +102,85 @@ public abstract class GitHubGatewayContract : IDisposable
         Assert.Contains("Bad credentials", fails.Error);
     }
 
-    public void Dispose()
+    [Fact]
+    public async Task A_repository_is_created_for_the_tokens_user_and_is_then_reachable()
     {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var repository = NewRepositoryName();
+
+        var creation = await CreateAsync(repository);
+
+        Assert.Equal(new GitHubRepositoryCreation.Created(repository), creation);
+        Assert.Equal(
+            new GitHubRepositoryCheck.Reachable(repository),
+            await Gateway.CheckRepositoryAsync(repository, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Creating_a_repository_that_exists_fails_with_GitHubs_error()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var repository = NewRepositoryName();
+        Assert.IsType<GitHubRepositoryCreation.Created>(await CreateAsync(repository));
+
+        var creation = await CreateAsync(repository);
+
+        var fails = Assert.IsType<GitHubRepositoryCreation.Fails>(creation);
+        Assert.Contains("name already exists on this account", fails.Error);
+    }
+
+    [Fact]
+    public async Task Creating_a_repository_for_another_user_fails_with_GitHubs_error()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+
+        // octocat is a user, not an organization, so nobody else can create repositories for it.
+        var creation = await CreateAsync(new RepositoryName(PublicRepository.Owner, $"overseer-contract-{Guid.NewGuid():N}"));
+
+        var fails = Assert.IsType<GitHubRepositoryCreation.Fails>(creation);
+        Assert.Contains("Not Found", fails.Error);
+    }
+
+    [Fact]
+    public async Task Without_a_stored_token_no_repository_is_created()
+    {
+        Assert.Null(await CreateAsync(NewRepositoryName()));
+    }
+
+    [Fact]
+    public async Task With_an_unknown_stored_token_creating_a_repository_fails_with_GitHubs_error()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, UnknownToken, TestContext.Current.CancellationToken);
+
+        var creation = await CreateAsync(NewRepositoryName());
+
+        var fails = Assert.IsType<GitHubRepositoryCreation.Fails>(creation);
+        Assert.Contains("Bad credentials", fails.Error);
+    }
+
+    /// <summary>A repository of the working token's user that doesn't exist yet.</summary>
+    private RepositoryName NewRepositoryName() => new(WorkingToken.Login, $"overseer-contract-{Guid.NewGuid():N}");
+
+    /// <summary>Creates <paramref name="repository"/>, to be deleted after the test if GitHub created it.</summary>
+    private async Task<GitHubRepositoryCreation?> CreateAsync(RepositoryName repository)
+    {
+        var creation = await Gateway.CreateRepositoryAsync(repository, TestContext.Current.CancellationToken);
+        if (creation is GitHubRepositoryCreation.Created created)
+        {
+            _created.Add(created.Repository);
+        }
+        return creation;
+    }
+
+    /// <summary>Deletes a repository a test created, so none are left behind on GitHub.</summary>
+    protected virtual Task DeleteRepositoryAsync(RepositoryName repository) => Task.CompletedTask;
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var repository in _created)
+        {
+            await DeleteRepositoryAsync(repository);
+        }
         if (Directory.Exists(_directory))
         {
             Directory.Delete(_directory, recursive: true);
@@ -121,12 +202,14 @@ public sealed class FakeGitHubGatewayContract : GitHubGatewayContract
 
     protected override IGitHubGateway Gateway => _gateway;
 
-    protected override (string Token, string Login) WorkingToken => ("github_pat_11WORKING", "octocat");
+    protected override (string Token, string Login) WorkingToken => ("github_pat_11WORKING", "monalisa");
 }
 
 /// <summary>
 /// Opt-in: runs against GitHub when <c>TEST_GITHUB_TOKEN</c> holds a token GitHub accepts, and <c>TEST_GITHUB_LOGIN</c>
-/// the login it works as.
+/// the login it works as. Creating repositories needs a fine-grained token with "Administration: Read and write" on all
+/// of the user's repositories; the tests create private repositories named <c>overseer-contract-...</c> and delete
+/// them again, with the same permission.
 /// </summary>
 public sealed class GitHubGatewayContractAgainstGitHub : GitHubGatewayContract
 {
@@ -148,4 +231,22 @@ public sealed class GitHubGatewayContractAgainstGitHub : GitHubGatewayContract
     protected override IGitHubGateway Gateway => _gateway;
 
     protected override (string Token, string Login) WorkingToken { get; }
+
+    protected override async Task DeleteRepositoryAsync(RepositoryName repository)
+    {
+        using var http = new HttpClient { BaseAddress = new Uri("https://api.github.com/") };
+        using var request = new HttpRequestMessage(
+            HttpMethod.Delete, $"repos/{Uri.EscapeDataString(repository.Owner)}/{Uri.EscapeDataString(repository.Name)}")
+        {
+            Headers =
+            {
+                Authorization = new AuthenticationHeaderValue("Bearer", WorkingToken.Token),
+                UserAgent = { new ProductInfoHeaderValue("overseer-tests", "1") },
+            },
+        };
+        using var response = await http.SendAsync(request, CancellationToken.None);
+        Assert.True(
+            response.IsSuccessStatusCode,
+            $"Delete {repository.WebUrl} by hand: GitHub did not delete it ({(int)response.StatusCode}).");
+    }
 }

@@ -34,6 +34,32 @@ namespace Overseer.Persistence.Migrations
                     b.ToTable("ConfiguredRepositories");
                 });
 
+            modelBuilder.Entity("Overseer.Repositories.RepositorySetupRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Repository")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("TechStack")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("RepositorySetups");
+                });
+
             modelBuilder.Entity("Overseer.Sandboxes.SandboxRecord", b =>
                 {
                     b.Property<Guid>("Id")

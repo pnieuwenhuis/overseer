@@ -38,18 +38,27 @@ public sealed class ConfiguredRepositories(IDbContextFactory<OverseerDbContext> 
             case GitHubRepositoryCheck.Reachable reachable:
                 await using (var database = await databases.CreateDbContextAsync(cancellationToken))
                 {
-                    var fullName = reachable.Repository.ToString();
-                    // The key ignores case, as GitHub does, so it refuses the same repository in any case, and settles two adds at once.
-                    var inserted = await database.Database.ExecuteSqlAsync(
-                        $"""INSERT INTO "ConfiguredRepositories" ("FullName") VALUES ({fullName}) ON CONFLICT ("FullName") DO NOTHING""",
-                        cancellationToken);
-                    return inserted == 0
-                        ? new RepositoryAdding.Refused($"{reachable.Repository} is already a Configured Repository.")
-                        : new RepositoryAdding.Added(reachable.Repository);
+                    return await InsertAsync(database, reachable.Repository, cancellationToken)
+                        ? new RepositoryAdding.Added(reachable.Repository)
+                        : new RepositoryAdding.Refused($"{reachable.Repository} is already a Configured Repository.");
                 }
             default:
                 throw new InvalidOperationException("GitHub either reaches the repository, doesn't find it, or fails.");
         }
+    }
+
+    /// <summary>
+    /// Makes <paramref name="repository"/>, as GitHub names it, a Configured Repository, in <paramref name="database"/>'s
+    /// transaction if it has one.
+    /// </summary>
+    /// <returns>Whether it was added; <c>false</c> when it was already configured, in any case.</returns>
+    internal static async Task<bool> InsertAsync(OverseerDbContext database, RepositoryName repository, CancellationToken cancellationToken)
+    {
+        var fullName = repository.ToString();
+        // The key ignores case, as GitHub does, so it refuses the same repository in any case, and settles two adds at once.
+        return await database.Database.ExecuteSqlAsync(
+            $"""INSERT INTO "ConfiguredRepositories" ("FullName") VALUES ({fullName}) ON CONFLICT ("FullName") DO NOTHING""",
+            cancellationToken) > 0;
     }
 
     /// <summary>Removes <paramref name="repository"/> from the Configured Repositories.</summary>

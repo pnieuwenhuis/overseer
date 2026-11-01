@@ -11,6 +11,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<SandboxRecord> Sandboxes => Set<SandboxRecord>();
     public DbSet<SettingRecord> Settings => Set<SettingRecord>();
     public DbSet<ConfiguredRepositoryRecord> ConfiguredRepositories => Set<ConfiguredRepositoryRecord>();
+    public DbSet<RepositorySetupRecord> RepositorySetups => Set<RepositorySetupRecord>();
 
     private const string CaseInsensitive = "case_insensitive";
 

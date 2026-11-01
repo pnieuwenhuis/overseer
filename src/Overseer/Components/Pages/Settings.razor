@@ -11,6 +11,7 @@
 @inject SettingsStore Store
 @inject GitHubTokenStore GitHubTokens
 @inject ConfiguredRepositories Repositories
+@inject RepositorySetups Setups
 @inject ModelProviderTokens ProviderTokens
 
 <PageTitle>Settings · Overseer</PageTitle>
@@ -371,6 +372,36 @@
             <p class="settings-note">GitHub must confirm that the GitHub token can reach it.</p>
             <button type="submit">Add</button>
         </form>
+        <form method="post" @formname="repository-setup" @onsubmit="StartRepositorySetupAsync" class="settings-form settings-form-wide">
+            <AntiforgeryToken />
+            <h3>Create a new repository</h3>
+            @if (_setupError is not null)
+            {
+                <p class="settings-error" role="alert">@_setupError</p>
+            }
+            <p class="settings-note">
+                Overseer creates it on GitHub, private and empty, with the GitHub token, and adds it to the Configured Repositories.
+            </p>
+            <span class="settings-buttons">
+                <label>
+                    Owner
+                    <input name="SetupOwner" value="@_setupInput.Owner" placeholder="your login or an organization" autocomplete="off" spellcheck="false" required />
+                </label>
+                <label>
+                    Name
+                    <input name="SetupName" value="@_setupInput.Name" autocomplete="off" spellcheck="false" required />
+                </label>
+            </span>
+            <label>
+                Purpose
+                <textarea name="SetupPurpose" rows="3" placeholder="What the repository is for" required>@_setupInput.Purpose</textarea>
+            </label>
+            <label>
+                Tech stack
+                <textarea name="SetupTechStack" rows="3" placeholder="Languages, frameworks and where it runs" required>@_setupInput.TechStack</textarea>
+            </label>
+            <button type="submit">Create</button>
+        </form>
     </div>
 }
 
@@ -517,6 +548,22 @@
     // The Remove button pressed: the repository's owner/name.
     [SupplyParameterFromForm(FormName = "repository-remove")]
     private string? RemoveRepository { get; set; }
+
+    [SupplyParameterFromForm(FormName = "repository-setup")]
+    private string? SetupOwner { get; set; }
+
+    [SupplyParameterFromForm(FormName = "repository-setup")]
+    private string? SetupName { get; set; }
+
+    [SupplyParameterFromForm(FormName = "repository-setup")]
+    private string? SetupPurpose { get; set; }
+
+    [SupplyParameterFromForm(FormName = "repository-setup")]
+    private string? SetupTechStack { get; set; }
+
+    // What the new repository form shows: empty, or what the user entered when it was refused.
+    private (string? Owner, string? Name, string? Purpose, string? TechStack) _setupInput;
+    private string? _setupError;
 
     private IReadOnlyList<RepositoryName>? _repositories;
     // What the repository field shows: empty, or what the user entered when it was refused.
@@ -700,6 +747,21 @@
             case RepositoryAdding.Refused refused:
                 _repositoryError = refused.Error;
                 _repositoryInput = Repository;
+                break;
+        }
+        _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
+    }
+
+    private async Task StartRepositorySetupAsync()
+    {
+        switch (await Setups.StartAsync(SetupOwner, SetupName, SetupPurpose, SetupTechStack, HttpContext.RequestAborted))
+        {
+            case RepositorySetupStarting.Started started:
+                _repositoryNotice = $"{started.Setup.Repository} is created on GitHub and added to the Configured Repositories.";
+                break;
+            case RepositorySetupStarting.Refused refused:
+                _setupError = refused.Error;
+                _setupInput = (SetupOwner, SetupName, SetupPurpose, SetupTechStack);
                 break;
         }
         _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);

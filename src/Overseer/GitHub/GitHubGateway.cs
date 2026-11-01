@@ -81,9 +81,61 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
         }
     }
 
+    public async Task<GitHubRepositoryCreation?> CreateRepositoryAsync(RepositoryName repository, CancellationToken cancellationToken)
+    {
+        if (await secrets.ReadAsync(GitHubToken.SecretName, cancellationToken) is not { } token)
+        {
+            return null;
+        }
+        // GitHub creates a user's repositories and an organization's at different endpoints, so it first says whose token this is.
+        string login;
+        switch (await CheckTokenAsync(token, cancellationToken))
+        {
+            case GitHubTokenCheck.Works works:
+                login = works.Login;
+                break;
+            case GitHubTokenCheck.Fails fails:
+                return new GitHubRepositoryCreation.Fails(fails.Error);
+            default:
+                throw new InvalidOperationException("A token check either works or fails.");
+        }
+        var forUser = string.Equals(login, repository.Owner, StringComparison.OrdinalIgnoreCase);
+
+        try
+        {
+            using var request = Request(HttpMethod.Post, forUser ? "user/repos" : $"orgs/{Uri.EscapeDataString(repository.Owner)}/repos", token);
+            request.Content = JsonContent.Create(new NewRepository(repository.Name, Private: true));
+            using var response = await Http.SendAsync(request, cancellationToken);
+            if (!forUser && response.StatusCode == HttpStatusCode.NotFound)
+            {
+                // GitHub says only "Not Found" for an owner that is another user, or an organization the token can't see.
+                return new GitHubRepositoryCreation.Fails(
+                    $"{await ErrorAsync(response, cancellationToken)}: {repository.Owner} is neither the token's user, {login}, " +
+                    "nor an organization the token can create repositories in");
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                return new GitHubRepositoryCreation.Fails(await ErrorAsync(response, cancellationToken));
+            }
+            var created = await response.Content.ReadFromJsonAsync<Repository>(cancellationToken);
+            return RepositoryName.TryParse(created?.FullName, out var name)
+                ? new GitHubRepositoryCreation.Created(name)
+                : new GitHubRepositoryCreation.Fails("GitHub created the repository, but did not say its name.");
+        }
+        catch (Exception exception) when (IsUnreachable(exception, cancellationToken))
+        {
+            // GitHub may have created it before the answer was lost.
+            return new GitHubRepositoryCreation.Fails(
+                $"{UnreachableError(exception)} It may have created the repository anyway: see {repository.WebUrl}");
+        }
+    }
+
     /// <summary>A GET request to the GitHub API, authenticated with <paramref name="token"/>.</summary>
-    private static HttpRequestMessage Get(string path, string token) =>
-        new(HttpMethod.Get, path) { Headers = { Authorization = new AuthenticationHeaderValue("Bearer", token) } };
+    private static HttpRequestMessage Get(string path, string token) => Request(HttpMethod.Get, path, token);
+
+    /// <summary>A request to the GitHub API, authenticated with <paramref name="token"/>.</summary>
+    private static HttpRequestMessage Request(HttpMethod method, string path, string token) =>
+        new(method, path) { Headers = { Authorization = new AuthenticationHeaderValue("Bearer", token) } };
 
     /// <summary>Whether <paramref name="exception"/> means GitHub could not be asked, or did not answer in JSON.</summary>
     private static bool IsUnreachable(Exception exception, CancellationToken cancellationToken) =>
@@ -101,7 +153,11 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
             var error = await response.Content.ReadFromJsonAsync<Error>(cancellationToken);
             if (error?.Message is { Length: > 0 } message)
             {
-                return $"{message} ({status})";
+                // A 422 says what is wrong only in its details, such as "name already exists on this account".
+                var details = (error.Errors ?? []).Select(Detail).Where(detail => detail.Length > 0).ToList();
+                return details.Count == 0
+                    ? $"{message} ({status})"
+                    : $"{message.TrimEnd('.')}: {string.Join("; ", details)} ({status})";
             }
         }
         catch (JsonException)
@@ -123,7 +179,24 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
 
     private sealed record User(string? Login);
 
-    private sealed record Error(string? Message);
+    /// <summary>One of GitHub's error details: a message, or an object with a message or a field and a code.</summary>
+    private static string Detail(JsonElement detail) => detail.ValueKind switch
+    {
+        JsonValueKind.String => detail.GetString() ?? "",
+        JsonValueKind.Object when StringProperty(detail, "message") is { Length: > 0 } message => message,
+        JsonValueKind.Object => $"{StringProperty(detail, "field")} {StringProperty(detail, "code")}".Trim(),
+        _ => "",
+    };
+
+    /// <summary>The string value of <paramref name="element"/>'s <paramref name="property"/>; <c>null</c> when it has no such string.</summary>
+    private static string? StringProperty(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    private sealed record Error(string? Message, IReadOnlyList<JsonElement>? Errors);
+
+    private sealed record NewRepository(
+        [property: JsonPropertyName("name")] string Name,
+        [property: JsonPropertyName("private")] bool Private);
 
     private sealed record Repository([property: JsonPropertyName("full_name")] string? FullName);
 }

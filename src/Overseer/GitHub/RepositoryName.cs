@@ -35,7 +35,7 @@ public sealed partial record RepositoryName(string Owner, string Name)
         {
             name = name[..^".git".Length];
         }
-        if (!ValidOwner().IsMatch(owner) || !ValidName().IsMatch(name) || name is "." or "..")
+        if (!IsValidOwner(owner) || !IsValidName(name))
         {
             return false;
         }
@@ -47,6 +47,18 @@ public sealed partial record RepositoryName(string Owner, string Name)
     /// <exception cref="FormatException">It is not a repository.</exception>
     public static RepositoryName Parse(string ownerAndName) =>
         TryParse(ownerAndName, out var repository) ? repository : throw new FormatException($"'{ownerAndName}' is not owner/name.");
+
+    /// <summary>Why an owner that is not <see cref="IsValidOwner"/> is refused.</summary>
+    public const string InvalidOwnerError = "An owner is up to 39 letters, digits and hyphens, not starting with a hyphen.";
+
+    /// <summary>Why a name that is not <see cref="IsValidName"/> is refused.</summary>
+    public const string InvalidNameError = "A name is up to 100 letters, digits, hyphens, underscores and dots, but not \".\" or \"..\".";
+
+    /// <summary>Whether GitHub accepts <paramref name="owner"/> as a user's or organization's login.</summary>
+    public static bool IsValidOwner(string owner) => ValidOwner().IsMatch(owner);
+
+    /// <summary>Whether GitHub accepts <paramref name="name"/> as a repository's name.</summary>
+    public static bool IsValidName(string name) => ValidName().IsMatch(name) && name is not ("." or "..");
 
     [GeneratedRegex(@"^(?<owner>[^/\s]+)/(?<name>[^/\s]+)$")]
     private static partial Regex OwnerAndName();
