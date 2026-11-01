@@ -1,0 +1,27 @@
+.new-intent-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    max-width: 48rem;
+}
+
+.new-intent-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.new-intent-form textarea {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    resize: vertical;
+}
+
+.new-intent-buttons {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.new-intent-error {
+    color: #b32121;
+    margin: 0;
+}

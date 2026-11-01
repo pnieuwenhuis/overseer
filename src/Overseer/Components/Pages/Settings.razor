@@ -1,8 +1,6 @@
 @page "/settings"
 @attribute [ExcludeFromInteractiveRouting]
 @using System.Globalization
-@using Markdig
-@using Markdig.Extensions.EmphasisExtras
 @using Overseer.GitHub
 @using Overseer.ModelProviders
 @using Overseer.Repositories
@@ -101,16 +99,7 @@
         </span>
     </form>
     <h3>Preview</h3>
-    <section class="settings-preview" aria-label="Review Guidelines preview">
-        @if (_guidelines == "")
-        {
-            <p class="settings-note">Nothing to preview.</p>
-        }
-        else
-        {
-            @((MarkupString)Markdown.ToHtml(_guidelines, PreviewPipeline))
-        }
-    </section>
+    <MarkdownPreview Label="Review Guidelines preview" Text="@_guidelines" />
 }
 
 <h2>Agents</h2>
@@ -460,13 +449,6 @@
     // What the Review Guidelines editor and preview show: what is saved, or what was submitted for a preview.
     private string? _guidelines;
     private bool _guidelinesSaved;
-
-    // GitHub's extensions to Markdown, without heading ids that could clash with the page's. HTML in the Markdown shows as
-    // text, so the preview can't run scripts or restyle the page.
-    private static readonly MarkdownPipeline PreviewPipeline = new MarkdownPipelineBuilder()
-        .UsePipeTables().UseTaskLists().UseAutoLinks().UseEmphasisExtras(EmphasisExtraOptions.Strikethrough)
-        .DisableHtml()
-        .Build();
 
     // The agent harness configuration in use, which the model pickers show; the editor shows its JSON, or what was submitted
     // when it was rejected.

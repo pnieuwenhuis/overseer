@@ -8,6 +8,7 @@ public class LoginTests(PostgresServer postgres)
     [Theory]
     [InlineData("/")]
     [InlineData("/settings")]
+    [InlineData("/intents/new")]
     [InlineData("/not-a-page")]
     public async Task Without_logging_in_the_Portal_sends_you_to_the_login_page(string path)
     {

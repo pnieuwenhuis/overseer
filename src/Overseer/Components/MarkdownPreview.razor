@@ -1,0 +1,30 @@
+@* Markdown as the Portal renders what the user wrote: CommonMark with GitHub's tables, task lists, autolinks and strikethrough, and HTML as text. *@
+@using Markdig
+@using Markdig.Extensions.EmphasisExtras
+
+<section class="markdown-preview" aria-label="@Label">
+    @if (string.IsNullOrWhiteSpace(Text))
+    {
+        <p class="markdown-preview-empty">Nothing to preview.</p>
+    }
+    else
+    {
+        @((MarkupString)Markdown.ToHtml(Text, Pipeline))
+    }
+</section>
+
+@code {
+    /// <summary>What assistive technology calls this preview.</summary>
+    [Parameter, EditorRequired]
+    public required string Label { get; set; }
+
+    [Parameter, EditorRequired]
+    public required string Text { get; set; }
+
+    // GitHub's extensions to Markdown, without heading ids that could clash with the page's. HTML in the Markdown shows as
+    // text, so the preview can't run scripts or restyle the page.
+    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
+        .UsePipeTables().UseTaskLists().UseAutoLinks().UseEmphasisExtras(EmphasisExtraOptions.Strikethrough)
+        .DisableHtml()
+        .Build();
+}

@@ -62,22 +62,6 @@
     gap: 0.5rem;
 }
 
-.settings-preview {
-    border: 1px solid #d0d7de;
-    border-radius: 0.25rem;
-    max-width: 48rem;
-    overflow-wrap: anywhere;
-    padding: 0.5rem 1rem;
-}
-
-.settings-preview ::deep h1 {
-    font-size: 1.5rem;
-}
-
-.settings-preview ::deep h2 {
-    font-size: 1.25rem;
-}
-
 .github-token-status {
     margin: 0;
 }

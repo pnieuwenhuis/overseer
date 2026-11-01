@@ -1,0 +1,62 @@
+@page "/intents/new"
+@attribute [ExcludeFromInteractiveRouting]
+@using Overseer.Intents
+@inject IntentLifecycle Lifecycle
+@inject NavigationManager Navigation
+
+<PageTitle>New Intent · Overseer</PageTitle>
+
+<h1>New Intent</h1>
+
+<form method="post" @formname="new-intent" @onsubmit="SubmitAsync" class="new-intent-form">
+    <AntiforgeryToken />
+    @if (_refused)
+    {
+        <p class="new-intent-error" role="alert">An Intent needs text: write what you want changed.</p>
+    }
+    <label>
+        Markdown
+        <textarea name="IntentText" rows="16" spellcheck="true" autofocus>@_text</textarea>
+    </label>
+    <span class="new-intent-buttons">
+        <button type="submit" name="IntentAction" value="preview">Preview</button>
+        <button type="submit" name="IntentAction" value="save">Save as Draft</button>
+    </span>
+</form>
+
+<h2>Preview</h2>
+<MarkdownPreview Label="Intent preview" Text="@_text" />
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [SupplyParameterFromForm(FormName = "new-intent")]
+    private string? IntentText { get; set; }
+
+    // Which button submitted the form: "save", or "preview" to show the text rendered without saving.
+    [SupplyParameterFromForm(FormName = "new-intent")]
+    private string? IntentAction { get; set; }
+
+    // What the editor and preview show: what was submitted, as saving would keep it.
+    private string _text = "";
+    private bool _refused;
+
+    private async Task SubmitAsync()
+    {
+        _text = Intent.TextFromEditor(IntentText);
+        if (IntentAction != "save")
+        {
+            return;
+        }
+
+        if (await Lifecycle.CaptureAsync(IntentText, HttpContext.RequestAborted))
+        {
+            Navigation.NavigateTo("/");
+        }
+        else
+        {
+            _refused = true;
+        }
+    }
+}

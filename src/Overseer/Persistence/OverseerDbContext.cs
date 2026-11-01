@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Overseer.Intents;
 using Overseer.Repositories;
 using Overseer.Sandboxes;
 using Overseer.Settings;
@@ -12,6 +13,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<SettingRecord> Settings => Set<SettingRecord>();
     public DbSet<ConfiguredRepositoryRecord> ConfiguredRepositories => Set<ConfiguredRepositoryRecord>();
     public DbSet<RepositorySetupRecord> RepositorySetups => Set<RepositorySetupRecord>();
+    public DbSet<IntentRecord> Intents => Set<IntentRecord>();
 
     private const string CaseInsensitive = "case_insensitive";
 
@@ -23,6 +25,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             sandbox.HasIndex(record => record.ResourceId).IsUnique();
         });
         modelBuilder.Entity<RepositorySetupRecord>().Property(record => record.Phase).HasConversion<string>();
+        modelBuilder.Entity<IntentRecord>().Property(record => record.State).HasConversion<string>();
         modelBuilder.Entity<SettingRecord>().HasKey(setting => setting.Key);
         // GitHub matches repository names regardless of case, so the key does too.
         modelBuilder.HasCollation(CaseInsensitive, locale: "und-u-ks-level2", provider: "icu", deterministic: false);

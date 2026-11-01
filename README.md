@@ -97,6 +97,12 @@ You need the .NET 10 SDK and Docker.
 
 Schema migrations are applied at startup, so an empty database gets the schema on the first run and later runs change nothing.
 
+## Backlog
+
+The Portal's Home page is the Backlog: every open Intent, newest first. Each is listed by the first line of its text that says anything, without Markdown's heading markers, because an Intent has no title of its own, and with its state. Server-side code captures and reads Intents through `IntentLifecycle`, which owns their state.
+
+New Intent opens an editor for the Intent's text, in free Markdown. Preview renders what is in the editor without saving it, the same way as the Review Guidelines (see [Settings](#settings)). Save as Draft stores the Intent in PostgreSQL, with LF line breaks, and returns to the Backlog; text with nothing but whitespace is refused. A Draft is only captured: no agent works on it.
+
 ## Settings
 
 The Portal's Settings page (in the navigation) holds what you change while Overseer runs. They are stored in PostgreSQL, so they survive restarts and upgrades; secrets are not settings and stay in the secret store (see [Secrets](#secrets)). Server-side code reads them through `SettingsStore`, which goes to the database on every read, so a saved change applies without a restart, and returns a setting's default while none is saved; the Configured Repositories have their own table and are read through `ConfiguredRepositories`.

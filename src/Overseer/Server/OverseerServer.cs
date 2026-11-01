@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Components;
 using Overseer.GitHub;
+using Overseer.Intents;
 using Overseer.Login;
 using Overseer.ModelProviders;
 using Overseer.Persistence;
@@ -56,6 +57,7 @@ public static class OverseerServer
         builder.Services.AddSingleton<RepositorySetups>();
         builder.Services.AddHostedService(services => services.GetRequiredService<RepositorySetups>());
         builder.Services.AddSingleton<ModelProviderTokens>();
+        builder.Services.AddSingleton<IntentLifecycle>();
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(options =>

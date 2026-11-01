@@ -1,7 +1,37 @@
 @page "/"
+@attribute [ExcludeFromInteractiveRouting]
+@using Overseer.Intents
+@inject IntentLifecycle Lifecycle
 
-<PageTitle>Overseer</PageTitle>
+<PageTitle>Backlog · Overseer</PageTitle>
 
-<h1>Portal</h1>
+<h1>Backlog</h1>
 
-<p>Overseer is running.</p>
+<p><a href="intents/new">New Intent</a></p>
+
+@if (_backlog is { Count: 0 })
+{
+    <p>The Backlog is empty.</p>
+}
+else if (_backlog is not null)
+{
+    <ul class="backlog">
+        @foreach (var intent in _backlog)
+        {
+            <li class="backlog-intent" data-intent>
+                <span class="intent-first-line">@intent.FirstLine</span>
+                <span class="intent-state">@intent.State</span>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    private IReadOnlyList<Intent>? _backlog;
+
+    protected override async Task OnInitializedAsync() =>
+        _backlog = await Lifecycle.ListBacklogAsync(HttpContext.RequestAborted);
+}
