@@ -10,6 +10,19 @@ namespace Overseer.Tests;
 
 public class DraftEditingTests(PostgresServer postgres)
 {
+    /// <summary>Every state but Draft, with how the user reads it.</summary>
+    public static TheoryData<IntentState, string> NoDraftStates => new()
+    {
+        { IntentState.Refining, "Refining" },
+        { IntentState.AwaitingSpecApproval, "Awaiting Spec Approval" },
+        { IntentState.Approved, "Approved" },
+        { IntentState.Implementing, "Implementing" },
+        { IntentState.InReview, "In Review" },
+        { IntentState.Paused, "Paused" },
+        { IntentState.Done, "Done" },
+        { IntentState.Cancelled, "Cancelled" },
+    };
+
     [Fact]
     public async Task Clicking_an_Intent_in_the_Backlog_opens_its_detail_page_with_its_rendered_text_state_and_Repositories_in_scope()
     {
@@ -72,9 +85,9 @@ public class DraftEditingTests(PostgresServer postgres)
     }
 
     [Theory]
-    [InlineData(IntentState.Done)]
-    [InlineData(IntentState.Cancelled)]
-    public async Task The_detail_page_of_an_Intent_that_is_no_Draft_shows_it_but_offers_no_changes(IntentState state)
+    [InlineData(IntentState.Done, "Done")]
+    [InlineData(IntentState.Cancelled, "Cancelled")]
+    public async Task The_detail_page_of_an_Intent_that_is_no_Draft_shows_it_but_offers_no_changes(IntentState state, string shownAs)
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres);
         using var saved = await SaveAsync(overseer, "Export data");
@@ -83,7 +96,7 @@ public class DraftEditingTests(PostgresServer postgres)
 
         var page = await GetAsync(overseer, address);
 
-        Assert.Equal(state.ToString(), ElementText(page, "intent-state"));
+        Assert.Equal(shownAs, ElementText(page, "intent-state"));
         Assert.Equal("<p>Export data</p>", RenderedText(page));
         Assert.DoesNotContain($"{address[1..]}/edit", page);
         Assert.DoesNotContain($"{address[1..]}/delete", page);
@@ -345,9 +358,8 @@ public class DraftEditingTests(PostgresServer postgres)
     }
 
     [Theory]
-    [InlineData(IntentState.Done)]
-    [InlineData(IntentState.Cancelled)]
-    public async Task The_editor_of_an_Intent_that_is_no_Draft_says_so_and_offers_no_form(IntentState state)
+    [MemberData(nameof(NoDraftStates))]
+    public async Task The_editor_of_an_Intent_that_is_no_Draft_says_so_and_offers_no_form(IntentState state, string shownAs)
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres);
         using var saved = await SaveAsync(overseer, "Export data");
@@ -356,15 +368,14 @@ public class DraftEditingTests(PostgresServer postgres)
 
         var page = await GetAsync(overseer, address + "/edit");
 
-        Assert.Equal($"This Intent is {state}, and only a Draft can be edited.", Alert(page));
+        Assert.Equal($"This Intent is {shownAs}, and only a Draft can be edited.", Alert(page));
         Assert.DoesNotContain("<textarea", page);
         Assert.Matches($"<a[^>]*href=\"{address[1..]}\"[^>]*>Back to the Intent</a>", page);
     }
 
     [Theory]
-    [InlineData(IntentState.Done)]
-    [InlineData(IntentState.Cancelled)]
-    public async Task The_delete_page_of_an_Intent_that_is_no_Draft_says_so_and_offers_no_button(IntentState state)
+    [MemberData(nameof(NoDraftStates))]
+    public async Task The_delete_page_of_an_Intent_that_is_no_Draft_says_so_and_offers_no_button(IntentState state, string shownAs)
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres);
         using var saved = await SaveAsync(overseer, "Export data");
@@ -373,14 +384,13 @@ public class DraftEditingTests(PostgresServer postgres)
 
         var page = await GetAsync(overseer, address + "/delete");
 
-        Assert.Equal($"This Intent is {state}, and only a Draft can be deleted.", Alert(page));
+        Assert.Equal($"This Intent is {shownAs}, and only a Draft can be deleted.", Alert(page));
         Assert.DoesNotContain("DeleteConfirmation", page);
     }
 
     [Theory]
-    [InlineData(IntentState.Done)]
-    [InlineData(IntentState.Cancelled)]
-    public async Task An_edit_from_an_editor_opened_while_the_Intent_was_a_Draft_is_refused_keeping_what_was_entered(IntentState state)
+    [MemberData(nameof(NoDraftStates))]
+    public async Task An_edit_from_an_editor_opened_while_the_Intent_was_a_Draft_is_refused_keeping_what_was_entered(IntentState state, string shownAs)
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/API", "acme/web");
         using var saved = await SaveAsync(overseer, "Export data", "acme/web");
@@ -391,7 +401,7 @@ public class DraftEditingTests(PostgresServer postgres)
         using var response = await editor.SubmitFormAsync("edit-intent", EditorFields("Import data", "save", "acme/API"));
 
         var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Equal($"This Intent is {state}, and only a Draft can be edited.", Alert(page));
+        Assert.Equal($"This Intent is {shownAs}, and only a Draft can be edited.", Alert(page));
         Assert.Equal("Import data", Editor(page));
         Assert.Equal([("acme/API", true), ("acme/web", false)], Offered(page));
         var stored = await GetAsync(overseer, address);
@@ -417,9 +427,8 @@ public class DraftEditingTests(PostgresServer postgres)
     }
 
     [Theory]
-    [InlineData(IntentState.Done)]
-    [InlineData(IntentState.Cancelled)]
-    public async Task A_delete_from_a_page_opened_while_the_Intent_was_a_Draft_is_refused_and_deletes_nothing(IntentState state)
+    [MemberData(nameof(NoDraftStates))]
+    public async Task A_delete_from_a_page_opened_while_the_Intent_was_a_Draft_is_refused_and_deletes_nothing(IntentState state, string shownAs)
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         using var saved = await SaveAsync(overseer, "Export data", "acme/web");
@@ -430,7 +439,7 @@ public class DraftEditingTests(PostgresServer postgres)
         using var response = await deletePage.SubmitFormAsync("delete-intent", Confirmed);
 
         Assert.Equal(
-            $"This Intent is {state}, and only a Draft can be deleted.",
+            $"This Intent is {shownAs}, and only a Draft can be deleted.",
             Alert(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
         Assert.Equal("<p>Export data</p>", RenderedText(await GetAsync(overseer, address)));
         await using var database = overseer.OpenDatabase();

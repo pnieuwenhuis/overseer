@@ -48,14 +48,7 @@ public class RepositorySetupTests(PostgresServer postgres)
     public async Task Repository_Setups_take_no_Active_Intent_slot()
     {
         await using var overseer = await StartWithTokenAsync();
-        using var limited = await overseer.SubmitFormAsync("/settings", "operating-limits", new Dictionary<string, string>
-        {
-            ["MaxActiveIntents"] = "1",
-            ["RefinementIdleTimeout"] = "30",
-            ["VerificationAttemptsPerTask"] = "3",
-            ["MaxSandboxLifetime"] = "12",
-        });
-        Assert.Contains("The operating limits are saved.", await limited.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        await IntentPortal.SetMaxActiveIntentsAsync(overseer, 1);
 
         using var first = await StartSetupAsync(overseer, "acme", "web");
         using var second = await StartSetupAsync(overseer, "acme", "api");

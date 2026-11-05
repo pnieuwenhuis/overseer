@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.RegularExpressions;
 using Overseer.Intents;
 using static Overseer.Tests.DatabaseRaces;
@@ -26,7 +25,7 @@ public class StartingIntentsTests(PostgresServer postgres)
 
             // Starting returns to the detail page, so reloading the page doesn't start the Intent again.
             Assert.Equal(address, response.FinalPath());
-            Assert.Equal("Refining", ElementText(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), "intent-state"));
+            Assert.Equal("Refining", await ShownStateAsync(response));
             Assert.Equal("Refining", ElementText(await GetAsync(first, "/"), "intent-state"));
         }
 
@@ -35,17 +34,18 @@ public class StartingIntentsTests(PostgresServer postgres)
         Assert.Equal("Refining", ElementText(await GetAsync(second, address), "intent-state"));
     }
 
-    // Start is the spec's trigger from Draft only: the other ways into Refining, from AwaitingSpecApproval and Paused, are triggers of their own.
+    // What Start does here is move a Draft to Refining. The v1 spec's other ways into Refining, from AwaitingSpecApproval and Paused, are
+    // triggers of their own, and its Approved -> Implementing on "User starts" takes Approved off this list when it arrives.
     [Theory]
-    [InlineData(IntentState.Refining)]
-    [InlineData(IntentState.AwaitingSpecApproval)]
-    [InlineData(IntentState.Approved)]
-    [InlineData(IntentState.Implementing)]
-    [InlineData(IntentState.InReview)]
-    [InlineData(IntentState.Paused)]
-    [InlineData(IntentState.Done)]
-    [InlineData(IntentState.Cancelled)]
-    public async Task The_Intent_Lifecycle_refuses_a_Start_from_any_state_but_Draft_as_the_spec_has_no_such_transition(IntentState state)
+    [InlineData(IntentState.Refining, "Refining")]
+    [InlineData(IntentState.AwaitingSpecApproval, "Awaiting Spec Approval")]
+    [InlineData(IntentState.Approved, "Approved")]
+    [InlineData(IntentState.Implementing, "Implementing")]
+    [InlineData(IntentState.InReview, "In Review")]
+    [InlineData(IntentState.Paused, "Paused")]
+    [InlineData(IntentState.Done, "Done")]
+    [InlineData(IntentState.Cancelled, "Cancelled")]
+    public async Task The_Intent_Lifecycle_refuses_a_Start_from_these_states_as_Start_moves_a_Draft_to_Refining(IntentState state, string shownAs)
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         using var saved = await SaveAsync(overseer, "Export data", "acme/web");
@@ -56,11 +56,11 @@ public class StartingIntentsTests(PostgresServer postgres)
         using var response = await detailPage.SubmitFormAsync("start-intent", []);
 
         var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Equal($"This Intent is {state}, and only a Draft can be started.", Alert(page));
-        Assert.Equal(state.ToString(), ElementText(page, "intent-state"));
+        Assert.Equal($"This Intent is {shownAs}, and Start moves a Draft to Refining.", Alert(page));
+        Assert.Equal(shownAs, ElementText(page, "intent-state"));
         Assert.DoesNotContain(">Start<", page);
         var opened = await GetAsync(overseer, address);
-        Assert.Equal(state.ToString(), ElementText(opened, "intent-state"));
+        Assert.Equal(shownAs, ElementText(opened, "intent-state"));
         Assert.DoesNotContain(">Start<", opened);
         Assert.DoesNotContain("role=\"alert\"", opened);
     }
@@ -107,7 +107,7 @@ public class StartingIntentsTests(PostgresServer postgres)
         Assert.False(StartIsDisabled(editedPage));
         Assert.DoesNotContain("role=\"alert\"", editedPage);
         using var started = await StartAsync(overseer, address);
-        Assert.Equal("Refining", ElementText(await started.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), "intent-state"));
+        Assert.Equal("Refining", await ShownStateAsync(started));
     }
 
     [Fact]
@@ -229,6 +229,7 @@ public class StartingIntentsTests(PostgresServer postgres)
         Assert.Equal("Draft", ElementText(await GetAsync(overseer, address), "intent-state"));
     }
 
+    // Writes the states directly, as most can't be reached yet: each later ticket that makes one reachable owes a test through its real route.
     [Theory]
     [InlineData(IntentState.Refining, true)]
     [InlineData(IntentState.Implementing, true)]
@@ -271,7 +272,7 @@ public class StartingIntentsTests(PostgresServer postgres)
         Assert.False(StartIsDisabled(await GetAsync(overseer, address)));
         using var response = await StartAsync(overseer, address);
 
-        Assert.Equal("Refining", ElementText(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), "intent-state"));
+        Assert.Equal("Refining", await ShownStateAsync(response));
     }
 
     [Fact]
@@ -315,7 +316,7 @@ public class StartingIntentsTests(PostgresServer postgres)
 
         Assert.False(StartIsDisabled(await GetAsync(overseer, address)));
         using var response = await StartAsync(overseer, address);
-        Assert.Equal("Refining", ElementText(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), "intent-state"));
+        Assert.Equal("Refining", await ShownStateAsync(response));
     }
 
     [Fact]
@@ -334,7 +335,7 @@ public class StartingIntentsTests(PostgresServer postgres)
             () => StartAsync(overseer, first),
             () => StartAsync(overseer, second));
 
-        Assert.Equal("Refining", ElementText(await won.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), "intent-state"));
+        Assert.Equal("Refining", await ShownStateAsync(won));
         var page = await lost.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Equal(AllSlotsTaken("\"First\" and \"Running\""), Alert(page));
         Assert.True(StartIsDisabled(page));
@@ -379,7 +380,7 @@ public class StartingIntentsTests(PostgresServer postgres)
             () => StartAsync(overseer, address),
             () => editor.SubmitFormAsync("edit-intent", EditorFields("Import data", "save", "acme/API")));
 
-        Assert.Equal("Refining", ElementText(await started.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), "intent-state"));
+        Assert.Equal("Refining", await ShownStateAsync(started));
         Assert.Equal("This Intent is Refining, and only a Draft can be edited.", Alert(await edited.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
         var stored = await GetAsync(overseer, address);
         Assert.Equal("<p>Export data</p>", RenderedText(stored));
@@ -399,7 +400,7 @@ public class StartingIntentsTests(PostgresServer postgres)
             () => StartAsync(overseer, address),
             () => deletePage.SubmitFormAsync("delete-intent", Confirmed));
 
-        Assert.Equal("Refining", ElementText(await started.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), "intent-state"));
+        Assert.Equal("Refining", await ShownStateAsync(started));
         Assert.Equal("This Intent is Refining, and only a Draft can be deleted.", Alert(await deleted.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
         Assert.Equal("Refining", ElementText(await GetAsync(overseer, address), "intent-state"));
     }
@@ -437,8 +438,8 @@ public class StartingIntentsTests(PostgresServer postgres)
             () => StartAsync(overseer, address),
             () => otherTab.SubmitFormAsync("start-intent", []));
 
-        Assert.Equal("Refining", ElementText(await first.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), "intent-state"));
-        Assert.Equal("This Intent is Refining, and only a Draft can be started.", Alert(await second.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
+        Assert.Equal("Refining", await ShownStateAsync(first));
+        Assert.Equal("This Intent is Refining, and Start moves a Draft to Refining.", Alert(await second.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
         // The other of the default two slots is still free.
         Assert.False(StartIsDisabled(await GetAsync(overseer, await AddressAsync(overseer, "Import data"))));
     }
@@ -454,22 +455,13 @@ public class StartingIntentsTests(PostgresServer postgres)
         using var saved = await SaveAsync(overseer, text, "acme/web");
         var address = await AddressAsync(overseer, firstLine ?? text);
         using var started = await StartAsync(overseer, address);
-        Assert.Equal("Refining", ElementText(await started.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), "intent-state"));
+        Assert.Equal("Refining", await ShownStateAsync(started));
         return address;
     }
 
-    /// <summary>Sets the maximum of Active Intents on the Settings page, leaving the other limits at their defaults.</summary>
-    private static async Task SetMaxActiveIntentsAsync(RunningOverseer overseer, int maximum)
-    {
-        using var response = await overseer.SubmitFormAsync("/settings", "operating-limits", new Dictionary<string, string>
-        {
-            ["MaxActiveIntents"] = maximum.ToString(CultureInfo.InvariantCulture),
-            ["RefinementIdleTimeout"] = "30",
-            ["VerificationAttemptsPerTask"] = "3",
-            ["MaxSandboxLifetime"] = "12",
-        });
-        Assert.Contains("The operating limits are saved.", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-    }
+    /// <summary>The state shown on the page this response brought back.</summary>
+    private static async Task<string> ShownStateAsync(HttpResponseMessage response) =>
+        ElementText(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), "intent-state");
 
     /// <summary>Opens the Intent's detail page and presses Start, whether or not the page offers it.</summary>
     private static Task<HttpResponseMessage> StartAsync(RunningOverseer overseer, string address) =>

@@ -75,7 +75,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
 
     /// <summary>Why an Intent in <paramref name="state"/> can't be edited, or <c>null</c> when it can.</summary>
     /// <param name="state">The Intent's state; <c>null</c> when there is no such Intent.</param>
-    public static string? WhyNotEditable(IntentState? state) => WhyNotADraft(state, other => $"This Intent is {other}, and only a Draft can be edited.");
+    public static string? WhyNotEditable(IntentState? state) => WhyNotADraft(state, shownAs => $"This Intent is {shownAs}, and only a Draft can be edited.");
 
     /// <summary>
     /// Deletes a Draft outright, with its Repositories in scope: it is gone, not Cancelled. Anything but a Draft is refused, as the Intent
@@ -99,7 +99,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
 
     /// <summary>Why an Intent in <paramref name="state"/> can't be deleted, or <c>null</c> when it can.</summary>
     /// <param name="state">The Intent's state; <c>null</c> when there is no such Intent.</param>
-    public static string? WhyNotDeletable(IntentState? state) => WhyNotADraft(state, other => $"This Intent is {other}, and only a Draft can be deleted.");
+    public static string? WhyNotDeletable(IntentState? state) => WhyNotADraft(state, shownAs => $"This Intent is {shownAs}, and only a Draft can be deleted.");
 
     /// <summary>
     /// Starts work on a Draft: it moves to Refining, and its text and Repositories in scope are locked from then on. Whether it may is
@@ -157,7 +157,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         var open = await ListOpenAsync(database.Intents.Where(intent => intent.RepositoriesInScope.Any(inScope => inScope.FullName == fullName)), cancellationToken);
         return open.Count == 0
             ? null
-            : Prose.Agreeing([.. open.Select(intent => $"\"{intent.FirstLine}\"")],
+            : Prose.Agreeing([.. open.Select(QuotedFirstLine)],
                 one: firstLine => $"the open Intent {firstLine} has it in scope",
                 many: firstLines => $"the open Intents {firstLines} have it in scope");
     }
@@ -167,13 +167,13 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     {
         // Both at once: the page drops a removed repository, so a refusal that left it out would be the last the user hears of it.
         string?[] problems = [text == "" ? "An Intent needs text: write what you want changed." : null, selection.RemovedNotice(configured)];
-        return problems.OfType<string>().ToList() is { Count: > 0 } found ? string.Join(" ", found) : null;
+        return AllOf(problems);
     }
 
     private static async Task<string?> WhyNotStartableAsync(
         OverseerDbContext database, Guid id, IntentState? state, int maxActiveIntents, CancellationToken cancellationToken)
     {
-        if (WhyNotADraft(state, other => $"This Intent is {other}, and only a Draft can be started.") is { } notADraft)
+        if (WhyNotADraft(state, shownAs => $"This Intent is {shownAs}, and Start moves a Draft to Refining.") is { } notADraft)
         {
             return notADraft;
         }
@@ -186,17 +186,23 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         string?[] problems =
         [
             hasRepositoryInScope ? null : "Start needs at least one Repository in scope: edit this Draft to select one.",
-            active.Count < maxActiveIntents ? null : $"All Active Intent slots are taken, by {Prose.List([.. active.Select(intent => $"\"{intent.FirstLine}\"")])}. You can raise the maximum in Settings.",
+            active.Count < maxActiveIntents ? null : $"All Active Intent slots are taken, by {Prose.List([.. active.Select(QuotedFirstLine)])}. You can raise the maximum in Settings.",
         ];
-        return problems.OfType<string>().ToList() is { Count: > 0 } found ? string.Join(" ", found) : null;
+        return AllOf(problems);
     }
 
+    /// <summary>The problems there are, as one message; <c>null</c> when there are none.</summary>
+    private static string? AllOf(string?[] problems) =>
+        problems.OfType<string>().ToList() is { Count: > 0 } found ? string.Join(" ", found) : null;
+
+    private static string QuotedFirstLine(Intent intent) => $"\"{intent.FirstLine}\"";
+
     // Names Draft rather than the states it refuses, so that a state added later is refused, open or not.
-    private static string? WhyNotADraft(IntentState? state, Func<IntentState, string> refusal) => state switch
+    private static string? WhyNotADraft(IntentState? state, Func<string, string> refusal) => state switch
     {
         null => "There is no such Intent: it may have been deleted.",
         IntentState.Draft => null,
-        { } other => refusal(other),
+        { } other => refusal(other.InWords()),
     };
 
     /// <summary>
@@ -328,6 +334,18 @@ public enum IntentState
     Paused,
     Done,
     Cancelled,
+}
+
+internal static class IntentStateWords
+{
+    /// <summary>The state as the user reads it, in the glossary's words.</summary>
+    public static string InWords(this IntentState state) => state switch
+    {
+        IntentState.AwaitingSpecApproval => "Awaiting Spec Approval",
+        IntentState.InReview => "In Review",
+        // One word, the same in the code and the glossary.
+        _ => state.ToString(),
+    };
 }
 
 /// <summary>An Intent, as PostgreSQL holds it.</summary>

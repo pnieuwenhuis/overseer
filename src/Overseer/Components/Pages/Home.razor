@@ -23,7 +23,7 @@ else if (_backlog is not null)
                     <a href="intents/@intent.Id" class="intent-first-line">@intent.FirstLine</a>
                     <span class="intent-repositories">@intent.RepositoriesInScopeLine</span>
                 </span>
-                <span class="intent-state">@intent.State</span>
+                <span class="intent-state">@intent.State.InWords()</span>
             </li>
         }
     </ul>

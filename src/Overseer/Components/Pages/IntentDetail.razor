@@ -11,15 +11,15 @@
 @if (_intent is not null)
 {
     <p class="intent-facts">
-        <span class="intent-state">@_intent.State</span>
+        <span class="intent-state">@_intent.State.InWords()</span>
         <span class="intent-repositories">@_intent.RepositoriesInScopeLine</span>
     </p>
     <MarkdownPreview Label="Intent text" Text="@_intent.Text" />
 }
-@if (_intent?.State == IntentState.Draft || _startMayBeSubmitted)
+@* A form submitted from a page opened earlier is handled whatever became of the Intent, and only a form on the page can handle it. Once refused, only a Draft keeps it. *@
+@if (_intent?.State == IntentState.Draft || (HttpMethods.IsPost(HttpContext.Request.Method) && _whyNotStartable is null))
 {
     <div class="intent-actions">
-        @* A form submitted from a page opened earlier is handled whatever became of the Intent, and only a form on the page can handle it. *@
         <form method="post" @formname="start-intent" @onsubmit="StartAsync">
             <AntiforgeryToken />
             <button type="submit" disabled="@(_whyNotStartable is not null)">Start</button>
@@ -47,14 +47,12 @@
     private Intent? _intent;
     // Why this Intent can't be started, as a Draft's page explains and a refused Start says.
     private string? _whyNotStartable;
-    private bool _startMayBeSubmitted;
 
     protected override async Task OnInitializedAsync()
     {
         _intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
         if (HttpMethods.IsPost(HttpContext.Request.Method))
         {
-            _startMayBeSubmitted = true;
             return;
         }
 
@@ -78,7 +76,6 @@
             case IntentChange.Refused refused:
                 _whyNotStartable = refused.Error;
                 _intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
-                _startMayBeSubmitted = false;
                 break;
         }
     }

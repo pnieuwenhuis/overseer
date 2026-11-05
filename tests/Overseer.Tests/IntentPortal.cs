@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Intents;
+using Overseer.Settings;
 using static Overseer.Tests.RepositorySetupPortal;
 
 namespace Overseer.Tests;
@@ -27,6 +29,19 @@ public static class IntentPortal
             Assert.Contains($"{repository} is added.", await added.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         }
         return overseer;
+    }
+
+    /// <summary>Saves this maximum of Active Intents on the Settings page, with the other limits at their defaults.</summary>
+    public static async Task SetMaxActiveIntentsAsync(RunningOverseer overseer, int maximum)
+    {
+        using var response = await overseer.SubmitFormAsync("/settings", "operating-limits", new Dictionary<string, string>
+        {
+            ["MaxActiveIntents"] = maximum.ToString(CultureInfo.InvariantCulture),
+            ["RefinementIdleTimeout"] = OperatingLimit.RefinementIdleTimeout.Default.ToString(CultureInfo.InvariantCulture),
+            ["VerificationAttemptsPerTask"] = OperatingLimit.VerificationAttemptsPerTask.Default.ToString(CultureInfo.InvariantCulture),
+            ["MaxSandboxLifetime"] = OperatingLimit.MaxSandboxLifetime.Default.ToString(CultureInfo.InvariantCulture),
+        });
+        Assert.Contains("The operating limits are saved.", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 
     /// <summary>Writes an Intent's text on the New Intent page, ticks exactly these repositories and saves it.</summary>

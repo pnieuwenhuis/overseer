@@ -1,6 +1,8 @@
 using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Time.Testing;
+using Overseer.Intents;
+using static Overseer.Tests.IntentPortal;
 
 namespace Overseer.Tests;
 
@@ -154,6 +156,19 @@ public class BacklogTests(PostgresServer postgres)
         Assert.DoesNotContain("An Intent needs text", page);
     }
 
+    [Theory]
+    [InlineData(IntentState.AwaitingSpecApproval, "Awaiting Spec Approval")]
+    [InlineData(IntentState.InReview, "In Review")]
+    public async Task The_Backlog_shows_a_state_as_the_glossary_words_it(IntentState state, string shownAs)
+    {
+        await using var overseer = await RunningOverseer.StartAsync(await postgres.CreateEmptyDatabaseAsync());
+        await overseer.LogInAsync();
+        using var saved = await SaveAsync(overseer, "Export data");
+        await SetStateAsync(overseer, "Export data", state);
+
+        Assert.Equal([("Export data", shownAs)], Backlog(await GetAsync(overseer, "/")));
+    }
+
     /// <summary>Writes an Intent's text in the New Intent page's editor and saves it.</summary>
     private static Task<HttpResponseMessage> SaveAsync(RunningOverseer overseer, string text) =>
         SubmitAsync(overseer, text, "save");
@@ -166,18 +181,6 @@ public class BacklogTests(PostgresServer postgres)
             ["IntentText"] = text.ReplaceLineEndings("\r\n"),
             ["IntentAction"] = action,
         });
-
-    /// <summary>The HTML of the Intent's preview, without surrounding whitespace.</summary>
-    private static string Preview(string page) =>
-        Regex.Match(page, "<section[^>]*aria-label=\"Intent preview\"[^>]*>(.*?)</section>", RegexOptions.Singleline) is { Success: true } preview
-            ? preview.Groups[1].Value.Trim().ReplaceLineEndings("\n")
-            : throw new InvalidOperationException("The page has no Intent preview.");
-
-    /// <summary>The text in the Intent's editor, as a browser would read it.</summary>
-    private static string Editor(string page) =>
-        Regex.Match(page, "<textarea[^>]*name=\"IntentText\"[^>]*>(.*?)</textarea>", RegexOptions.Singleline) is { Success: true } editor
-            ? WebUtility.HtmlDecode(editor.Groups[1].Value)
-            : throw new InvalidOperationException("The page has no Intent editor.");
 
     /// <summary>The Backlog's Intents, top to bottom, as a browser would show their first line and state.</summary>
     private static IReadOnlyList<(string FirstLine, string State)> Backlog(string page) =>
