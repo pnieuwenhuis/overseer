@@ -43,7 +43,7 @@ An Intent on which agents are currently working (Refining, Implementing or In Re
 _Avoid_: Running intent, in-progress intent
 
 **Needs Attention**:
-The condition of an Active Intent that cannot progress until the human acts, such as answering the Analyst, approving a Spec, or triaging review comments.
+The condition of an Intent that cannot progress until the human acts, such as answering the Analyst, approving a Spec, or triaging review comments.
 _Avoid_: Blocked, waiting, pending
 
 **Light**:

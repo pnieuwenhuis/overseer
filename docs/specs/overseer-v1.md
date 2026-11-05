@@ -214,7 +214,7 @@ A traffic light per Intent shows whether agents are working, need me, or have fa
 | Any state except Draft, Done and Cancelled | Cancelled | User cancels |
 
 - Active states (which occupy a slot) are Refining, Implementing and InReview.
-- Needs Attention (orange) means one of these: the Analyst is waiting for answers, an agent asked a question, or Review Comments await triage.
+- Needs Attention (orange) means one of these: the Analyst is waiting for answers, a Spec awaits approval, an agent asked a question, or Review Comments await triage.
 - Failed (red) means one of these: a Failed Task, Sandbox creation failed, or a merge failed.
 - Task states are Pending, Running, Done and Failed. The runner always takes the first Pending Task.
 
