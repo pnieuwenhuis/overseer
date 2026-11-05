@@ -3,12 +3,19 @@ using Microsoft.EntityFrameworkCore;
 using Overseer.GitHub;
 using Overseer.Persistence;
 using Overseer.Repositories;
+using Overseer.Settings;
 
 namespace Overseer.Intents;
 
 /// <summary>Owns the Intents' state: everything else asks it to capture or change an Intent and never sets state directly.</summary>
-public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databases, TimeProvider time)
+public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databases, SettingsStore settings, TimeProvider time)
 {
+    /// <summary>The states of an Active Intent, each occupying a slot; what counts towards the maximum is defined here and nowhere else.</summary>
+    private static readonly IntentState[] ActiveStates = [IntentState.Refining, IntentState.Implementing, IntentState.InReview];
+
+    /// <summary>The PostgreSQL advisory lock for the slots, in this database; the number means nothing, and only has to stay the only one used.</summary>
+    private const long ActiveIntentSlotsLock = 7_234_001;
+
     /// <summary>Captures what the user wrote as a new Draft, with the Configured Repositories they selected in scope.</summary>
     /// <param name="selection">Selecting none is fine: only starting an Intent needs a Repository in scope.</param>
     public async Task<IntentChange> CaptureAsync(string? editorText, RepositorySelection selection, CancellationToken cancellationToken)
@@ -94,6 +101,38 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     /// <param name="state">The Intent's state; <c>null</c> when there is no such Intent.</param>
     public static string? WhyNotDeletable(IntentState? state) => WhyNotADraft(state, other => $"This Intent is {other}, and only a Draft can be deleted.");
 
+    /// <summary>
+    /// Starts work on a Draft: it moves to Refining, and its text and Repositories in scope are locked from then on. Whether it may is
+    /// decided as the Intent is at this moment rather than as the user's page showed it.
+    /// </summary>
+    public async Task<IntentChange> StartAsync(Guid id, CancellationToken cancellationToken)
+    {
+        // Ahead of the transaction, so that no request holds a connection and its locks while it waits for another connection.
+        var limits = await settings.GetOperatingLimitsAsync(cancellationToken);
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        var state = await LockStateAsync(database, id, cancellationToken);
+        await HoldActiveIntentSlotsAsync(database, cancellationToken);
+        if (await WhyNotStartableAsync(database, id, state, limits.MaxActiveIntents, cancellationToken) is { } notStartable)
+        {
+            return new IntentChange.Refused(notStartable);
+        }
+
+        await database.Intents.Where(intent => intent.Id == id)
+            .ExecuteUpdateAsync(intent => intent.SetProperty(record => record.State, IntentState.Refining), cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new IntentChange.Made();
+    }
+
+    /// <summary>Why the Intent with this id can't be started at the moment, with what a refused Start says, or <c>null</c> when it can.</summary>
+    public async Task<string?> WhyNotStartableAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var limits = await settings.GetOperatingLimitsAsync(cancellationToken);
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        var state = await database.Intents.Where(intent => intent.Id == id).Select(intent => (IntentState?)intent.State).SingleOrDefaultAsync(cancellationToken);
+        return await WhyNotStartableAsync(database, id, state, limits.MaxActiveIntents, cancellationToken);
+    }
+
     /// <summary>The Backlog: every open Intent, newest first.</summary>
     public async Task<IReadOnlyList<Intent>> ListBacklogAsync(CancellationToken cancellationToken)
     {
@@ -131,6 +170,27 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         return problems.OfType<string>().ToList() is { Count: > 0 } found ? string.Join(" ", found) : null;
     }
 
+    private static async Task<string?> WhyNotStartableAsync(
+        OverseerDbContext database, Guid id, IntentState? state, int maxActiveIntents, CancellationToken cancellationToken)
+    {
+        if (WhyNotADraft(state, other => $"This Intent is {other}, and only a Draft can be started.") is { } notADraft)
+        {
+            return notADraft;
+        }
+
+        var hasRepositoryInScope = await database.Set<RepositoryInScopeRecord>().AnyAsync(repository => repository.IntentId == id, cancellationToken);
+        // The maximum may have been lowered below the number of Active Intents: they stay, and Start waits until there is a free slot.
+        var active = await ReadAsync(database.Intents.Where(intent => ActiveStates.Contains(intent.State)).OrderByDescending(intent => intent.CreatedAt), cancellationToken);
+
+        // Both at once, so that dealing with one doesn't lead straight to the other.
+        string?[] problems =
+        [
+            hasRepositoryInScope ? null : "Start needs at least one Repository in scope: edit this Draft to select one.",
+            active.Count < maxActiveIntents ? null : $"All Active Intent slots are taken, by {Prose.List([.. active.Select(intent => $"\"{intent.FirstLine}\"")])}. You can raise the maximum in Settings.",
+        ];
+        return problems.OfType<string>().ToList() is { Count: > 0 } found ? string.Join(" ", found) : null;
+    }
+
     // Names Draft rather than the states it refuses, so that a state added later is refused, open or not.
     private static string? WhyNotADraft(IntentState? state, Func<IntentState, string> refusal) => state switch
     {
@@ -148,6 +208,16 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         var locked = await database.Intents.FromSql($"""SELECT * FROM "Intents" WHERE "Id" = {id} FOR UPDATE""").AsNoTracking().ToListAsync(cancellationToken);
         return locked.SingleOrDefault()?.State;
     }
+
+    /// <summary>
+    /// Keeps every other transition into an Active state waiting until <paramref name="database"/>'s transaction ends, so that counting
+    /// the Active Intents and taking a slot are one step: under READ COMMITTED a count doesn't see the slot another transaction has taken
+    /// but not committed, and there is no row to lock for a slot that is free. What is counted after this sees whatever the previous
+    /// holder committed. Take it after the Intent's row, always in that order: a transaction holding this never waits for an Intent's
+    /// row, so two Starts can't deadlock.
+    /// </summary>
+    private static Task HoldActiveIntentSlotsAsync(OverseerDbContext database, CancellationToken cancellationToken) =>
+        database.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock({ActiveIntentSlotsLock})", cancellationToken);
 
     private static Task<IReadOnlyList<Intent>> ListOpenAsync(IQueryable<IntentRecord> intents, CancellationToken cancellationToken) =>
         ReadAsync(intents
@@ -204,7 +274,7 @@ public sealed class RepositorySelection
     }
 }
 
-/// <summary>What capturing, editing or deleting an Intent did.</summary>
+/// <summary>What capturing, editing, deleting or starting an Intent did.</summary>
 public abstract record IntentChange
 {
     private IntentChange()
@@ -248,8 +318,14 @@ public sealed partial record Intent(Guid Id, string Text, IntentState State, IRe
 public enum IntentState
 {
     Draft,
+    Refining,
 
-    // Nothing reaches these two yet. They exist because an Intent is open in every other state.
+    // Nothing reaches these yet, except by an update of the database in tests. The transitions to and from them come with their triggers.
+    AwaitingSpecApproval,
+    Approved,
+    Implementing,
+    InReview,
+    Paused,
     Done,
     Cancelled,
 }

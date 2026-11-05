@@ -1,5 +1,4 @@
 using System.Net;
-using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Time.Testing;
 using Overseer.Intents;
@@ -648,44 +647,4 @@ public class DraftEditingTests(PostgresServer postgres)
             intentEdited ? [("Import data", "Repositories in scope: acme/web")] : [("Export data", "No Repositories in scope")],
             Backlog(await GetAsync(overseer, "/")));
     }
-
-    private static Task<string> GetAsync(RunningOverseer overseer, string address) =>
-        overseer.Http.GetStringAsync(address, TestContext.Current.CancellationToken);
-
-    /// <summary>The address the Backlog links the Intent with this first line to, as a click on it goes to.</summary>
-    private static async Task<string> AddressAsync(RunningOverseer overseer, string firstLine)
-    {
-        var backlog = await GetAsync(overseer, "/");
-        var link = Regex.Match(backlog, $"<a[^>]*href=\"([^\"]*)\"[^>]*class=\"intent-first-line\"[^>]*>{Regex.Escape(WebUtility.HtmlEncode(firstLine))}</a>");
-        return link.Success ? "/" + link.Groups[1].Value : throw new InvalidOperationException($"The Backlog has no link to \"{firstLine}\": {backlog}");
-    }
-
-    /// <summary>Opens the Intent's editor, writes this text, ticks exactly these repositories and presses the button with the given value.</summary>
-    private static Task<HttpResponseMessage> EditAsync(RunningOverseer overseer, string address, string action, string text, params string[] repositories) =>
-        overseer.SubmitFormAsync(address + "/edit", "edit-intent", EditorFields(text, action, repositories));
-
-    /// <summary>Opens the Intent's delete page and confirms.</summary>
-    private static Task<HttpResponseMessage> DeleteAsync(RunningOverseer overseer, string address) =>
-        overseer.SubmitFormAsync(address + "/delete", "delete-intent", Confirmed);
-
-    /// <summary>What a browser sends for the button that confirms deleting an Intent.</summary>
-    private static readonly KeyValuePair<string, string>[] Confirmed = [new("DeleteConfirmation", "confirmed")];
-
-    /// <summary>The text in the Intent's editor, as a browser would read it.</summary>
-    private static string Editor(string page) =>
-        Regex.Match(page, "<textarea[^>]*name=\"IntentText\"[^>]*>(.*?)</textarea>", RegexOptions.Singleline) is { Success: true } editor
-            ? WebUtility.HtmlDecode(editor.Groups[1].Value)
-            : throw new InvalidOperationException($"The page has no Intent editor: {page}");
-
-    /// <summary>The HTML of the Intent's preview, without surrounding whitespace.</summary>
-    private static string Preview(string page) =>
-        Regex.Match(page, "<section[^>]*aria-label=\"Intent preview\"[^>]*>(.*?)</section>", RegexOptions.Singleline) is { Success: true } preview
-            ? preview.Groups[1].Value.Trim().ReplaceLineEndings("\n")
-            : throw new InvalidOperationException($"The page has no Intent preview: {page}");
-
-    /// <summary>The HTML of the Intent's rendered text, without surrounding whitespace.</summary>
-    private static string RenderedText(string page) =>
-        Regex.Match(page, "<section[^>]*aria-label=\"Intent text\"[^>]*>(.*?)</section>", RegexOptions.Singleline) is { Success: true } text
-            ? text.Groups[1].Value.Trim().ReplaceLineEndings("\n")
-            : throw new InvalidOperationException($"The page has no rendered Intent text: {page}");
 }

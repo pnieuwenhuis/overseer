@@ -15,13 +15,25 @@
         <span class="intent-repositories">@_intent.RepositoriesInScopeLine</span>
     </p>
     <MarkdownPreview Label="Intent text" Text="@_intent.Text" />
-    @if (_intent.State == IntentState.Draft)
-    {
-        <p class="intent-actions">
+}
+@if (_intent?.State == IntentState.Draft || _startMayBeSubmitted)
+{
+    <div class="intent-actions">
+        @* A form submitted from a page opened earlier is handled whatever became of the Intent, and only a form on the page can handle it. *@
+        <form method="post" @formname="start-intent" @onsubmit="StartAsync">
+            <AntiforgeryToken />
+            <button type="submit" disabled="@(_whyNotStartable is not null)">Start</button>
+        </form>
+        @if (_intent?.State == IntentState.Draft)
+        {
             <a href="intents/@Id/edit">Edit</a>
             <a href="intents/@Id/delete">Delete</a>
-        </p>
-    }
+        }
+    </div>
+}
+@if (_whyNotStartable is not null)
+{
+    <p role="alert">@_whyNotStartable</p>
 }
 <p><a href="/">Back to the Backlog</a></p>
 
@@ -33,13 +45,41 @@
     public Guid Id { get; set; }
 
     private Intent? _intent;
+    // Why this Intent can't be started, as a Draft's page explains and a refused Start says.
+    private string? _whyNotStartable;
+    private bool _startMayBeSubmitted;
 
     protected override async Task OnInitializedAsync()
     {
         _intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
+        if (HttpMethods.IsPost(HttpContext.Request.Method))
+        {
+            _startMayBeSubmitted = true;
+            return;
+        }
+
         if (_intent is null)
         {
             Navigation.NotFound();
+        }
+        else if (_intent.State == IntentState.Draft)
+        {
+            _whyNotStartable = await Lifecycle.WhyNotStartableAsync(Id, HttpContext.RequestAborted);
+        }
+    }
+
+    private async Task StartAsync()
+    {
+        switch (await Lifecycle.StartAsync(Id, HttpContext.RequestAborted))
+        {
+            case IntentChange.Made:
+                Navigation.NavigateTo($"/intents/{Id}");
+                break;
+            case IntentChange.Refused refused:
+                _whyNotStartable = refused.Error;
+                _intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
+                _startMayBeSubmitted = false;
+                break;
         }
     }
 }

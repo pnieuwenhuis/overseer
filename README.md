@@ -111,6 +111,12 @@ While the Intent is a Draft, the detail page offers Edit and Delete. Edit opens 
 
 `IntentLifecycle` decides on an edit or delete under a lock on the Intent's row, so what counts is the Intent's state at the moment of writing, not when the page was opened. Anything but a Draft is refused, and so is an Intent that was deleted in the meantime; an editor keeps your text so that it isn't lost. A change of state has to update that row, so that an edit or delete under way and the change wait for each other.
 
+A Draft's detail page also offers Start, which moves it to Refining. Nothing runs in Refining yet: the Analyst comes with Refinement. From then on the Intent's text and Repositories in scope can't be edited, and it can't be deleted. The server refuses that as above, whatever a request says, and it refuses a Start of anything but a Draft: the only way out of Draft besides deleting.
+
+Start is disabled, with the reason below it, while the Draft has no Repository in scope or all Active Intent slots are taken. The server refuses with the same explanation, which says which Intents take the slots and that you can raise the maximum in Settings. An Intent takes a slot in the Active states, Refining, Implementing and InReview, and `IntentLifecycle` defines them in one place; a Draft or a Repository Setup never takes one. Lowering the maximum below the number of Active Intents leaves them as they are: Start simply stays disabled until a slot is free.
+
+A Start holds a PostgreSQL advisory lock from before it counts the Active Intents until it commits, after locking the Intent's row. Under READ COMMITTED a count doesn't see a slot another transaction has taken but not committed, so without the lock two Starts could both take the last one. Any later transition into an Active state has to take the lock the same way.
+
 ## Settings
 
 The Portal's Settings page (in the navigation) holds what you change while Overseer runs. They are stored in PostgreSQL, so they survive restarts and upgrades; secrets are not settings and stay in the secret store (see [Secrets](#secrets)). Server-side code reads them through `SettingsStore`, which goes to the database on every read, so a saved change applies without a restart, and returns a setting's default while none is saved; the Configured Repositories have their own table and are read through `ConfiguredRepositories`.

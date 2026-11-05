@@ -42,8 +42,8 @@ public class RepositorySetupTests(PostgresServer postgres)
         Assert.Equal("Astro and TypeScript.", setup.TechStack);
     }
 
-    // Intents don't exist yet. This states that, with the fewest Active Intent slots there can be, Repository Setups
-    // still start: once the Intent Lifecycle counts slots, it must keep passing, so Setups are never counted by accident.
+    // With the fewest Active Intent slots there can be, Repository Setups still start, so Setups are never counted by accident.
+    // StartingIntentsTests states the other side: a Repository Setup under way leaves the slot free for an Intent.
     [Fact]
     public async Task Repository_Setups_take_no_Active_Intent_slot()
     {
