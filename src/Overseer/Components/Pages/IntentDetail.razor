@@ -1,0 +1,45 @@
+@page "/intents/{Id:guid}"
+@attribute [ExcludeFromInteractiveRouting]
+@using Overseer.Intents
+@inject IntentLifecycle Lifecycle
+@inject NavigationManager Navigation
+
+<PageTitle>@(_intent?.FirstLine ?? "Intent") · Overseer</PageTitle>
+
+<h1>Intent</h1>
+
+@if (_intent is not null)
+{
+    <p class="intent-facts">
+        <span class="intent-state">@_intent.State</span>
+        <span class="intent-repositories">@_intent.RepositoriesInScopeLine</span>
+    </p>
+    <MarkdownPreview Label="Intent text" Text="@_intent.Text" />
+    @if (_intent.State == IntentState.Draft)
+    {
+        <p class="intent-actions">
+            <a href="intents/@Id/edit">Edit</a>
+            <a href="intents/@Id/delete">Delete</a>
+        </p>
+    }
+}
+<p><a href="/">Back to the Backlog</a></p>
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [Parameter]
+    public Guid Id { get; set; }
+
+    private Intent? _intent;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
+        if (_intent is null)
+        {
+            Navigation.NotFound();
+        }
+    }
+}

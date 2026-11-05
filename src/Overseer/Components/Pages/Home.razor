@@ -20,10 +20,8 @@ else if (_backlog is not null)
         {
             <li class="backlog-intent" data-intent>
                 <span class="intent-summary">
-                    <span class="intent-first-line">@intent.FirstLine</span>
-                    <span class="intent-repositories">
-                        @(intent.RepositoriesInScope.Count == 0 ? "No Repositories in scope" : $"Repositories in scope: {string.Join(", ", intent.RepositoriesInScope)}")
-                    </span>
+                    <a href="intents/@intent.Id" class="intent-first-line">@intent.FirstLine</a>
+                    <span class="intent-repositories">@intent.RepositoriesInScopeLine</span>
                 </span>
                 <span class="intent-state">@intent.State</span>
             </li>

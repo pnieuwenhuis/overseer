@@ -11,38 +11,8 @@
 
 <h1>New Intent</h1>
 
-<form method="post" @formname="new-intent" @onsubmit="SubmitAsync" class="new-intent-form">
-    <AntiforgeryToken />
-    @if (_error is not null)
-    {
-        <p class="new-intent-error" role="alert">@_error</p>
-    }
-    <label>
-        Markdown
-        <textarea name="IntentText" rows="16" spellcheck="true" autofocus>@_text</textarea>
-    </label>
-    <fieldset class="new-intent-repositories">
-        <legend>Repositories in scope</legend>
-        @if (_repositories.Count == 0)
-        {
-            <p class="new-intent-note">No repositories are configured, so this Intent will have none in scope.</p>
-        }
-        @foreach (var repository in _repositories)
-        {
-            <label>
-                <input type="checkbox" name="RepositoriesInScope" value="@repository" checked="@(_selected?.Includes(repository) ?? true)" />
-                @repository
-            </label>
-        }
-    </fieldset>
-    <span class="new-intent-buttons">
-        <button type="submit" name="IntentAction" value="preview">Preview</button>
-        <button type="submit" name="IntentAction" value="save">Save as Draft</button>
-    </span>
-</form>
-
-<h2>Preview</h2>
-<MarkdownPreview Label="Intent preview" Text="@_text" />
+<IntentEditor FormName="new-intent" SaveLabel="Save as Draft" OnSubmit="SubmitAsync"
+    Text="@_text" Repositories="_repositories" Selected="_selected" Error="@_error" />
 
 @code {
     [CascadingParameter]

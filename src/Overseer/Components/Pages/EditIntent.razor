@@ -1,0 +1,100 @@
+@page "/intents/{Id:guid}/edit"
+@attribute [ExcludeFromInteractiveRouting]
+@using Overseer.GitHub
+@using Overseer.Intents
+@using Overseer.Repositories
+@inject IntentLifecycle Lifecycle
+@inject ConfiguredRepositories Repositories
+@inject NavigationManager Navigation
+
+<PageTitle>Edit Intent · Overseer</PageTitle>
+
+<h1>Edit Intent</h1>
+
+@if (_showEditor)
+{
+    <IntentEditor FormName="edit-intent" SaveLabel="Save" OnSubmit="SubmitAsync"
+        Text="@_text" Repositories="_repositories" Selected="_selected" Error="@_error" />
+}
+else
+{
+    <p role="alert">@_error</p>
+}
+<p><a href="@(_exists ? $"intents/{Id}" : "/")">@(_exists ? "Back to the Intent" : "Back to the Backlog")</a></p>
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [Parameter]
+    public Guid Id { get; set; }
+
+    [SupplyParameterFromForm(FormName = "edit-intent")]
+    private string? IntentText { get; set; }
+
+    // Which button submitted the form: "save", or "preview" to show the text rendered without saving.
+    [SupplyParameterFromForm(FormName = "edit-intent")]
+    private string? IntentAction { get; set; }
+
+    // The ticked checkboxes. A browser leaves out an unticked one, so with none ticked there is no value at all.
+    [SupplyParameterFromForm(FormName = "edit-intent")]
+    private string[]? RepositoriesInScope { get; set; }
+
+    private bool _exists;
+    private bool _showEditor;
+    // Why this Intent can't be edited at the moment.
+    private string? _notEditable;
+    // What the editor and preview show: the stored Intent, and once the form is submitted, what was submitted, as saving would keep it.
+    private string _text = "";
+    private string? _error;
+    private IReadOnlyList<RepositoryName> _repositories = [];
+    private RepositorySelection _selected = new([]);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
+        _exists = intent is not null;
+        _notEditable = IntentLifecycle.WhyNotEditable(intent?.State);
+        _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
+        // A form submitted from a page opened earlier is handled whatever became of the Intent, keeping what the user entered, and
+        // only a form on the page can handle it.
+        _showEditor = _notEditable is null || HttpMethods.IsPost(HttpContext.Request.Method);
+        if (intent is not null)
+        {
+            _text = intent.Text;
+            _selected = new RepositorySelection(intent.RepositoriesInScope.Select(repository => repository.ToString()));
+        }
+        if (!_showEditor)
+        {
+            _error = _notEditable;
+            if (!_exists)
+            {
+                Navigation.NotFound();
+            }
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        _text = Intent.TextFromEditor(IntentText);
+        _selected = new RepositorySelection(RepositoriesInScope ?? []);
+        if (IntentAction != "save")
+        {
+            // A repository removed since the page was opened drops off this page, so the next save would go on without it.
+            _error = _notEditable ?? _selected.RemovedNotice(_repositories);
+            return;
+        }
+
+        switch (await Lifecycle.EditAsync(Id, IntentText, _selected, HttpContext.RequestAborted))
+        {
+            case DraftChange.Made:
+                Navigation.NavigateTo($"/intents/{Id}");
+                break;
+            case DraftChange.Refused refused:
+                _error = refused.Error;
+                // A repository may have been removed since the page was opened.
+                _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
+                break;
+        }
+    }
+}

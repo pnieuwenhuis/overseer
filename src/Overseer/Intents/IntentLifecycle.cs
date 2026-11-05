@@ -17,11 +17,9 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         var configured = await ConfiguredRepositories.HoldThoseConfiguredAsync(database, selection.Repositories, cancellationToken);
-        // Both at once: the page drops a removed repository, so a refusal that left it out would be the last the user hears of it.
-        string?[] problems = [text == "" ? "An Intent needs text: write what you want changed." : null, selection.RemovedNotice(configured)];
-        if (problems.OfType<string>().ToList() is { Count: > 0 } refusal)
+        if (WhatIsWrong(text, selection, configured) is { } refusal)
         {
-            return new IntentCapturing.Refused(string.Join(" ", refusal));
+            return new IntentCapturing.Refused(refusal);
         }
 
         database.Intents.Add(new IntentRecord
@@ -37,11 +35,77 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         return new IntentCapturing.Captured();
     }
 
+    /// <summary>
+    /// Replaces a Draft's text and Repositories in scope with what the user entered. Anything but a Draft is refused, as the Intent is at
+    /// this moment rather than as the user's page showed it.
+    /// </summary>
+    /// <param name="selection">Selecting none is fine, as when capturing.</param>
+    public async Task<DraftChange> EditAsync(Guid id, string? editorText, RepositorySelection selection, CancellationToken cancellationToken)
+    {
+        var text = Intent.TextFromEditor(editorText);
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        if (WhyNotEditable(await LockStateAsync(database, id, cancellationToken)) is { } notEditable)
+        {
+            return new DraftChange.Refused(notEditable);
+        }
+
+        var configured = await ConfiguredRepositories.HoldThoseConfiguredAsync(database, selection.Repositories, cancellationToken);
+        if (WhatIsWrong(text, selection, configured) is { } refusal)
+        {
+            return new DraftChange.Refused(refusal);
+        }
+
+        await database.Intents.Where(intent => intent.Id == id)
+            .ExecuteUpdateAsync(intent => intent.SetProperty(record => record.Text, text), cancellationToken);
+        var inScope = database.Set<RepositoryInScopeRecord>();
+        await inScope.Where(repository => repository.IntentId == id).ExecuteDeleteAsync(cancellationToken);
+        inScope.AddRange(configured.Select(repository => new RepositoryInScopeRecord { IntentId = id, FullName = repository.ToString() }));
+        await database.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new DraftChange.Made();
+    }
+
+    /// <summary>Why an Intent in <paramref name="state"/> can't be edited, or <c>null</c> when it can.</summary>
+    /// <param name="state">The Intent's state; <c>null</c> when there is no such Intent.</param>
+    public static string? WhyNotEditable(IntentState? state) => WhyNotADraft(state, "edited");
+
+    /// <summary>
+    /// Deletes a Draft outright, with its Repositories in scope: it is gone, not Cancelled. Anything but a Draft is refused, as the Intent
+    /// is at this moment rather than as the user's page showed it.
+    /// </summary>
+    public async Task<DraftChange> DeleteAsync(Guid id, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        if (WhyNotDeletable(await LockStateAsync(database, id, cancellationToken)) is { } notDeletable)
+        {
+            return new DraftChange.Refused(notDeletable);
+        }
+
+        // The Configured Repositories aren't held, as capturing and editing do: deleting only ever lets a removal through. A removal
+        // that still sees this Intent is refused, as it would have been a moment earlier.
+        await database.Intents.Where(intent => intent.Id == id).ExecuteDeleteAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new DraftChange.Made();
+    }
+
+    /// <summary>Why an Intent in <paramref name="state"/> can't be deleted, or <c>null</c> when it can.</summary>
+    /// <param name="state">The Intent's state; <c>null</c> when there is no such Intent.</param>
+    public static string? WhyNotDeletable(IntentState? state) => WhyNotADraft(state, "deleted");
+
     /// <summary>The Backlog: every open Intent, newest first.</summary>
     public async Task<IReadOnlyList<Intent>> ListBacklogAsync(CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         return await ListOpenAsync(database.Intents, cancellationToken);
+    }
+
+    /// <summary>The Intent with this id, in whatever state; <c>null</c> when there is none, as after it was deleted.</summary>
+    public async Task<Intent?> FindAsync(Guid id, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        return (await ReadAsync(database.Intents.Where(intent => intent.Id == id), cancellationToken)).SingleOrDefault();
     }
 
     /// <summary>
@@ -59,15 +123,44 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
                 many: firstLines => $"the open Intents {firstLines} have it in scope");
     }
 
-    private static async Task<IReadOnlyList<Intent>> ListOpenAsync(IQueryable<IntentRecord> intents, CancellationToken cancellationToken)
+    /// <summary>What keeps this text and selection from being saved on an Intent, or <c>null</c> when nothing does.</summary>
+    private static string? WhatIsWrong(string text, RepositorySelection selection, IReadOnlyList<RepositoryName> configured)
     {
-        var stored = await intents
+        // Both at once: the page drops a removed repository, so a refusal that left it out would be the last the user hears of it.
+        string?[] problems = [text == "" ? "An Intent needs text: write what you want changed." : null, selection.RemovedNotice(configured)];
+        return problems.OfType<string>().ToList() is { Count: > 0 } found ? string.Join(" ", found) : null;
+    }
+
+    // Names Draft rather than the states it refuses, so that a state added later is refused, open or not.
+    private static string? WhyNotADraft(IntentState? state, string changed) => state switch
+    {
+        null => "There is no such Intent: it may have been deleted.",
+        IntentState.Draft => null,
+        _ => $"This Intent is {state}, and only a Draft can be {changed}.",
+    };
+
+    /// <summary>
+    /// The state of the Intent with this id, <c>null</c> when there is none. It keeps that state until <paramref name="database"/>'s
+    /// transaction ends: a change under way is waited for and then seen, and one that comes later waits for this transaction.
+    /// </summary>
+    private static async Task<IntentState?> LockStateAsync(OverseerDbContext database, Guid id, CancellationToken cancellationToken)
+    {
+        var locked = await database.Intents.FromSql($"""SELECT * FROM "Intents" WHERE "Id" = {id} FOR UPDATE""").AsNoTracking().ToListAsync(cancellationToken);
+        return locked.SingleOrDefault()?.State;
+    }
+
+    private static Task<IReadOnlyList<Intent>> ListOpenAsync(IQueryable<IntentRecord> intents, CancellationToken cancellationToken) =>
+        ReadAsync(intents
             // Names Done and Cancelled rather than the open states, so that a state added later counts as open.
             .Where(intent => intent.State != IntentState.Done && intent.State != IntentState.Cancelled)
-            .OrderByDescending(intent => intent.CreatedAt)
-            .Select(intent => new { intent.Text, intent.State, Repositories = intent.RepositoriesInScope.Select(repository => repository.FullName).ToList() })
+            .OrderByDescending(intent => intent.CreatedAt), cancellationToken);
+
+    private static async Task<IReadOnlyList<Intent>> ReadAsync(IQueryable<IntentRecord> intents, CancellationToken cancellationToken)
+    {
+        var stored = await intents
+            .Select(intent => new { intent.Id, intent.Text, intent.State, Repositories = intent.RepositoriesInScope.Select(repository => repository.FullName).ToList() })
             .ToListAsync(cancellationToken);
-        return [.. stored.Select(intent => new Intent(intent.Text, intent.State, ConfiguredRepositories.ParseSortedByName(intent.Repositories)))];
+        return [.. stored.Select(intent => new Intent(intent.Id, intent.Text, intent.State, ConfiguredRepositories.ParseSortedByName(intent.Repositories)))];
     }
 }
 
@@ -118,8 +211,22 @@ public abstract record IntentCapturing
     public sealed record Refused(string Error) : IntentCapturing;
 }
 
+/// <summary>What changing a Draft did.</summary>
+public abstract record DraftChange
+{
+    private DraftChange()
+    {
+    }
+
+    /// <summary>The change is saved.</summary>
+    public sealed record Made : DraftChange;
+
+    /// <summary>Nothing changed; <paramref name="Error"/> says why.</summary>
+    public sealed record Refused(string Error) : DraftChange;
+}
+
 /// <summary>An Intent, as the human described it, how far it has come, and the Configured Repositories it may change.</summary>
-public sealed partial record Intent(string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope)
+public sealed partial record Intent(Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope)
 {
     /// <summary>
     /// An Intent's text as Overseer keeps it, from what the user wrote: LF line breaks whatever the browser sent, and empty when
@@ -134,6 +241,10 @@ public sealed partial record Intent(string Text, IntentState State, IReadOnlyLis
     public string FirstLine =>
         Text.Split('\n').Select(line => AtxHeading().Replace(line, "${heading}").Trim()).FirstOrDefault(line => line != "")
         ?? Text.Trim().Split('\n', 2)[0].Trim();
+
+    /// <summary>The Repositories in scope, in a line of their own.</summary>
+    public string RepositoriesInScopeLine =>
+        RepositoriesInScope.Count == 0 ? "No Repositories in scope" : $"Repositories in scope: {string.Join(", ", RepositoriesInScope)}";
 
     // As CommonMark defines an ATX heading: "# C#" is a heading about C#, "## ##" is an empty heading, and "#hashtag" isn't a heading.
     [GeneratedRegex(@"^ {0,3}#{1,6}(?:[ \t]+(?<heading>.*?))??(?:[ \t]+#+)?[ \t]*$")]

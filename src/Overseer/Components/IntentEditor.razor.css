@@ -1,45 +1,45 @@
-.new-intent-form {
+.intent-editor-form {
     display: flex;
     flex-direction: column;
     gap: 1rem;
     max-width: 48rem;
 }
 
-.new-intent-form label {
+.intent-editor-form label {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
 }
 
-.new-intent-form textarea {
+.intent-editor-form textarea {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     resize: vertical;
 }
 
-.new-intent-repositories {
+.intent-editor-repositories {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
     margin: 0;
 }
 
-.new-intent-form .new-intent-repositories label {
+.intent-editor-form .intent-editor-repositories label {
     align-items: center;
     flex-direction: row;
     gap: 0.5rem;
 }
 
-.new-intent-note {
+.intent-editor-note {
     color: #57606a;
     margin: 0;
 }
 
-.new-intent-buttons {
+.intent-editor-buttons {
     display: flex;
     gap: 0.5rem;
 }
 
-.new-intent-error {
+.intent-editor-error {
     color: #b32121;
     margin: 0;
 }

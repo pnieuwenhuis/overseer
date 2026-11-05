@@ -1,0 +1,65 @@
+@* The form an Intent's text and Repositories in scope are entered on, with the preview of the text. The page handles what is submitted. *@
+@using Overseer.GitHub
+@using Overseer.Intents
+
+<form method="post" @formname="@FormName" @onsubmit="OnSubmit" class="intent-editor-form">
+    <AntiforgeryToken />
+    @if (Error is not null)
+    {
+        <p class="intent-editor-error" role="alert">@Error</p>
+    }
+    <label>
+        Markdown
+        <textarea name="IntentText" rows="16" spellcheck="true" autofocus>@Text</textarea>
+    </label>
+    <fieldset class="intent-editor-repositories">
+        <legend>Repositories in scope</legend>
+        @if (Repositories.Count == 0)
+        {
+            <p class="intent-editor-note">No repositories are configured, so this Intent will have none in scope.</p>
+        }
+        @foreach (var repository in Repositories)
+        {
+            <label>
+                <input type="checkbox" name="RepositoriesInScope" value="@repository" checked="@(Selected?.Includes(repository) ?? true)" />
+                @repository
+            </label>
+        }
+    </fieldset>
+    <span class="intent-editor-buttons">
+        <button type="submit" name="IntentAction" value="preview">Preview</button>
+        <button type="submit" name="IntentAction" value="save">@SaveLabel</button>
+    </span>
+</form>
+
+<h2>Preview</h2>
+<MarkdownPreview Label="Intent preview" Text="@Text" />
+
+@code {
+    /// <summary>The form's name, which the page's form parameters name too.</summary>
+    [Parameter, EditorRequired]
+    public required string FormName { get; set; }
+
+    /// <summary>What the button that saves says.</summary>
+    [Parameter, EditorRequired]
+    public required string SaveLabel { get; set; }
+
+    [Parameter, EditorRequired]
+    public EventCallback OnSubmit { get; set; }
+
+    /// <summary>What the editor and preview show.</summary>
+    [Parameter, EditorRequired]
+    public required string Text { get; set; }
+
+    /// <summary>The Configured Repositories on offer.</summary>
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<RepositoryName> Repositories { get; set; }
+
+    /// <summary>Which checkboxes show ticked; <c>null</c> for all of them.</summary>
+    [Parameter]
+    public RepositorySelection? Selected { get; set; }
+
+    /// <summary>What to tell the user above the form.</summary>
+    [Parameter]
+    public string? Error { get; set; }
+}

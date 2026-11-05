@@ -1,0 +1,13 @@
+.intent-facts {
+    color: #57606a;
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    margin: 0 0 1rem;
+    overflow-wrap: anywhere;
+}
+
+.intent-actions {
+    display: flex;
+    gap: 1rem;
+}

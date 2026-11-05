@@ -1,0 +1,80 @@
+@page "/intents/{Id:guid}/delete"
+@attribute [ExcludeFromInteractiveRouting]
+@using Overseer.Intents
+@inject IntentLifecycle Lifecycle
+@inject NavigationManager Navigation
+
+<PageTitle>Delete Intent · Overseer</PageTitle>
+
+<h1>Delete Intent</h1>
+
+@if (_error is not null)
+{
+    <p role="alert">@_error</p>
+    <p><a href="@(_exists ? $"intents/{Id}" : "/")">@(_exists ? "Back to the Intent" : "Back to the Backlog")</a></p>
+}
+else
+{
+    <p>Delete this Draft? It will be gone for good, not Cancelled.</p>
+    <MarkdownPreview Label="Intent text" Text="@_text" />
+    <form method="post" @formname="delete-intent" @onsubmit="SubmitAsync" class="delete-intent-form">
+        <AntiforgeryToken />
+        @* Nothing else deletes: opening this page doesn't, nor does a form submitted without pressing this button. *@
+        <button type="submit" name="DeleteConfirmation" value="confirmed">Delete this Draft</button>
+        <a href="intents/@Id">Keep it</a>
+    </form>
+}
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [Parameter]
+    public Guid Id { get; set; }
+
+    // The button that confirms the deletion: "confirmed".
+    [SupplyParameterFromForm(FormName = "delete-intent")]
+    private string? DeleteConfirmation { get; set; }
+
+    private bool _exists;
+    private string _text = "";
+    // Why this Intent can't be deleted. A form submitted from a page opened earlier says so once it is handled, and only a form on the page can handle it.
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
+        _exists = intent is not null;
+        _text = intent?.Text ?? "";
+        if (HttpMethods.IsPost(HttpContext.Request.Method))
+        {
+            return;
+        }
+
+        _error = IntentLifecycle.WhyNotDeletable(intent?.State);
+        if (!_exists)
+        {
+            Navigation.NotFound();
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (DeleteConfirmation != "confirmed")
+        {
+            var intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
+            _error = IntentLifecycle.WhyNotDeletable(intent?.State);
+            return;
+        }
+
+        switch (await Lifecycle.DeleteAsync(Id, HttpContext.RequestAborted))
+        {
+            case DraftChange.Made:
+                Navigation.NavigateTo("/");
+                break;
+            case DraftChange.Refused refused:
+                _error = refused.Error;
+                break;
+        }
+    }
+}

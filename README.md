@@ -105,6 +105,12 @@ New Intent opens an editor for the Intent's text, in free Markdown. Preview rend
 
 The page also offers every Configured Repository as a Repository in scope, all selected when it opens. Preview and a refused save keep your selection. They are stored with the Intent, as the repositories are named at that moment, and the Backlog shows them. A Draft can have none, so the Backlog can be filled before any repository is configured. When a selected repository was removed after the page opened, Preview and any save say so, naming it, and a save is refused rather than silently saving a smaller scope: the page then offers the current repositories and keeps your text and the rest of your selection, so saving again goes on without it.
 
+Clicking an Intent in the Backlog opens its detail page, with its rendered text, state and Repositories in scope. An address that names no Intent, or a malformed one, gets the Not Found page.
+
+While the Intent is a Draft, the detail page offers Edit and Delete. Edit opens the same editor as New Intent, starting from the stored text and Repositories in scope, and refuses and keeps what you entered in the same cases. Delete opens a page that asks for confirmation, and only its button deletes. The Intent is then gone from the Backlog and from PostgreSQL, with its Repositories in scope, so they no longer hold those Configured Repositories back from removal; it isn't Cancelled.
+
+`IntentLifecycle` decides on an edit or delete under a lock on the Intent's row, so what counts is the Intent's state at the moment of writing, not when the page was opened. Anything but a Draft is refused, and so is an Intent that was deleted in the meantime; an editor keeps your text so that it isn't lost. A change of state has to update that row, so that an edit or delete under way and the change wait for each other.
+
 ## Settings
 
 The Portal's Settings page (in the navigation) holds what you change while Overseer runs. They are stored in PostgreSQL, so they survive restarts and upgrades; secrets are not settings and stay in the secret store (see [Secrets](#secrets)). Server-side code reads them through `SettingsStore`, which goes to the database on every read, so a saved change applies without a restart, and returns a setting's default while none is saved; the Configured Repositories have their own table and are read through `ConfiguredRepositories`.
