@@ -44,16 +44,13 @@ public sealed class PortalBrowser : IDisposable
     /// <param name="fields">The fields to send: a name comes once per value, as with several ticked checkboxes of one name.</param>
     public async Task<HttpResponseMessage> SubmitFormAsync(string page, string formName, IEnumerable<KeyValuePair<string, string>> fields)
     {
-        var form = await Http.GetStringAsync(page, TestContext.Current.CancellationToken);
-        var antiforgeryToken = AntiforgeryToken(form);
-
-        return await Http.PostAsync(page, new FormUrlEncodedContent(
-        [
-            .. fields,
-            new("_handler", formName),
-            new("__RequestVerificationToken", antiforgeryToken),
-        ]), TestContext.Current.CancellationToken);
+        var tab = await OpenAsync(page);
+        return await tab.SubmitFormAsync(formName, fields);
     }
+
+    /// <summary>Opens a Portal page in a tab that stays as it is, so that its forms can be submitted after what they show has changed.</summary>
+    public async Task<PortalTab> OpenAsync(string page) =>
+        new(this, page, AntiforgeryToken(await Http.GetStringAsync(page, TestContext.Current.CancellationToken)));
 
     /// <summary>Opens the Portal's home page and tells whether Overseer showed it or sent the client to log in.</summary>
     public async Task<bool> IsLoggedInAsync()
@@ -67,4 +64,19 @@ public sealed class PortalBrowser : IDisposable
         Regex.Match(form, "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value;
 
     public void Dispose() => Http.Dispose();
+}
+
+/// <summary>A Portal page as a browser tab shows it, however long ago it was opened.</summary>
+public sealed class PortalTab(PortalBrowser browser, string page, string antiforgeryToken)
+{
+    /// <summary>Submits one of the page's forms with the given fields, the way a browser would.</summary>
+    /// <param name="formName">The form's <c>@formname</c>.</param>
+    /// <param name="fields">The fields to send: a name comes once per value, as with several ticked checkboxes of one name.</param>
+    public Task<HttpResponseMessage> SubmitFormAsync(string formName, IEnumerable<KeyValuePair<string, string>> fields) =>
+        browser.Http.PostAsync(page, new FormUrlEncodedContent(
+        [
+            .. fields,
+            new("_handler", formName),
+            new("__RequestVerificationToken", antiforgeryToken),
+        ]), TestContext.Current.CancellationToken);
 }

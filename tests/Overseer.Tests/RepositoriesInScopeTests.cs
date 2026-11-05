@@ -1,8 +1,8 @@
-using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Time.Testing;
 using Overseer.Intents;
+using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
 
 namespace Overseer.Tests;
@@ -23,7 +23,7 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
     public async Task The_selected_Repositories_in_scope_show_in_the_Backlog_also_after_a_restart()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
-        await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web", "acme/API", "acme/docs"]))
+        await using (var first = await IntentPortal.StartWithRepositoriesAsync(connectionString, ["acme/web", "acme/API", "acme/docs"]))
         {
             using var response = await SaveAsync(first, "Export data", "acme/web", "acme/API");
 
@@ -227,7 +227,7 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
     public async Task A_refusal_names_every_open_Intent_with_the_repository_in_scope_newest_first()
     {
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        await using var overseer = await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/API", "acme/web"], time);
+        await using var overseer = await IntentPortal.StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/API", "acme/web"], time);
         foreach (var (text, repository) in new[] { ("Oldest", "acme/web"), ("Other repository", "acme/API"), ("Middle", "acme/web"), ("Newest", "acme/web") })
         {
             using var saved = await SaveAsync(overseer, text, repository);
@@ -314,41 +314,6 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
         await AssertExactlyOneSucceededAsync(overseer, saved, removed);
     }
 
-    /// <summary>
-    /// Runs <paramref name="first"/>, held up by <paramref name="tableLock"/>, which lets the table's reads through but not its writes,
-    /// then <paramref name="second"/>, which gets the chance to overtake it, and lets both finish.
-    /// </summary>
-    private static async Task<(HttpResponseMessage First, HttpResponseMessage Second)> RaceAsync(
-        RunningOverseer overseer, FormattableString tableLock, Func<Task<HttpResponseMessage>> first, Func<Task<HttpResponseMessage>> second)
-    {
-        await using var holder = overseer.OpenDatabase();
-        await using var transaction = await holder.Database.BeginTransactionAsync(TestContext.Current.CancellationToken);
-        await holder.Database.ExecuteSqlAsync(tableLock, TestContext.Current.CancellationToken);
-        using var watching = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        watching.CancelAfter(TimeSpan.FromSeconds(30));
-
-        var firstDone = first();
-        await Task.WhenAny(firstDone, UntilWaitingOnLocksAsync(overseer, 1, watching.Token));
-        var secondDone = second();
-        await Task.WhenAny(secondDone, UntilWaitingOnLocksAsync(overseer, 2, watching.Token));
-        await watching.CancelAsync();
-
-        await transaction.RollbackAsync(TestContext.Current.CancellationToken);
-        return (await firstDone, await secondDone);
-    }
-
-    /// <summary>Returns once this many of the database's connections wait for a lock.</summary>
-    private static async Task UntilWaitingOnLocksAsync(RunningOverseer overseer, int connections, CancellationToken cancellationToken)
-    {
-        await using var database = overseer.OpenDatabase();
-        while (await database.Database.SqlQuery<int>(
-            $"""SELECT count(*)::int AS "Value" FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'""")
-            .SingleAsync(cancellationToken) < connections)
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
-        }
-    }
-
     private static async Task AssertExactlyOneSucceededAsync(RunningOverseer overseer, HttpResponseMessage saved, HttpResponseMessage removed)
     {
         var intentSaved = saved.RequestMessage!.RequestUri!.AbsolutePath == "/";
@@ -362,68 +327,17 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
             Backlog(await overseer.Http.GetStringAsync("/", TestContext.Current.CancellationToken)));
     }
 
-    /// <summary>Sets an Intent's state directly: the Portal can't make one Done or Cancelled yet.</summary>
-    private static async Task SetStateAsync(RunningOverseer overseer, string text, IntentState state)
-    {
-        await using var database = overseer.OpenDatabase();
-        await database.Intents.Where(intent => intent.Text == text)
-            .ExecuteUpdateAsync(intent => intent.SetProperty(record => record.State, state), TestContext.Current.CancellationToken);
-    }
-
-    /// <summary>Writes an Intent's text on the New Intent page, ticks exactly these repositories and saves it.</summary>
-    private static Task<HttpResponseMessage> SaveAsync(RunningOverseer overseer, string text, params string[] repositories) =>
-        SubmitAsync(overseer, text, "save", repositories);
-
     /// <summary>Writes an Intent's text on the New Intent page, ticks exactly these repositories and presses the button with the given value.</summary>
     private static Task<HttpResponseMessage> SubmitAsync(RunningOverseer overseer, string text, string action, params string[] repositories) =>
-        overseer.SubmitFormAsync("/intents/new", "new-intent",
-        [
-            new("IntentText", text),
-            new("IntentAction", action),
-            // A browser sends a ticked checkbox as its value, and an unticked one not at all.
-            .. repositories.Select(repository => KeyValuePair.Create("RepositoriesInScope", repository)),
-        ]);
-
-    /// <summary>The text of the page's alert, as a browser would show it.</summary>
-    private static string Alert(string page) =>
-        Regex.Match(page, "<p[^>]*role=\"alert\"[^>]*>(.*?)</p>", RegexOptions.Singleline) is { Success: true } alert
-            ? WebUtility.HtmlDecode(alert.Groups[1].Value).Trim()
-            : throw new InvalidOperationException($"The page has no alert: {page}");
+        overseer.SubmitFormAsync("/intents/new", "new-intent", EditorFields(text, action, repositories));
 
     /// <summary>A running Overseer, logged in, with these repositories configured.</summary>
     private async Task<RunningOverseer> StartWithRepositoriesAsync(params string[] repositories) =>
-        await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), repositories);
-
-    private static async Task<RunningOverseer> StartWithRepositoriesAsync(string connectionString, string[] repositories, TimeProvider? time = null)
-    {
-        var overseer = await RunningOverseer.StartAsync(connectionString, time: time);
-        await overseer.LogInAsync();
-        overseer.GitHub.AcceptToken(Token, "octocat");
-        using var saved = await overseer.SubmitFormAsync("/settings", "github-token", new Dictionary<string, string> { ["GitHubToken"] = Token });
-        foreach (var repository in repositories)
-        {
-            overseer.GitHub.AddRepository(repository);
-            using var added = await overseer.SubmitFormAsync("/settings", "repository-add", new Dictionary<string, string> { ["Repository"] = repository });
-            Assert.Contains($"{repository} is added.", await added.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        }
-        return overseer;
-    }
-
-    /// <summary>The Configured Repositories the New Intent page offers, in its order, and whether each is ticked.</summary>
-    private static IReadOnlyList<(string Repository, bool Selected)> Offered(string page) =>
-        [.. Regex.Matches(page, "<input[^>]*name=\"RepositoriesInScope\"[^>]*>").Select(checkbox => (
-            WebUtility.HtmlDecode(Regex.Match(checkbox.Value, "value=\"([^\"]*)\"").Groups[1].Value),
-            Regex.IsMatch(checkbox.Value, @"\schecked\b")))];
+        await IntentPortal.StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), repositories);
 
     /// <summary>The Backlog's Intents, top to bottom, as a browser would show their first line and Repositories in scope.</summary>
     private static IReadOnlyList<(string FirstLine, string Repositories)> Backlog(string page) =>
         [.. Regex.Matches(page, "<li[^>]*data-intent[^>]*>.*?</li>", RegexOptions.Singleline).Select(intent => (
             ElementText(intent.Value, "intent-first-line"),
             ElementText(intent.Value, "intent-repositories")))];
-
-    /// <summary>The text of the element with the given CSS class, as a browser would show it.</summary>
-    private static string ElementText(string html, string cssClass) =>
-        Regex.Match(html, $"<[^>]*class=\"{cssClass}\"[^>]*>(.*?)</", RegexOptions.Singleline) is { Success: true } element
-            ? WebUtility.HtmlDecode(element.Groups[1].Value).Trim()
-            : throw new InvalidOperationException($"No element of class {cssClass} in: {html}");
 }

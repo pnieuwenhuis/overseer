@@ -117,6 +117,9 @@ public sealed class RunningOverseer : IAsyncDisposable
     public Task<HttpResponseMessage> SubmitFormAsync(string page, string formName, IEnumerable<KeyValuePair<string, string>> fields) =>
         _browser.SubmitFormAsync(page, formName, fields);
 
+    /// <inheritdoc cref="PortalBrowser.OpenAsync"/>
+    public Task<PortalTab> OpenAsync(string page) => _browser.OpenAsync(page);
+
     /// <inheritdoc cref="PortalBrowser.IsLoggedInAsync"/>
     public Task<bool> IsLoggedInAsync() => _browser.IsLoggedInAsync();
 
