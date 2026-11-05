@@ -15,7 +15,7 @@ _Avoid_: Web application, web interface, dashboard (for the whole UI)
 ### Intents
 
 **Intent**:
-A single desired change to the software, described by the human in free text; the smallest unit that ends up merged, producing one Spec and at most one branch and pull request per Repository in scope (none for a repository left unchanged). Its text can only be edited while it is a Draft.
+A single desired change to the software, described by the human in free text; the smallest unit that ends up merged, producing one Spec and at most one branch and pull request per Repository in scope (none for a repository left unchanged). Its text and Repositories in scope can only be edited while it is a Draft.
 _Avoid_: Ticket, story, feature request, epic
 
 **Backlog**:
