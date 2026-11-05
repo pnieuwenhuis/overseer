@@ -41,16 +41,18 @@ public sealed class PortalBrowser : IDisposable
 
     /// <summary>Opens a Portal page and submits one of its forms with the given fields, the way a browser would.</summary>
     /// <param name="formName">The form's <c>@formname</c>.</param>
-    public async Task<HttpResponseMessage> SubmitFormAsync(string page, string formName, IReadOnlyDictionary<string, string> fields)
+    /// <param name="fields">The fields to send: a name comes once per value, as with several ticked checkboxes of one name.</param>
+    public async Task<HttpResponseMessage> SubmitFormAsync(string page, string formName, IEnumerable<KeyValuePair<string, string>> fields)
     {
         var form = await Http.GetStringAsync(page, TestContext.Current.CancellationToken);
         var antiforgeryToken = AntiforgeryToken(form);
 
-        return await Http.PostAsync(page, new FormUrlEncodedContent(new Dictionary<string, string>(fields)
-        {
-            ["_handler"] = formName,
-            ["__RequestVerificationToken"] = antiforgeryToken,
-        }), TestContext.Current.CancellationToken);
+        return await Http.PostAsync(page, new FormUrlEncodedContent(
+        [
+            .. fields,
+            new("_handler", formName),
+            new("__RequestVerificationToken", antiforgeryToken),
+        ]), TestContext.Current.CancellationToken);
     }
 
     /// <summary>Opens the Portal's home page and tells whether Overseer showed it or sent the client to log in.</summary>

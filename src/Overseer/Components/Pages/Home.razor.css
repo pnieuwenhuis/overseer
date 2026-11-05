@@ -15,7 +15,20 @@
     justify-content: space-between;
 }
 
+.intent-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    min-width: 0;
+}
+
 .intent-first-line {
+    overflow-wrap: anywhere;
+}
+
+.intent-repositories {
+    color: #57606a;
+    font-size: 0.875rem;
     overflow-wrap: anywhere;
 }
 

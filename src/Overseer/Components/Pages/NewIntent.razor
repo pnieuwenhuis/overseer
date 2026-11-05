@@ -1,7 +1,10 @@
 @page "/intents/new"
 @attribute [ExcludeFromInteractiveRouting]
+@using Overseer.GitHub
 @using Overseer.Intents
+@using Overseer.Repositories
 @inject IntentLifecycle Lifecycle
+@inject ConfiguredRepositories Repositories
 @inject NavigationManager Navigation
 
 <PageTitle>New Intent · Overseer</PageTitle>
@@ -10,14 +13,28 @@
 
 <form method="post" @formname="new-intent" @onsubmit="SubmitAsync" class="new-intent-form">
     <AntiforgeryToken />
-    @if (_refused)
+    @if (_error is not null)
     {
-        <p class="new-intent-error" role="alert">An Intent needs text: write what you want changed.</p>
+        <p class="new-intent-error" role="alert">@_error</p>
     }
     <label>
         Markdown
         <textarea name="IntentText" rows="16" spellcheck="true" autofocus>@_text</textarea>
     </label>
+    <fieldset class="new-intent-repositories">
+        <legend>Repositories in scope</legend>
+        @if (_repositories.Count == 0)
+        {
+            <p class="new-intent-note">No repositories are configured, so this Intent will have none in scope.</p>
+        }
+        @foreach (var repository in _repositories)
+        {
+            <label>
+                <input type="checkbox" name="RepositoriesInScope" value="@repository" checked="@(_selected?.Contains(repository.ToString()) ?? true)" />
+                @repository
+            </label>
+        }
+    </fieldset>
     <span class="new-intent-buttons">
         <button type="submit" name="IntentAction" value="preview">Preview</button>
         <button type="submit" name="IntentAction" value="save">Save as Draft</button>
@@ -38,25 +55,40 @@
     [SupplyParameterFromForm(FormName = "new-intent")]
     private string? IntentAction { get; set; }
 
+    // The ticked checkboxes. A browser leaves out an unticked one, so with none ticked there is no value at all.
+    [SupplyParameterFromForm(FormName = "new-intent")]
+    private string[]? RepositoriesInScope { get; set; }
+
     // What the editor and preview show: what was submitted, as saving would keep it.
     private string _text = "";
-    private bool _refused;
+    private string? _error;
+
+    private IReadOnlyList<RepositoryName> _repositories = [];
+    // Which checkboxes show ticked: all of them (null) until the form is submitted, and from then on what was submitted.
+    private HashSet<string>? _selected;
+
+    protected override async Task OnInitializedAsync() =>
+        _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
 
     private async Task SubmitAsync()
     {
         _text = Intent.TextFromEditor(IntentText);
+        _selected = new HashSet<string>(RepositoriesInScope ?? [], StringComparer.OrdinalIgnoreCase);
         if (IntentAction != "save")
         {
             return;
         }
 
-        if (await Lifecycle.CaptureAsync(IntentText, HttpContext.RequestAborted))
+        switch (await Lifecycle.CaptureAsync(IntentText, RepositoriesInScope ?? [], HttpContext.RequestAborted))
         {
-            Navigation.NavigateTo("/");
-        }
-        else
-        {
-            _refused = true;
+            case IntentCapturing.Captured:
+                Navigation.NavigateTo("/");
+                break;
+            case IntentCapturing.Refused refused:
+                _error = refused.Error;
+                // A repository may have been removed since the page was opened.
+                _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
+                break;
         }
     }
 }

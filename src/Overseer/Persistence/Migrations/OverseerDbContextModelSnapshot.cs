@@ -45,6 +45,20 @@ namespace Overseer.Persistence.Migrations
                     b.ToTable("Intents");
                 });
 
+            modelBuilder.Entity("Overseer.Intents.RepositoryInScopeRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("FullName")
+                        .HasColumnType("text")
+                        .UseCollation("case_insensitive");
+
+                    b.HasKey("IntentId", "FullName");
+
+                    b.ToTable("RepositoriesInScope", (string)null);
+                });
+
             modelBuilder.Entity("Overseer.Repositories.ConfiguredRepositoryRecord", b =>
                 {
                     b.Property<string>("FullName")
@@ -132,6 +146,20 @@ namespace Overseer.Persistence.Migrations
                     b.HasKey("Key");
 
                     b.ToTable("Settings");
+                });
+
+            modelBuilder.Entity("Overseer.Intents.RepositoryInScopeRecord", b =>
+                {
+                    b.HasOne("Overseer.Intents.IntentRecord", null)
+                        .WithMany("RepositoriesInScope")
+                        .HasForeignKey("IntentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Overseer.Intents.IntentRecord", b =>
+                {
+                    b.Navigation("RepositoriesInScope");
                 });
 #pragma warning restore 612, 618
         }

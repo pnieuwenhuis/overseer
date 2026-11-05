@@ -755,15 +755,21 @@
 
     private async Task RemoveRepositoryAsync()
     {
-        if (RepositoryName.TryParse(RemoveRepository, out var repository)
-            && await Repositories.RemoveAsync(repository, HttpContext.RequestAborted))
+        RepositoryRemoval removal = RepositoryName.TryParse(RemoveRepository, out var repository)
+            ? await Repositories.RemoveAsync(repository, HttpContext.RequestAborted)
+            : new RepositoryRemoval.NotConfigured();
+        switch (removal)
         {
-            _repositoryNotice = $"{repository} is removed.";
-        }
-        else
-        {
-            // Removed in another tab since the page was opened.
-            _repositoryError = $"{RemoveRepository} is not a Configured Repository.";
+            case RepositoryRemoval.Removed removed:
+                _repositoryNotice = $"{removed.Repository} is removed.";
+                break;
+            case RepositoryRemoval.NotConfigured:
+                // Removed in another tab since the page was opened.
+                _repositoryError = $"{RemoveRepository} is not a Configured Repository.";
+                break;
+            case RepositoryRemoval.Refused refused:
+                _repositoryError = refused.Error;
+                break;
         }
         _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
     }

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Overseer.GitHub;
+using Overseer.Intents;
 using Overseer.Persistence;
 
 namespace Overseer.Repositories;
@@ -14,9 +15,12 @@ public sealed class ConfiguredRepositories(IDbContextFactory<OverseerDbContext> 
     public async Task<IReadOnlyList<RepositoryName>> ListAsync(CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        var stored = await database.ConfiguredRepositories.Select(repository => repository.FullName).ToListAsync(cancellationToken);
-        return [.. stored.Select(RepositoryName.Parse).OrderBy(repository => repository.ToString(), StringComparer.OrdinalIgnoreCase)];
+        return ByName(await database.ConfiguredRepositories.Select(repository => repository.FullName).ToListAsync(cancellationToken));
     }
+
+    /// <summary>Stored repositories in the order the Portal lists them: by owner and name, regardless of case.</summary>
+    internal static IReadOnlyList<RepositoryName> ByName(IEnumerable<string> stored) =>
+        [.. stored.Select(RepositoryName.Parse).OrderBy(repository => repository.ToString(), StringComparer.OrdinalIgnoreCase)];
 
     /// <summary>Adds the repository the user entered, as <c>owner/name</c> or a GitHub URL, once GitHub confirms the token can reach it.</summary>
     public async Task<RepositoryAdding> AddAsync(string? input, CancellationToken cancellationToken)
@@ -61,14 +65,68 @@ public sealed class ConfiguredRepositories(IDbContextFactory<OverseerDbContext> 
             cancellationToken) > 0;
     }
 
-    /// <summary>Removes <paramref name="repository"/> from the Configured Repositories.</summary>
-    /// <returns>Whether it was configured.</returns>
-    public async Task<bool> RemoveAsync(RepositoryName repository, CancellationToken cancellationToken)
+    /// <summary>
+    /// Which of <paramref name="repositories"/>, in any case, are configured, each once as it is configured. They stay configured until
+    /// <paramref name="database"/>'s transaction ends, for <see cref="RemoveAsync"/> waits for it; a removal under way is waited for
+    /// instead, and its repository not found.
+    /// </summary>
+    internal static async Task<IReadOnlyList<string>> HoldAsync(OverseerDbContext database, IEnumerable<string> repositories, CancellationToken cancellationToken)
+    {
+        var fullNames = repositories.ToArray();
+        return await database.Database.SqlQuery<string>(
+                $"""SELECT "FullName" AS "Value" FROM "ConfiguredRepositories" WHERE "FullName" = ANY({fullNames}) FOR SHARE""")
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Removes <paramref name="repository"/> from the Configured Repositories, unless an open Intent has it in scope. An Intent that is
+    /// Done or Cancelled doesn't hold it back, and keeps its history.
+    /// </summary>
+    public async Task<RepositoryRemoval> RemoveAsync(RepositoryName repository, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        var fullName = repository.ToString();
-        return await database.ConfiguredRepositories.Where(configured => configured.FullName == fullName).ExecuteDeleteAsync(cancellationToken) > 0;
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        var entered = repository.ToString();
+        // Locked before looking at the Intents: a capture that holds the repository has committed by the time this gets the lock, so
+        // the Intent is seen, and one that comes later waits for this transaction and doesn't find the repository (see HoldAsync).
+        var locked = await database.Database.SqlQuery<string>(
+                $"""SELECT "FullName" AS "Value" FROM "ConfiguredRepositories" WHERE "FullName" = {entered} FOR UPDATE""")
+            .ToListAsync(cancellationToken);
+        if (locked is not [var fullName])
+        {
+            return new RepositoryRemoval.NotConfigured();
+        }
+
+        var blocking = await IntentLifecycle.ListOpenWithInScopeAsync(database, fullName, cancellationToken);
+        if (blocking.Count > 0)
+        {
+            var firstLines = Prose.List([.. blocking.Select(intent => $"\"{intent.FirstLine}\"")]);
+            return new RepositoryRemoval.Refused(blocking.Count == 1
+                ? $"{fullName} can't be removed: the open Intent {firstLines} has it in scope."
+                : $"{fullName} can't be removed: the open Intents {firstLines} have it in scope.");
+        }
+
+        await database.ConfiguredRepositories.Where(configured => configured.FullName == fullName).ExecuteDeleteAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new RepositoryRemoval.Removed(RepositoryName.Parse(fullName));
     }
+}
+
+/// <summary>What removing a Configured Repository did.</summary>
+public abstract record RepositoryRemoval
+{
+    private RepositoryRemoval()
+    {
+    }
+
+    /// <summary>The repository is no longer configured, and this is how it was named.</summary>
+    public sealed record Removed(RepositoryName Repository) : RepositoryRemoval;
+
+    /// <summary>There is no such Configured Repository, for instance because another tab removed it first.</summary>
+    public sealed record NotConfigured : RepositoryRemoval;
+
+    /// <summary>The repository stays configured; <paramref name="Error"/> says why.</summary>
+    public sealed record Refused(string Error) : RepositoryRemoval;
 }
 
 /// <summary>What adding a Configured Repository did.</summary>

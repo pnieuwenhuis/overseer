@@ -34,5 +34,12 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             repository.HasKey(record => record.FullName);
             repository.Property(record => record.FullName).UseCollation(CaseInsensitive);
         });
+        modelBuilder.Entity<RepositoryInScopeRecord>(repository =>
+        {
+            repository.ToTable("RepositoriesInScope");
+            repository.HasKey(record => new { record.IntentId, record.FullName });
+            repository.Property(record => record.FullName).UseCollation(CaseInsensitive);
+            repository.HasOne<IntentRecord>().WithMany(intent => intent.RepositoriesInScope).HasForeignKey(record => record.IntentId);
+        });
     }
 }

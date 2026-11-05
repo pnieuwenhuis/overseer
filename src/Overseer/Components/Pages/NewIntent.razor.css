@@ -16,6 +16,24 @@
     resize: vertical;
 }
 
+.new-intent-repositories {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0;
+}
+
+.new-intent-form .new-intent-repositories label {
+    align-items: center;
+    flex-direction: row;
+    gap: 0.5rem;
+}
+
+.new-intent-note {
+    color: #57606a;
+    margin: 0;
+}
+
 .new-intent-buttons {
     display: flex;
     gap: 0.5rem;
