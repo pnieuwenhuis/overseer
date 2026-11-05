@@ -1,38 +1,11 @@
-.backlog {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    list-style: none;
-    margin: 0;
-    max-width: 48rem;
-    padding: 0;
-}
-
-.backlog-intent {
-    align-items: baseline;
+.backlog-filter {
     display: flex;
     gap: 1rem;
-    justify-content: space-between;
+    margin: 1rem 0;
 }
 
-.intent-summary {
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-    min-width: 0;
-}
-
-.intent-first-line {
-    overflow-wrap: anywhere;
-}
-
-.intent-repositories {
-    color: #57606a;
-    font-size: 0.875rem;
-    overflow-wrap: anywhere;
-}
-
-.intent-state {
-    color: #57606a;
-    flex-shrink: 0;
+.backlog-filter a[aria-current="page"] {
+    color: inherit;
+    font-weight: 600;
+    text-decoration: none;
 }

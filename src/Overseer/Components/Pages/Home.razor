@@ -1,7 +1,6 @@
 @page "/"
 @attribute [ExcludeFromInteractiveRouting]
 @using Overseer.Intents
-@inject IntentLifecycle Lifecycle
 
 <PageTitle>Backlog · Overseer</PageTitle>
 
@@ -9,32 +8,17 @@
 
 <p><a href="intents/new">New Intent</a></p>
 
-@if (_backlog is { Count: 0 })
-{
-    <p>The Backlog is empty.</p>
-}
-else if (_backlog is not null)
-{
-    <ul class="backlog">
-        @foreach (var intent in _backlog)
-        {
-            <li class="backlog-intent" data-intent>
-                <span class="intent-summary">
-                    <a href="intents/@intent.Id" class="intent-first-line">@intent.FirstLine</a>
-                    <span class="intent-repositories">@intent.RepositoriesInScopeLine</span>
-                </span>
-                <span class="intent-state">@intent.State.InWords()</span>
-            </li>
-        }
-    </ul>
-}
+<nav class="backlog-filter" aria-label="Backlog filter">
+    <a href="/?filter=open" aria-current="@(Shown == BacklogFilter.Open ? "page" : null)">Open</a>
+    <a href="/?filter=closed" aria-current="@(Shown == BacklogFilter.Closed ? "page" : null)">Closed</a>
+</nav>
+
+<BacklogList Filter="Shown" @rendermode="InteractiveServer" />
 
 @code {
-    [CascadingParameter]
-    private HttpContext HttpContext { get; set; } = default!;
+    [SupplyParameterFromQuery]
+    private string? Filter { get; set; }
 
-    private IReadOnlyList<Intent>? _backlog;
-
-    protected override async Task OnInitializedAsync() =>
-        _backlog = await Lifecycle.ListBacklogAsync(HttpContext.RequestAborted);
+    // Anything but the Closed link's value is the default, Open, as a filter the Portal doesn't offer shouldn't hide the Backlog.
+    private BacklogFilter Shown => string.Equals(Filter, "closed", StringComparison.OrdinalIgnoreCase) ? BacklogFilter.Closed : BacklogFilter.Open;
 }

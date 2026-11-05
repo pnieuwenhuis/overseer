@@ -8,36 +8,22 @@
 
 <h1>Intent</h1>
 
-@if (_intent is not null)
+@* A form submitted from a page opened earlier is handled whatever became of the Intent. *@
+@if (_intent is not null || IsSubmitted)
 {
-    <p class="intent-facts">
-        <span class="intent-state">@_intent.State.InWords()</span>
-        <span class="intent-repositories">@_intent.RepositoriesInScopeLine</span>
-    </p>
-    <MarkdownPreview Label="Intent text" Text="@_intent.Text" />
+    <LiveIntent Id="Id" StartRefused="_startRefused" @rendermode="InteractiveServer" />
 }
-@* A form submitted from a page opened earlier is handled whatever became of the Intent, and only a form on the page can handle it. Once refused, only a Draft keeps it. *@
-@if (_intent?.State == IntentState.Draft || (HttpMethods.IsPost(HttpContext.Request.Method) && _whyNotStartable is null))
+@* Blazor handles a submitted form only when the page has a form of its name. The Start form the user sees is LiveIntent's, which goes as soon as the Intent is no longer a Draft. *@
+@if (IsSubmitted)
 {
-    <div class="intent-actions">
-        <form method="post" @formname="start-intent" @onsubmit="StartAsync">
-            <AntiforgeryToken />
-            <button type="submit" disabled="@(_whyNotStartable is not null)">Start</button>
-        </form>
-        @if (_intent?.State == IntentState.Draft)
-        {
-            <a href="intents/@Id/edit">Edit</a>
-            <a href="intents/@Id/delete">Delete</a>
-        }
-    </div>
-}
-@if (_whyNotStartable is not null)
-{
-    <p role="alert">@_whyNotStartable</p>
+    <form method="post" @formname="@StartFormName" @onsubmit="StartAsync"></form>
 }
 <p><a href="/">Back to the Backlog</a></p>
 
 @code {
+    /// <summary>The name that a form submitted to this page starts the Intent under.</summary>
+    public const string StartFormName = "start-intent";
+
     [CascadingParameter]
     private HttpContext HttpContext { get; set; } = default!;
 
@@ -45,24 +31,16 @@
     public Guid Id { get; set; }
 
     private Intent? _intent;
-    // Why this Intent can't be started, as a Draft's page explains and a refused Start says.
-    private string? _whyNotStartable;
+    private bool _startRefused;
+
+    private bool IsSubmitted => HttpMethods.IsPost(HttpContext.Request.Method);
 
     protected override async Task OnInitializedAsync()
     {
         _intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
-        if (HttpMethods.IsPost(HttpContext.Request.Method))
-        {
-            return;
-        }
-
-        if (_intent is null)
+        if (_intent is null && !IsSubmitted)
         {
             Navigation.NotFound();
-        }
-        else if (_intent.State == IntentState.Draft)
-        {
-            _whyNotStartable = await Lifecycle.WhyNotStartableAsync(Id, HttpContext.RequestAborted);
         }
     }
 
@@ -73,9 +51,9 @@
             case IntentChange.Made:
                 Navigation.NavigateTo($"/intents/{Id}");
                 break;
-            case IntentChange.Refused refused:
-                _whyNotStartable = refused.Error;
-                _intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
+            case IntentChange.Refused:
+                // LiveIntent then reads the Intent again, and says why as it is now.
+                _startRefused = true;
                 break;
         }
     }

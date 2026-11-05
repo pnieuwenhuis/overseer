@@ -16,9 +16,11 @@ public static class IntentPortal
         await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), repositories);
 
     /// <summary>A running Overseer, logged in, with these repositories configured.</summary>
-    public static async Task<RunningOverseer> StartWithRepositoriesAsync(string connectionString, string[] repositories, TimeProvider? time = null)
+    /// <param name="environment">Overrides the test defaults, as for <see cref="RunningOverseer.StartAsync"/>.</param>
+    public static async Task<RunningOverseer> StartWithRepositoriesAsync(
+        string connectionString, string[] repositories, TimeProvider? time = null, IReadOnlyDictionary<string, string?>? environment = null)
     {
-        var overseer = await RunningOverseer.StartAsync(connectionString, time: time);
+        var overseer = await RunningOverseer.StartAsync(connectionString, environment, time: time);
         await overseer.LogInAsync();
         overseer.GitHub.AcceptToken(Token, "octocat");
         using var saved = await overseer.SubmitFormAsync("/settings", "github-token", new Dictionary<string, string> { ["GitHubToken"] = Token });

@@ -1,0 +1,31 @@
+@* The Intents the Backlog shows under a filter, updated live as Intents change. *@
+@using Overseer.Intents
+@inherits LiveIntentsView<IReadOnlyList<Intent>>
+
+@if (Shown is { Count: 0 })
+{
+    <p>@(Filter == BacklogFilter.Closed ? "No Intent is Done or Cancelled." : "The Backlog is empty.")</p>
+}
+else if (Shown is not null)
+{
+    <ul class="backlog">
+        @foreach (var intent in Shown)
+        {
+            <li class="backlog-intent" data-intent @key="intent.Id">
+                <span class="intent-summary">
+                    <a href="intents/@intent.Id" class="intent-first-line">@intent.FirstLine</a>
+                    <span class="intent-repositories">@intent.RepositoriesInScopeLine</span>
+                </span>
+                <IntentStatus Intent="intent" />
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    [Parameter]
+    public BacklogFilter Filter { get; set; }
+
+    protected override Task<IReadOnlyList<Intent>> ReadAsync(CancellationToken cancellationToken) =>
+        Lifecycle.ListBacklogAsync(Filter, cancellationToken);
+}

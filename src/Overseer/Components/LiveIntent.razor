@@ -1,0 +1,45 @@
+@* An Intent's state, text and what can be done with it, updated live as Intents change. *@
+@using Overseer.Intents
+@inherits LiveIntentsView<LiveIntent.Detail>
+
+@if (Shown?.Intent is { } intent)
+{
+    <p class="intent-facts">
+        <IntentStatus Intent="intent" />
+        <span class="intent-repositories">@intent.RepositoriesInScopeLine</span>
+    </p>
+    <MarkdownPreview Label="Intent text" Text="@intent.Text" />
+    @if (intent.State == IntentState.Draft)
+    {
+        <div class="intent-actions">
+            @* A plain form, posted by the browser, so Start works the same with or without the live connection. The static page handles it, under this name. *@
+            <form method="post" action="intents/@Id">
+                <input type="hidden" name="_handler" value="@Pages.IntentDetail.StartFormName" />
+                <AntiforgeryToken />
+                <button type="submit" disabled="@(Shown.WhyNotStartable is not null)">Start</button>
+            </form>
+            <a href="intents/@Id/edit">Edit</a>
+            <a href="intents/@Id/delete">Delete</a>
+        </div>
+    }
+}
+@if (Shown is { WhyNotStartable: { } why } && (Shown.Intent?.State is null or IntentState.Draft || StartRefused))
+{
+    <p role="alert">@why</p>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public required Guid Id { get; set; }
+
+    /// <summary>A Start was just refused, so this page says why also when the Intent isn't a Draft, where it otherwise wouldn't.</summary>
+    [Parameter]
+    public bool StartRefused { get; set; }
+
+    protected override async Task<Detail> ReadAsync(CancellationToken cancellationToken) =>
+        new(await Lifecycle.FindAsync(Id, cancellationToken), await Lifecycle.WhyNotStartableAsync(Id, cancellationToken));
+
+    /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
+    /// <param name="WhyNotStartable">Why it can't be started at the moment, as a Draft's page explains and a refused Start says.</param>
+    public sealed record Detail(Intent? Intent, string? WhyNotStartable);
+}

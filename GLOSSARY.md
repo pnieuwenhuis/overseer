@@ -46,6 +46,10 @@ _Avoid_: Running intent, in-progress intent
 The condition of an Active Intent that cannot progress until the human acts, such as answering the Analyst, approving a Spec, or triaging review comments.
 _Avoid_: Blocked, waiting, pending
 
+**Light**:
+What an Intent shows at a glance: green while agents are working, orange when it Needs Attention, red when it has failed, and none in a state in which nothing runs.
+_Avoid_: Traffic light, status, indicator
+
 **Working Time**:
 The total time an Intent has spent as an Active Intent; time spent Paused or awaiting approval is excluded.
 _Avoid_: Elapsed time, duration, age

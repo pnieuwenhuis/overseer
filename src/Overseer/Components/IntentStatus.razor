@@ -1,0 +1,15 @@
+@* An Intent's state and, where it has one, its light: a coloured dot with a label, so that it doesn't rely on colour alone. *@
+@using Overseer.Intents
+
+<span class="intent-status">
+    <span class="intent-state">@Intent.State.InWords()</span>
+    @if (IntentLifecycle.LightOf(Intent) is { } light)
+    {
+        <span class="intent-light" data-light="@light">@light.InWords()</span>
+    }
+</span>
+
+@code {
+    [Parameter, EditorRequired]
+    public required Intent Intent { get; set; }
+}

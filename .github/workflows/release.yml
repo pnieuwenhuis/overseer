@@ -39,6 +39,9 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
+      # The browser tests install Chromium themselves, but not the system libraries it needs, which takes root.
+      - run: dotnet build tests/Overseer.Tests
+      - run: pwsh tests/Overseer.Tests/bin/Debug/net10.0/playwright.ps1 install-deps chromium
       # Unstamped on purpose: the tests check that a local build reports the development version.
       - run: dotnet test
 
