@@ -1,0 +1,9 @@
+@* The way out of a page about an Intent that can't be changed: back to it, or to the Backlog when it no longer exists. *@
+
+<p><a href="@(IntentId is { } id ? $"intents/{id}" : "/")">@(IntentId is null ? "Back to the Backlog" : "Back to the Intent")</a></p>
+
+@code {
+    /// <summary>The Intent to go back to; <c>null</c> when there is no such Intent.</summary>
+    [Parameter, EditorRequired]
+    public required Guid? IntentId { get; set; }
+}

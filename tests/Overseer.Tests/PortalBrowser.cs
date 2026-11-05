@@ -80,3 +80,9 @@ public sealed class PortalTab(PortalBrowser browser, string page, string antifor
             new("__RequestVerificationToken", antiforgeryToken),
         ]), TestContext.Current.CancellationToken);
 }
+
+public static class PortalResponses
+{
+    /// <summary>The path of the page the browser ended up on, after following any redirects.</summary>
+    public static string FinalPath(this HttpResponseMessage response) => response.RequestMessage!.RequestUri!.AbsolutePath;
+}

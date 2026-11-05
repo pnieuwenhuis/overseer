@@ -1,42 +1,51 @@
-@* The form an Intent's text and Repositories in scope are entered on, with the preview of the text. The page handles what is submitted. *@
+@* The form an Intent's text and Repositories in scope are entered on, with the preview of the text. It handles what is submitted, and the page says how to save it. *@
 @using Overseer.GitHub
 @using Overseer.Intents
+@using Overseer.Repositories
+@inject ConfiguredRepositories Repositories
+@inject NavigationManager Navigation
 
-<form method="post" @formname="@FormName" @onsubmit="OnSubmit" class="intent-editor-form">
+<form method="post" @formname="@FormName" @onsubmit="SubmitAsync" class="intent-editor-form">
     <AntiforgeryToken />
-    @if (Error is not null)
+    @if (_error is not null)
     {
-        <p class="intent-editor-error" role="alert">@Error</p>
+        <p class="intent-editor-error" role="alert">@_error</p>
     }
     <label>
         Markdown
-        <textarea name="IntentText" rows="16" spellcheck="true" autofocus>@Text</textarea>
+        <textarea name="IntentText" rows="16" spellcheck="true" autofocus>@_text</textarea>
     </label>
     <fieldset class="intent-editor-repositories">
         <legend>Repositories in scope</legend>
-        @if (Repositories.Count == 0)
+        @if (_repositories.Count == 0)
         {
             <p class="intent-editor-note">No repositories are configured, so this Intent will have none in scope.</p>
         }
-        @foreach (var repository in Repositories)
+        @foreach (var repository in _repositories)
         {
             <label>
-                <input type="checkbox" name="RepositoriesInScope" value="@repository" checked="@(Selected?.Includes(repository) ?? true)" />
+                <input type="checkbox" name="RepositoriesInScope" value="@repository" checked="@(_selected?.Includes(repository) ?? true)" />
                 @repository
             </label>
         }
     </fieldset>
     <span class="intent-editor-buttons">
         <button type="submit" name="IntentAction" value="preview">Preview</button>
-        <button type="submit" name="IntentAction" value="save">@SaveLabel</button>
+        <button type="submit" name="IntentAction" value="@SaveAction">@SaveLabel</button>
     </span>
 </form>
 
 <h2>Preview</h2>
-<MarkdownPreview Label="Intent preview" Text="@Text" />
+<MarkdownPreview Label="Intent preview" Text="@_text" />
 
 @code {
-    /// <summary>The form's name, which the page's form parameters name too.</summary>
+    // The value of the button that saves. Any other submission only previews.
+    private const string SaveAction = "save";
+
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    /// <summary>The form's name.</summary>
     [Parameter, EditorRequired]
     public required string FormName { get; set; }
 
@@ -44,22 +53,70 @@
     [Parameter, EditorRequired]
     public required string SaveLabel { get; set; }
 
+    /// <summary>Saves the text as the user wrote it, with what they ticked.</summary>
     [Parameter, EditorRequired]
-    public EventCallback OnSubmit { get; set; }
+    public required Func<string?, RepositorySelection, Task<IntentChange>> Save { get; set; }
 
-    /// <summary>What the editor and preview show.</summary>
+    /// <summary>Where saving leads to, so that reloading the page doesn't save again.</summary>
     [Parameter, EditorRequired]
-    public required string Text { get; set; }
+    public required string SavedAddress { get; set; }
 
-    /// <summary>The Configured Repositories on offer.</summary>
-    [Parameter, EditorRequired]
-    public required IReadOnlyList<RepositoryName> Repositories { get; set; }
-
-    /// <summary>Which checkboxes show ticked; <c>null</c> for all of them.</summary>
+    /// <summary>The Intent to start from; without one, the editor starts empty with every repository ticked.</summary>
     [Parameter]
-    public RepositorySelection? Selected { get; set; }
+    public Intent? Editing { get; set; }
 
-    /// <summary>What to tell the user above the form.</summary>
+    /// <summary>Why saving will be refused whatever is entered, which previewing says too.</summary>
     [Parameter]
-    public string? Error { get; set; }
+    public string? WhyNotEditable { get; set; }
+
+    // These take no form name, which attributes need as a constant: this component's own form is the only one on the page to post here.
+    [SupplyParameterFromForm]
+    private string? IntentText { get; set; }
+
+    // Which button submitted the form.
+    [SupplyParameterFromForm]
+    private string? IntentAction { get; set; }
+
+    // The ticked checkboxes. A browser leaves out an unticked one, so with none ticked there is no value at all.
+    [SupplyParameterFromForm]
+    private string[]? RepositoriesInScope { get; set; }
+
+    // What the editor and preview show: the Intent started from, and once the form is submitted, what was submitted, as saving would keep it.
+    private string _text = "";
+    private string? _error;
+
+    private IReadOnlyList<RepositoryName> _repositories = [];
+    // Which checkboxes show ticked: all of them when null, the Intent's Repositories in scope, and once the form is submitted, what was submitted.
+    private RepositorySelection? _selected;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _text = Editing?.Text ?? "";
+        _selected = Editing is null ? null : new RepositorySelection(Editing.RepositoriesInScope);
+        _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
+    }
+
+    private async Task SubmitAsync()
+    {
+        _text = Intent.TextFromEditor(IntentText);
+        _selected = new RepositorySelection(RepositoriesInScope ?? []);
+        if (IntentAction != SaveAction)
+        {
+            // A repository removed since the page was opened drops off this page, so the next save would go on without it.
+            _error = WhyNotEditable ?? _selected.RemovedNotice(_repositories);
+            return;
+        }
+
+        switch (await Save(IntentText, _selected))
+        {
+            case IntentChange.Made:
+                Navigation.NavigateTo(SavedAddress);
+                break;
+            case IntentChange.Refused refused:
+                _error = refused.Error;
+                // A repository may have been removed since the page was opened.
+                _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
+                break;
+        }
+    }
 }

@@ -6,9 +6,13 @@ using static Overseer.Tests.RepositorySetupPortal;
 
 namespace Overseer.Tests;
 
-/// <summary>Working with Intents in the Portal, reading back what its pages show of them, and holding up what the server writes.</summary>
+/// <summary>Working with Intents in the Portal, and reading back what its pages show of them.</summary>
 public static class IntentPortal
 {
+    /// <summary>A running Overseer on an empty database, logged in, with these repositories configured.</summary>
+    public static async Task<RunningOverseer> StartWithRepositoriesAsync(PostgresServer postgres, params string[] repositories) =>
+        await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), repositories);
+
     /// <summary>A running Overseer, logged in, with these repositories configured.</summary>
     public static async Task<RunningOverseer> StartWithRepositoriesAsync(string connectionString, string[] repositories, TimeProvider? time = null)
     {
@@ -58,44 +62,15 @@ public static class IntentPortal
             WebUtility.HtmlDecode(Regex.Match(checkbox.Value, "value=\"([^\"]*)\"").Groups[1].Value),
             Regex.IsMatch(checkbox.Value, @"\schecked\b")))];
 
+    /// <summary>The Backlog's Intents, top to bottom, as a browser would show their first line and Repositories in scope.</summary>
+    public static IReadOnlyList<(string FirstLine, string Repositories)> Backlog(string page) =>
+        [.. Regex.Matches(page, "<li[^>]*data-intent[^>]*>.*?</li>", RegexOptions.Singleline).Select(intent => (
+            ElementText(intent.Value, "intent-first-line"),
+            ElementText(intent.Value, "intent-repositories")))];
+
     /// <summary>The text of the element with the given CSS class, as a browser would show it.</summary>
     public static string ElementText(string html, string cssClass) =>
         Regex.Match(html, $"<[^>]*class=\"{cssClass}\"[^>]*>(.*?)</", RegexOptions.Singleline) is { Success: true } element
             ? WebUtility.HtmlDecode(element.Groups[1].Value).Trim()
             : throw new InvalidOperationException($"No element of class {cssClass} in: {html}");
-
-    /// <summary>
-    /// Runs <paramref name="first"/>, held up by <paramref name="tableLock"/>, which lets the table's reads through but not its writes,
-    /// then <paramref name="second"/>, which gets the chance to overtake it, and lets both finish.
-    /// </summary>
-    public static async Task<(HttpResponseMessage First, HttpResponseMessage Second)> RaceAsync(
-        RunningOverseer overseer, FormattableString tableLock, Func<Task<HttpResponseMessage>> first, Func<Task<HttpResponseMessage>> second)
-    {
-        await using var holder = overseer.OpenDatabase();
-        await using var transaction = await holder.Database.BeginTransactionAsync(TestContext.Current.CancellationToken);
-        await holder.Database.ExecuteSqlAsync(tableLock, TestContext.Current.CancellationToken);
-        using var watching = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        watching.CancelAfter(TimeSpan.FromSeconds(30));
-
-        var firstDone = first();
-        await Task.WhenAny(firstDone, UntilWaitingOnLocksAsync(overseer, 1, watching.Token));
-        var secondDone = second();
-        await Task.WhenAny(secondDone, UntilWaitingOnLocksAsync(overseer, 2, watching.Token));
-        await watching.CancelAsync();
-
-        await transaction.RollbackAsync(TestContext.Current.CancellationToken);
-        return (await firstDone, await secondDone);
-    }
-
-    /// <summary>Returns once this many of the database's connections wait for a lock.</summary>
-    public static async Task UntilWaitingOnLocksAsync(RunningOverseer overseer, int connections, CancellationToken cancellationToken)
-    {
-        await using var database = overseer.OpenDatabase();
-        while (await database.Database.SqlQuery<int>(
-            $"""SELECT count(*)::int AS "Value" FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'""")
-            .SingleAsync(cancellationToken) < connections)
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
-        }
-    }
 }

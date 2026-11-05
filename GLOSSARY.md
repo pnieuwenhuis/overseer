@@ -79,7 +79,7 @@ _Avoid_: VM, workspace, environment, container
 ### Lifecycle
 
 **Draft**:
-An Intent that has been captured but on which no agent work has started.
+An Intent that has been captured but on which no agent work has started. A Draft can be deleted outright and is then gone, unlike a Cancelled Intent.
 
 **Refinement**:
 The conversation in which the Analyst questions the human about an Intent until it has enough information to write a Spec; only the Analyst decides when that point is reached.

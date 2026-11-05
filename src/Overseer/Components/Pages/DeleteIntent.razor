@@ -11,7 +11,7 @@
 @if (_error is not null)
 {
     <p role="alert">@_error</p>
-    <p><a href="@(_exists ? $"intents/{Id}" : "/")">@(_exists ? "Back to the Intent" : "Back to the Backlog")</a></p>
+    <IntentBackLink IntentId="@(_exists ? Id : null)" />
 }
 else
 {
@@ -20,19 +20,21 @@ else
     <form method="post" @formname="delete-intent" @onsubmit="SubmitAsync" class="delete-intent-form">
         <AntiforgeryToken />
         @* Nothing else deletes: opening this page doesn't, nor does a form submitted without pressing this button. *@
-        <button type="submit" name="DeleteConfirmation" value="confirmed">Delete this Draft</button>
+        <button type="submit" name="DeleteConfirmation" value="@Confirmed">Delete this Draft</button>
         <a href="intents/@Id">Keep it</a>
     </form>
 }
 
 @code {
+    // The value of the button that confirms the deletion.
+    private const string Confirmed = "confirmed";
+
     [CascadingParameter]
     private HttpContext HttpContext { get; set; } = default!;
 
     [Parameter]
     public Guid Id { get; set; }
 
-    // The button that confirms the deletion: "confirmed".
     [SupplyParameterFromForm(FormName = "delete-intent")]
     private string? DeleteConfirmation { get; set; }
 
@@ -60,7 +62,7 @@ else
 
     private async Task SubmitAsync()
     {
-        if (DeleteConfirmation != "confirmed")
+        if (DeleteConfirmation != Confirmed)
         {
             var intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
             _error = IntentLifecycle.WhyNotDeletable(intent?.State);
@@ -69,10 +71,10 @@ else
 
         switch (await Lifecycle.DeleteAsync(Id, HttpContext.RequestAborted))
         {
-            case DraftChange.Made:
+            case IntentChange.Made:
                 Navigation.NavigateTo("/");
                 break;
-            case DraftChange.Refused refused:
+            case IntentChange.Refused refused:
                 _error = refused.Error;
                 break;
         }
