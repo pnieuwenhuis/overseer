@@ -5,7 +5,7 @@
 @if (Shown?.Intent is { } intent)
 {
     <p class="intent-facts">
-        <IntentStatus Intent="intent" />
+        <IntentStateAndLight Intent="intent" />
         <span class="intent-repositories">@intent.RepositoriesInScopeLine</span>
     </p>
     <MarkdownPreview Label="Intent text" Text="@intent.Text" />

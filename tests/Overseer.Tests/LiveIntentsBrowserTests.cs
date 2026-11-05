@@ -67,16 +67,16 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         var firstAddress = await AddressAsync(overseer, "Export data");
         var secondAddress = await AddressAsync(overseer, "Import data");
         await using var session = await chromium.LogInAsync(overseer);
-        var waiting = await OpenAsync(session, secondAddress);
-        await AwaitDetailConnectedAsync(overseer, secondAddress, "Import data", waiting);
-        await Expect(StartButton(waiting)).ToBeEnabledAsync();
+        var draft = await OpenAsync(session, secondAddress);
+        await AwaitDetailConnectedAsync(overseer, secondAddress, "Import data", draft);
+        await Expect(StartButton(draft)).ToBeEnabledAsync();
 
         using var started = await overseer.SubmitFormAsync(firstAddress, "start-intent", []);
 
-        await Expect(StartButton(waiting)).ToBeDisabledAsync();
-        await Expect(waiting.GetByRole(AriaRole.Alert)).ToContainTextAsync("All Active Intent slots are taken, by \"Export data\".");
-        await Expect(waiting.Locator(".intent-state")).ToHaveTextAsync("Draft");
-        Assert.True(await WasNotReloadedAsync(waiting));
+        await Expect(StartButton(draft)).ToBeDisabledAsync();
+        await Expect(draft.GetByRole(AriaRole.Alert)).ToContainTextAsync("All Active Intent slots are taken, by \"Export data\".");
+        await Expect(draft.Locator(".intent-state")).ToHaveTextAsync("Draft");
+        Assert.True(await WasNotReloadedAsync(draft));
     }
 
     [Fact]
@@ -100,6 +100,79 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         await Expect(BacklogIntent(backlog, "Export data")).ToHaveCountAsync(0);
         Assert.True(await WasNotReloadedAsync(detail));
         Assert.True(await WasNotReloadedAsync(backlog));
+    }
+
+    [Fact]
+    public async Task Capturing_an_Intent_adds_it_to_an_open_Backlog_without_a_reload()
+    {
+        await using var overseer = await StartOverseerAsync();
+        await using var session = await chromium.LogInAsync(overseer);
+        var backlog = await OpenAsync(session, "/");
+        await AwaitBacklogConnectedAsync(overseer, backlog);
+
+        using var captured = await SaveAsync(overseer, "Export data", "acme/web");
+
+        await Expect(BacklogIntent(backlog, "Export data").Locator(".intent-state")).ToHaveTextAsync("Draft");
+        Assert.True(await WasNotReloadedAsync(backlog));
+    }
+
+    [Fact]
+    public async Task Editing_a_Draft_updates_its_open_detail_page_and_an_open_Backlog_without_a_reload()
+    {
+        await using var overseer = await StartOverseerAsync();
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        await using var session = await chromium.LogInAsync(overseer);
+        var detail = await OpenAsync(session, address);
+        var backlog = await OpenAsync(session, "/");
+        await AwaitDetailConnectedAsync(overseer, address, "Export data", detail);
+        await AwaitBacklogConnectedAsync(overseer, backlog);
+
+        using var edited = await EditAsync(overseer, address, "save", "Import data");
+
+        await Expect(detail.GetByLabel("Intent text")).ToHaveTextAsync("Import data");
+        await Expect(detail.Locator(".intent-repositories")).ToHaveTextAsync("No Repositories in scope");
+        await Expect(BacklogIntent(backlog, "Import data")).ToContainTextAsync("No Repositories in scope");
+        await Expect(BacklogIntent(backlog, "Export data")).ToHaveCountAsync(0);
+        Assert.True(await WasNotReloadedAsync(detail));
+        Assert.True(await WasNotReloadedAsync(backlog));
+    }
+
+    [Fact]
+    public async Task A_refused_capture_edit_delete_or_Start_changes_nothing_on_an_open_Backlog()
+    {
+        await using var overseer = await StartOverseerAsync();
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        var detailTab = await overseer.OpenAsync(address);
+        var editor = await overseer.OpenAsync(address + "/edit");
+        var deletePage = await overseer.OpenAsync(address + "/delete");
+        await using var session = await chromium.LogInAsync(overseer);
+        var backlog = await OpenAsync(session, "/");
+        await AwaitBacklogConnectedAsync(overseer, backlog);
+        var state = BacklogIntent(backlog, "Export data").Locator(".intent-state");
+        await Expect(state).ToHaveTextAsync("Draft");
+
+        // Setting a state directly announces nothing, so the Backlog still shows Draft and reads Paused only when something announces a change.
+        await SetStateAsync(overseer, "Export data", IntentState.Paused);
+        await AssertRefusedAsync("This Intent is Paused, and Start moves a Draft to Refining.", detailTab.SubmitFormAsync("start-intent", []));
+        await AssertRefusedAsync("This Intent is Paused, and only a Draft can be edited.", editor.SubmitFormAsync("edit-intent", EditorFields("Import data", "save", "acme/web")));
+        await AssertRefusedAsync("This Intent is Paused, and only a Draft can be deleted.", deletePage.SubmitFormAsync("delete-intent", Confirmed));
+        await AssertRefusedAsync("An Intent needs text: write what you want changed.", SaveAsync(overseer, " ", "acme/web"));
+
+        // There is nothing to wait for when nothing is announced, so this gives an announcement the time to have arrived.
+        await Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+        await Expect(state).ToHaveTextAsync("Draft");
+
+        // The Backlog was listening all along: what this capture announces does bring the Paused Intent in.
+        using var captured = await SaveAsync(overseer, "Another Draft", "acme/web");
+        await Expect(state).ToHaveTextAsync("Paused");
+    }
+
+    private static async Task AssertRefusedAsync(string refusal, Task<HttpResponseMessage> submitted)
+    {
+        using var response = await submitted;
+        Assert.Equal(refusal, Alert(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
     }
 
     [Fact]

@@ -9,16 +9,17 @@
 <p><a href="intents/new">New Intent</a></p>
 
 <nav class="backlog-filter" aria-label="Backlog filter">
-    <a href="/?filter=open" aria-current="@(Shown == BacklogFilter.Open ? "page" : null)">Open</a>
-    <a href="/?filter=closed" aria-current="@(Shown == BacklogFilter.Closed ? "page" : null)">Closed</a>
+    @foreach (var offered in Enum.GetValues<BacklogFilter>())
+    {
+        <a href="@offered.Address()" aria-current="@(offered == Filter ? "page" : null)">@offered</a>
+    }
 </nav>
 
-<BacklogList Filter="Shown" @rendermode="InteractiveServer" />
+<BacklogList Filter="Filter" @rendermode="InteractiveServer" />
 
 @code {
-    [SupplyParameterFromQuery]
-    private string? Filter { get; set; }
+    [SupplyParameterFromQuery(Name = BacklogFilterAddress.QueryParameter)]
+    private string? FilterValue { get; set; }
 
-    // Anything but the Closed link's value is the default, Open, as a filter the Portal doesn't offer shouldn't hide the Backlog.
-    private BacklogFilter Shown => string.Equals(Filter, "closed", StringComparison.OrdinalIgnoreCase) ? BacklogFilter.Closed : BacklogFilter.Open;
+    private BacklogFilter Filter => BacklogFilterAddress.FromValue(FilterValue);
 }

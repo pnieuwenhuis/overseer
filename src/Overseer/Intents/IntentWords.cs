@@ -1,0 +1,20 @@
+namespace Overseer.Intents;
+
+internal static class IntentWords
+{
+    /// <summary>The state as the user reads it, in the glossary's words.</summary>
+    public static string InWords(this IntentState state) => state switch
+    {
+        IntentState.AwaitingSpecApproval => "Awaiting Spec Approval",
+        IntentState.InReview => "In Review",
+        // One word, the same in the code and the glossary.
+        _ => state.ToString(),
+    };
+
+    /// <summary>What the light says in words, so that it doesn't rely on its colour.</summary>
+    public static string InWords(this IntentLight light) => light switch
+    {
+        IntentLight.Green => "Working",
+        _ => throw new ArgumentOutOfRangeException(nameof(light), light, null),
+    };
+}

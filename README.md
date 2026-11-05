@@ -99,11 +99,11 @@ Schema migrations are applied at startup, so an empty database gets the schema o
 
 ## Backlog
 
-The Portal's Home page is the Backlog: every open Intent, newest first. Each is listed by the first line of its text that says anything, without Markdown's heading markers, because an Intent has no title of its own, and with its state and light. Server-side code captures and reads Intents through `IntentLifecycle`, which owns their state.
+The Portal's Home page is the Backlog: the Intents under its filter, newest first. Each is listed by the first line of its text that says anything, without Markdown's heading markers, because an Intent has no title of its own, and with its state and light. Server-side code captures and reads Intents through `IntentLifecycle`, which owns their state.
 
-The Backlog opens on the Open filter. The Closed filter shows the Intents that are Done or Cancelled, and stays empty until those states can be reached. The address says which is shown (`/?filter=closed`).
+The Backlog opens on the Open filter: every Intent not yet Done or Cancelled. The Closed filter shows those that are, and stays empty until those states can be reached. The address says which is shown (`/?filter=closed`).
 
-An Intent's light says at a glance how it is doing: green with the label Working while agents work on it, orange with Needs Attention, red with Failed. The label makes it readable without the colour. States in which nothing runs show no light. `IntentLifecycle.LightOf` derives it in one place, where the tickets that introduce an orange or red condition add it; for now every Active Intent is green and the others have none.
+An Intent's light says at a glance how it is doing: green with the label Working while agents work on it. The label makes it readable without the colour. States in which nothing runs show no light. `IntentLifecycle.LightOf` derives it in one place, which is where orange (Needs Attention) and red (Failed) go when Overseer gains what sets them off; for now only a Refining Intent can have a light.
 
 The Backlog and the detail page update live, over Blazor's SignalR connection: `IntentLifecycle` announces each change once it is committed, and the page reads again. A detail page stops offering Start, Edit and Delete as soon as the Intent is no longer a Draft, and Start goes disabled, with the reason, as soon as the last slot is taken. A change in Settings shows when the page is next opened or an Intent next changes.
 

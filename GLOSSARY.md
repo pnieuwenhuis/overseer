@@ -19,7 +19,7 @@ A single desired change to the software, described by the human in free text; th
 _Avoid_: Ticket, story, feature request, epic
 
 **Backlog**:
-All open Intents: those not yet Done or Cancelled.
+The list of Intents: the open ones, those not yet Done or Cancelled, or under its Closed filter those that are.
 _Avoid_: Queue, todo list
 
 **Configured Repository**:

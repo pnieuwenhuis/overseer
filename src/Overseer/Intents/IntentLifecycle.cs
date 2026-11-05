@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Overseer.GitHub;
 using Overseer.Persistence;
 using Overseer.Repositories;
@@ -13,7 +14,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     /// <summary>The states of an Active Intent, each occupying a slot; what counts towards the maximum is defined here and nowhere else.</summary>
     private static readonly IntentState[] ActiveStates = [IntentState.Refining, IntentState.Implementing, IntentState.InReview];
 
-    /// <summary>The states of an Intent that is closed: what isn't one of these is open, in the Backlog.</summary>
+    /// <summary>The states of an Intent that is closed: what isn't one of these is open.</summary>
     private static readonly IntentState[] ClosedStates = [IntentState.Done, IntentState.Cancelled];
 
     /// <summary>The PostgreSQL advisory lock for the slots, in this database; the number means nothing, and only has to stay the only one used.</summary>
@@ -44,9 +45,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
             RepositoriesInScope = [.. configured.Select(repository => new RepositoryInScopeRecord { FullName = repository.ToString() })],
         });
         await database.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        Changed?.Invoke();
-        return new IntentChange.Made();
+        return await CommitAndAnnounceAsync(transaction, cancellationToken);
     }
 
     /// <summary>
@@ -76,9 +75,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         await inScope.Where(repository => repository.IntentId == id).ExecuteDeleteAsync(cancellationToken);
         inScope.AddRange(configured.Select(repository => new RepositoryInScopeRecord { IntentId = id, FullName = repository.ToString() }));
         await database.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        Changed?.Invoke();
-        return new IntentChange.Made();
+        return await CommitAndAnnounceAsync(transaction, cancellationToken);
     }
 
     /// <summary>Why an Intent in <paramref name="state"/> can't be edited, or <c>null</c> when it can.</summary>
@@ -101,9 +98,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         // The Configured Repositories aren't held, as capturing and editing do: deleting only ever lets a removal through. A removal
         // that still sees this Intent is refused, as it would have been a moment earlier.
         await database.Intents.Where(intent => intent.Id == id).ExecuteDeleteAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        Changed?.Invoke();
-        return new IntentChange.Made();
+        return await CommitAndAnnounceAsync(transaction, cancellationToken);
     }
 
     /// <summary>Why an Intent in <paramref name="state"/> can't be deleted, or <c>null</c> when it can.</summary>
@@ -129,9 +124,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
 
         await database.Intents.Where(intent => intent.Id == id)
             .ExecuteUpdateAsync(intent => intent.SetProperty(record => record.State, IntentState.Refining), cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        Changed?.Invoke();
-        return new IntentChange.Made();
+        return await CommitAndAnnounceAsync(transaction, cancellationToken);
     }
 
     /// <summary>Why the Intent with this id can't be started at the moment, with what a refused Start says, or <c>null</c> when it can.</summary>
@@ -144,14 +137,18 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     }
 
     /// <summary>
-    /// The light an Intent shows, or <c>null</c> when it has none. This is the one place a light is derived. The tickets that introduce a
-    /// condition add it here, ahead of the green below and reading whatever <see cref="Intent"/> then carries: first red (a Failed Task,
-    /// Sandbox creation failed, a merge failed), as a failure outweighs a question, then orange (the Analyst waiting for answers, a Spec
-    /// awaiting approval, an agent's question, Review Comments awaiting triage).
+    /// The light an Intent shows, or <c>null</c> when it has none. This is the one place a light is derived, and so far only green can be
+    /// reached, by a Refining Intent. The tickets that introduce a condition add it here, ahead of the green below and reading whatever
+    /// <see cref="Intent"/> then carries, each with its member of <see cref="IntentLight"/>, its colour and its label in
+    /// <see cref="IntentWords"/>, so that the light doesn't come to rely on the colour. Checked in this order: first red, labelled Failed
+    /// (a Failed Task, Sandbox creation failed, a merge failed), as a failure outweighs a question; then orange, labelled Needs Attention
+    /// (an unanswered Round, a Spec awaiting approval, an agent's question, Review Comments awaiting triage). Implementing and InReview
+    /// aren't settled by the green below: the tickets that make them reachable decide their light, as an Intent In Review can be up to the
+    /// user rather than to agents.
     /// </summary>
     public static IntentLight? LightOf(Intent intent) =>
-        // What is left is an Active Intent, whose agents are working, or a state in which nothing runs. AwaitingSpecApproval isn't Active,
-        // so it has no light until its orange condition is added above.
+        // What is left is an Active Intent or a state in which nothing runs. AwaitingSpecApproval isn't Active, so it has no light until
+        // its orange condition is added above.
         ActiveStates.Contains(intent.State) ? IntentLight.Green : null;
 
     /// <summary>The Intents the Backlog shows under this filter, newest first.</summary>
@@ -159,7 +156,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         return filter == BacklogFilter.Closed
-            ? await ReadAsync(database.Intents.Where(intent => ClosedStates.Contains(intent.State)).OrderByDescending(intent => intent.CreatedAt), cancellationToken)
+            ? await ReadAsync(database.Intents.Where(intent => ClosedStates.Contains(intent.State)), cancellationToken)
             : await ListOpenAsync(database.Intents, cancellationToken);
     }
 
@@ -185,6 +182,14 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
                 many: firstLines => $"the open Intents {firstLines} have it in scope");
     }
 
+    /// <summary>How every change to an Intent ends, so that none goes unannounced and a refused one, which never gets here, isn't announced.</summary>
+    private async Task<IntentChange> CommitAndAnnounceAsync(IDbContextTransaction transaction, CancellationToken cancellationToken)
+    {
+        await transaction.CommitAsync(cancellationToken);
+        Changed?.Invoke();
+        return new IntentChange.Made();
+    }
+
     /// <summary>Why this text and selection can't be saved on an Intent, or <c>null</c> when they can.</summary>
     private static string? WhyNotSavable(string text, RepositorySelection selection, IReadOnlyList<RepositoryName> configured)
     {
@@ -203,7 +208,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
 
         var hasRepositoryInScope = await database.Set<RepositoryInScopeRecord>().AnyAsync(repository => repository.IntentId == id, cancellationToken);
         // The maximum may have been lowered below the number of Active Intents: they stay, and Start waits until there is a free slot.
-        var active = await ReadAsync(database.Intents.Where(intent => ActiveStates.Contains(intent.State)).OrderByDescending(intent => intent.CreatedAt), cancellationToken);
+        var active = await ReadAsync(database.Intents.Where(intent => ActiveStates.Contains(intent.State)), cancellationToken);
 
         // Both at once, so that dealing with one doesn't lead straight to the other.
         string?[] problems =
@@ -249,14 +254,14 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         database.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock({ActiveIntentSlotsLock})", cancellationToken);
 
     private static Task<IReadOnlyList<Intent>> ListOpenAsync(IQueryable<IntentRecord> intents, CancellationToken cancellationToken) =>
-        ReadAsync(intents
-            // Names the closed states rather than the open ones, so that a state added later counts as open.
-            .Where(intent => !ClosedStates.Contains(intent.State))
-            .OrderByDescending(intent => intent.CreatedAt), cancellationToken);
+        // Names the closed states rather than the open ones, so that a state added later counts as open.
+        ReadAsync(intents.Where(intent => !ClosedStates.Contains(intent.State)), cancellationToken);
 
+    /// <summary>These Intents, newest first.</summary>
     private static async Task<IReadOnlyList<Intent>> ReadAsync(IQueryable<IntentRecord> intents, CancellationToken cancellationToken)
     {
         var stored = await intents
+            .OrderByDescending(intent => intent.CreatedAt)
             .Select(intent => new { intent.Id, intent.Text, intent.State, Repositories = intent.RepositoriesInScope.Select(repository => repository.FullName).ToList() })
             .ToListAsync(cancellationToken);
         return [.. stored.Select(intent => new Intent(intent.Id, intent.Text, intent.State, ConfiguredRepositories.ParseSortedByName(intent.Repositories)))];
@@ -308,22 +313,6 @@ public enum IntentLight
 {
     /// <summary>Agents are working.</summary>
     Green,
-
-    /// <summary>Needs Attention: it can't progress until the human acts.</summary>
-    Orange,
-
-    /// <summary>It failed, and stays stopped until the human intervenes.</summary>
-    Red,
-}
-
-/// <summary>Which Intents the Backlog shows.</summary>
-public enum BacklogFilter
-{
-    /// <summary>Every Intent not Done or Cancelled.</summary>
-    Open,
-
-    /// <summary>The Intents that are Done or Cancelled.</summary>
-    Closed,
 }
 
 /// <summary>What capturing, editing, deleting or starting an Intent did.</summary>
@@ -380,27 +369,6 @@ public enum IntentState
     Paused,
     Done,
     Cancelled,
-}
-
-internal static class IntentWords
-{
-    /// <summary>The state as the user reads it, in the glossary's words.</summary>
-    public static string InWords(this IntentState state) => state switch
-    {
-        IntentState.AwaitingSpecApproval => "Awaiting Spec Approval",
-        IntentState.InReview => "In Review",
-        // One word, the same in the code and the glossary.
-        _ => state.ToString(),
-    };
-
-    /// <summary>What the light says in words, so that it doesn't rely on its colour.</summary>
-    public static string InWords(this IntentLight light) => light switch
-    {
-        IntentLight.Green => "Working",
-        IntentLight.Orange => "Needs Attention",
-        IntentLight.Red => "Failed",
-        _ => throw new ArgumentOutOfRangeException(nameof(light), light, null),
-    };
 }
 
 /// <summary>An Intent, as PostgreSQL holds it.</summary>

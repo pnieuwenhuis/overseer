@@ -1,4 +1,4 @@
-.intent-status {
+.intent-state-and-light {
     align-items: baseline;
     display: inline-flex;
     flex-shrink: 0;
@@ -27,12 +27,4 @@
 
 .intent-light[data-light="Green"] {
     --intent-light-colour: #1a7f37;
-}
-
-.intent-light[data-light="Orange"] {
-    --intent-light-colour: #e07b00;
-}
-
-.intent-light[data-light="Red"] {
-    --intent-light-colour: #cf222e;
 }

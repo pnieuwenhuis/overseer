@@ -11,7 +11,7 @@ namespace Overseer.Components;
 public abstract class LiveIntentsView<TShown> : ComponentBase, IDisposable
 {
     private readonly CancellationTokenSource _disposed = new();
-    private int _lastRead;
+    private int _lastReadBegun;
 
     [Inject]
     protected IntentLifecycle Lifecycle { get; set; } = default!;
@@ -53,9 +53,9 @@ public abstract class LiveIntentsView<TShown> : ComponentBase, IDisposable
     private async Task RefreshAsync()
     {
         // Reads overlap when changes follow each other closely, and may end in any order: only the one begun last shows what is current.
-        var read = ++_lastRead;
+        var read = ++_lastReadBegun;
         var shown = await ReadAsync(_disposed.Token);
-        if (read == _lastRead)
+        if (read == _lastReadBegun)
         {
             Shown = shown;
         }
