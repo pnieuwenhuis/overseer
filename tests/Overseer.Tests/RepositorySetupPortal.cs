@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 
 namespace Overseer.Tests;
 
-/// <summary>Starting Repository Setups on the Settings page, and reading back what the page shows of them.</summary>
+/// <summary>Starting Repository Setups and removing Configured Repositories on the Settings page, and reading back what the page shows of them.</summary>
 public static class RepositorySetupPortal
 {
     /// <summary>The GitHub token the Overseer is started with, which the fake GitHub accepts as octocat.</summary>
@@ -33,6 +33,10 @@ public static class RepositorySetupPortal
             ["SetupPurpose"] = purpose,
             ["SetupTechStack"] = techStack,
         });
+
+    /// <summary>Presses the Remove button of <paramref name="repository"/> on the Settings page.</summary>
+    public static Task<HttpResponseMessage> RemoveAsync(RunningOverseer overseer, string repository) =>
+        overseer.SubmitFormAsync("/settings", "repository-remove", new Dictionary<string, string> { ["RemoveRepository"] = repository });
 
     /// <summary>The Configured Repositories the Settings page lists, in its order.</summary>
     public static IReadOnlyList<string> Listed(string page) =>

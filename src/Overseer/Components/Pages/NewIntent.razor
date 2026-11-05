@@ -30,7 +30,7 @@
         @foreach (var repository in _repositories)
         {
             <label>
-                <input type="checkbox" name="RepositoriesInScope" value="@repository" checked="@(_selected?.Contains(repository.ToString()) ?? true)" />
+                <input type="checkbox" name="RepositoriesInScope" value="@repository" checked="@(_selected?.Includes(repository) ?? true)" />
                 @repository
             </label>
         }
@@ -65,7 +65,7 @@
 
     private IReadOnlyList<RepositoryName> _repositories = [];
     // Which checkboxes show ticked: all of them (null) until the form is submitted, and from then on what was submitted.
-    private HashSet<string>? _selected;
+    private RepositorySelection? _selected;
 
     protected override async Task OnInitializedAsync() =>
         _repositories = await Repositories.ListAsync(HttpContext.RequestAborted);
@@ -73,13 +73,15 @@
     private async Task SubmitAsync()
     {
         _text = Intent.TextFromEditor(IntentText);
-        _selected = new HashSet<string>(RepositoriesInScope ?? [], StringComparer.OrdinalIgnoreCase);
+        _selected = new RepositorySelection(RepositoriesInScope ?? []);
         if (IntentAction != "save")
         {
+            // A repository removed since the page was opened drops off this page, so the next save would go on without it.
+            _error = _selected.RemovedNotice(_repositories);
             return;
         }
 
-        switch (await Lifecycle.CaptureAsync(IntentText, RepositoriesInScope ?? [], HttpContext.RequestAborted))
+        switch (await Lifecycle.CaptureAsync(IntentText, _selected, HttpContext.RequestAborted))
         {
             case IntentCapturing.Captured:
                 Navigation.NavigateTo("/");

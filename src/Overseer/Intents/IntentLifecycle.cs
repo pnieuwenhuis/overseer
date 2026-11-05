@@ -10,27 +10,18 @@ namespace Overseer.Intents;
 public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databases, TimeProvider time)
 {
     /// <summary>Captures what the user wrote as a new Draft, with the Configured Repositories they selected in scope.</summary>
-    /// <param name="repositoriesInScope">
-    /// As <c>owner/name</c> in any case. Selecting none is fine: only starting an Intent needs a Repository in scope.
-    /// </param>
-    public async Task<IntentCapturing> CaptureAsync(string? editorText, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
+    /// <param name="selection">Selecting none is fine: only starting an Intent needs a Repository in scope.</param>
+    public async Task<IntentCapturing> CaptureAsync(string? editorText, RepositorySelection selection, CancellationToken cancellationToken)
     {
         var text = Intent.TextFromEditor(editorText);
-        if (text == "")
-        {
-            return new IntentCapturing.Refused("An Intent needs text: write what you want changed.");
-        }
-
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-        var configured = await ConfiguredRepositories.HoldAsync(database, repositoriesInScope, cancellationToken);
-        var removed = repositoriesInScope.Except(configured, StringComparer.OrdinalIgnoreCase).ToList();
-        if (removed.Count > 0)
+        var configured = await ConfiguredRepositories.HoldThoseConfiguredAsync(database, selection.Repositories, cancellationToken);
+        // Both at once: the page drops a removed repository, so a refusal that left it out would be the last the user hears of it.
+        string?[] problems = [text == "" ? "An Intent needs text: write what you want changed." : null, selection.RemovedNotice(configured)];
+        if (problems.OfType<string>().ToList() is { Count: > 0 } refusal)
         {
-            // Saving without them would change what the user selected behind their back, so they get to look at it again.
-            return new IntentCapturing.Refused(
-                $"{Prose.List(removed)} {(removed.Count == 1 ? "is no longer a Configured Repository" : "are no longer Configured Repositories")}. "
-                + "Check the Repositories in scope and save again.");
+            return new IntentCapturing.Refused(string.Join(" ", refusal));
         }
 
         database.Intents.Add(new IntentRecord
@@ -39,7 +30,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
             Text = text,
             State = IntentState.Draft,
             CreatedAt = time.GetUtcNow(),
-            RepositoriesInScope = [.. configured.Select(repository => new RepositoryInScopeRecord { FullName = repository })],
+            RepositoriesInScope = [.. configured.Select(repository => new RepositoryInScopeRecord { FullName = repository.ToString() })],
         });
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -53,19 +44,63 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         return await ListOpenAsync(database.Intents, cancellationToken);
     }
 
-    /// <summary>The open Intents, newest first, that have <paramref name="repository"/> in scope, in any case.</summary>
-    internal static Task<IReadOnlyList<Intent>> ListOpenWithInScopeAsync(OverseerDbContext database, string repository, CancellationToken cancellationToken) =>
-        ListOpenAsync(database.Intents.Where(intent => intent.RepositoriesInScope.Any(inScope => inScope.FullName == repository)), cancellationToken);
+    /// <summary>
+    /// Says which open Intents have <paramref name="repository"/> in scope, in any case, by their first lines, newest first; <c>null</c>
+    /// when none has.
+    /// </summary>
+    internal static async Task<string?> DescribeOpenWithInScopeAsync(OverseerDbContext database, RepositoryName repository, CancellationToken cancellationToken)
+    {
+        var fullName = repository.ToString();
+        var open = await ListOpenAsync(database.Intents.Where(intent => intent.RepositoriesInScope.Any(inScope => inScope.FullName == fullName)), cancellationToken);
+        return open.Count == 0
+            ? null
+            : Prose.Agreeing([.. open.Select(intent => $"\"{intent.FirstLine}\"")],
+                one: firstLine => $"the open Intent {firstLine} has it in scope",
+                many: firstLines => $"the open Intents {firstLines} have it in scope");
+    }
 
     private static async Task<IReadOnlyList<Intent>> ListOpenAsync(IQueryable<IntentRecord> intents, CancellationToken cancellationToken)
     {
         var stored = await intents
-            // Named by what closes an Intent, so that a state added later counts as open.
+            // Names Done and Cancelled rather than the open states, so that a state added later counts as open.
             .Where(intent => intent.State != IntentState.Done && intent.State != IntentState.Cancelled)
             .OrderByDescending(intent => intent.CreatedAt)
             .Select(intent => new { intent.Text, intent.State, Repositories = intent.RepositoriesInScope.Select(repository => repository.FullName).ToList() })
             .ToListAsync(cancellationToken);
-        return [.. stored.Select(intent => new Intent(intent.Text, intent.State, ConfiguredRepositories.ByName(intent.Repositories)))];
+        return [.. stored.Select(intent => new Intent(intent.Text, intent.State, ConfiguredRepositories.ParseSortedByName(intent.Repositories)))];
+    }
+}
+
+/// <summary>
+/// The Repositories in scope a user ticked on a form, as they came in. The form may have been opened before some of them were removed,
+/// and a value that isn't a repository at all can't be configured either.
+/// </summary>
+public sealed class RepositorySelection
+{
+    private readonly IReadOnlyList<string> _notRepositories;
+
+    public RepositorySelection(IEnumerable<string> submitted)
+    {
+        var read = submitted.Select(value => (Value: value, Repository: RepositoryName.TryParse(value, out var repository) ? repository : null)).ToList();
+        Repositories = [.. read.Select(item => item.Repository).OfType<RepositoryName>()];
+        _notRepositories = [.. read.Where(item => item.Repository is null).Select(item => item.Value).Distinct()];
+    }
+
+    internal IReadOnlyList<RepositoryName> Repositories { get; }
+
+    /// <summary>Whether <paramref name="repository"/> is ticked, in any case.</summary>
+    public bool Includes(RepositoryName repository) => Repositories.Contains(repository, RepositoryName.SameRepository);
+
+    /// <summary>
+    /// What to tell the user when something ticked isn't among <paramref name="configured"/>, or <c>null</c> when all of it is. Going on
+    /// without it would change what they selected behind their back, so they get to look at it again.
+    /// </summary>
+    public string? RemovedNotice(IEnumerable<RepositoryName> configured)
+    {
+        List<string> removed = [.. Repositories.Except(configured, RepositoryName.SameRepository).Select(repository => repository.ToString()), .. _notRepositories];
+        return removed.Count == 0
+            ? null
+            : $"{ConfiguredRepositories.NoLongerConfigured(removed)}. Check the Repositories in scope and save again.";
     }
 }
 
@@ -110,7 +145,7 @@ public enum IntentState
 {
     Draft,
 
-    // Nothing reaches these two yet. They exist because they are what closes an Intent: every other state is open.
+    // Nothing reaches these two yet. They exist because an Intent is open in every other state.
     Done,
     Cancelled,
 }

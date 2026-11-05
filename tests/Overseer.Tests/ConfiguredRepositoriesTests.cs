@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.RegularExpressions;
+using static Overseer.Tests.RepositorySetupPortal;
 
 namespace Overseer.Tests;
 
@@ -229,10 +230,6 @@ public class ConfiguredRepositoriesTests(PostgresServer postgres)
     /// <summary>Enters <paramref name="repository"/> in the Settings page's repository field and adds it.</summary>
     private static Task<HttpResponseMessage> AddAsync(RunningOverseer overseer, string repository) =>
         overseer.SubmitFormAsync("/settings", "repository-add", new Dictionary<string, string> { ["Repository"] = repository });
-
-    /// <summary>Presses the Remove button of <paramref name="repository"/> on the Settings page.</summary>
-    private static Task<HttpResponseMessage> RemoveAsync(RunningOverseer overseer, string repository) =>
-        overseer.SubmitFormAsync("/settings", "repository-remove", new Dictionary<string, string> { ["RemoveRepository"] = repository });
 
     /// <summary>The Configured Repositories the Settings page lists, in its order.</summary>
     private static IReadOnlyList<string> Listed(string page) =>

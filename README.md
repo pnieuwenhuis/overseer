@@ -103,7 +103,7 @@ The Portal's Home page is the Backlog: every open Intent, newest first. Each is 
 
 New Intent opens an editor for the Intent's text, in free Markdown. Preview renders what is in the editor without saving it, the same way as the Review Guidelines (see [Settings](#settings)). Save as Draft stores the Intent in PostgreSQL, with LF line breaks, and returns to the Backlog; text with nothing but whitespace is refused. A Draft is only captured: no agent works on it.
 
-The page also offers every Configured Repository as a Repository in scope, all selected when it opens. Preview and a refused save keep your selection. They are stored with the Intent, as the repositories are named at that moment, and the Backlog shows them. A Draft can have none, so the Backlog can be filled before any repository is configured. When a selected repository was removed after the page opened, the save is refused, naming it, rather than silently saving a smaller scope: the page then offers the current repositories and keeps your text and the rest of your selection.
+The page also offers every Configured Repository as a Repository in scope, all selected when it opens. Preview and a refused save keep your selection. They are stored with the Intent, as the repositories are named at that moment, and the Backlog shows them. A Draft can have none, so the Backlog can be filled before any repository is configured. When a selected repository was removed after the page opened, Preview and any save say so, naming it, and a save is refused rather than silently saving a smaller scope: the page then offers the current repositories and keeps your text and the rest of your selection, so saving again goes on without it.
 
 ## Settings
 

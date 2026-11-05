@@ -3,13 +3,12 @@ using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Time.Testing;
 using Overseer.Intents;
+using static Overseer.Tests.RepositorySetupPortal;
 
 namespace Overseer.Tests;
 
 public class RepositoriesInScopeTests(PostgresServer postgres)
 {
-    private const string Token = "github_pat_11WORKING0123456789";
-
     [Fact]
     public async Task A_new_Intent_offers_every_Configured_Repository_all_selected()
     {
@@ -82,7 +81,7 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
         using var response = await SaveAsync(overseer, " ", "acme/web");
 
         var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Contains("An Intent needs text", page);
+        Assert.Equal("An Intent needs text: write what you want changed.", Alert(page));
         Assert.Equal([("acme/API", false), ("acme/web", true)], Offered(page));
         Assert.Empty(Backlog(await overseer.Http.GetStringAsync("/", TestContext.Current.CancellationToken)));
     }
@@ -129,6 +128,75 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task Previewing_after_a_selected_repository_was_removed_says_so_and_saves_nothing()
+    {
+        await using var overseer = await StartWithRepositoriesAsync("acme/API", "acme/docs", "acme/web");
+        // The user's form still offers acme/web, as a browser tab opened before this removal does.
+        using var removed = await RemoveAsync(overseer, "acme/web");
+
+        using var response = await SubmitAsync(overseer, "Export data", "preview", "acme/web", "acme/docs");
+
+        var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("acme/web is no longer a Configured Repository. Check the Repositories in scope and save again.", Alert(page));
+        Assert.Equal([("acme/API", false), ("acme/docs", true)], Offered(page));
+        Assert.Contains(">Export data</textarea>", page);
+        Assert.Empty(Backlog(await overseer.Http.GetStringAsync("/", TestContext.Current.CancellationToken)));
+    }
+
+    [Fact]
+    public async Task Previewing_after_a_repository_that_is_not_selected_was_removed_says_nothing()
+    {
+        await using var overseer = await StartWithRepositoriesAsync("acme/docs", "acme/web");
+        using var removed = await RemoveAsync(overseer, "acme/web");
+
+        using var response = await SubmitAsync(overseer, "Export data", "preview", "acme/docs");
+
+        var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("role=\"alert\"", page);
+        Assert.Equal([("acme/docs", true)], Offered(page));
+    }
+
+    [Fact]
+    public async Task Previewing_a_repository_in_another_case_keeps_it_selected_and_says_nothing()
+    {
+        await using var overseer = await StartWithRepositoriesAsync("acme/web");
+
+        using var response = await SubmitAsync(overseer, "Export data", "preview", "ACME/WEB");
+
+        var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("role=\"alert\"", page);
+        Assert.Equal([("acme/web", true)], Offered(page));
+    }
+
+    [Fact]
+    public async Task A_selected_value_that_is_not_a_repository_refuses_the_save_naming_it()
+    {
+        await using var overseer = await StartWithRepositoriesAsync("acme/web");
+
+        using var response = await SaveAsync(overseer, "Export data", "not a repository", "acme/web");
+
+        var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("not a repository is no longer a Configured Repository. Check the Repositories in scope and save again.", Alert(page));
+        Assert.Empty(Backlog(await overseer.Http.GetStringAsync("/", TestContext.Current.CancellationToken)));
+    }
+
+    [Fact]
+    public async Task A_save_without_text_after_a_selected_repository_was_removed_says_both_and_saves_nothing()
+    {
+        await using var overseer = await StartWithRepositoriesAsync("acme/API", "acme/docs", "acme/web");
+        using var removed = await RemoveAsync(overseer, "acme/web");
+
+        using var response = await SaveAsync(overseer, " ", "acme/web", "acme/docs");
+
+        var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(
+            "An Intent needs text: write what you want changed. acme/web is no longer a Configured Repository. Check the Repositories in scope and save again.",
+            Alert(page));
+        Assert.Equal([("acme/API", false), ("acme/docs", true)], Offered(page));
+        Assert.Empty(Backlog(await overseer.Http.GetStringAsync("/", TestContext.Current.CancellationToken)));
+    }
+
+    [Fact]
     public async Task Removing_a_repository_an_open_Intent_has_in_scope_is_refused_naming_the_Intent()
     {
         await using var overseer = await StartWithRepositoriesAsync("acme/API", "acme/web");
@@ -139,7 +207,7 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
         var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Equal("acme/web can't be removed: the open Intent \"Export data\" has it in scope.", Alert(page));
         Assert.DoesNotContain("is removed.", page);
-        Assert.Equal(["acme/API", "acme/web"], Configured(await overseer.Http.GetStringAsync("/settings", TestContext.Current.CancellationToken)));
+        Assert.Equal(["acme/API", "acme/web"], Listed(await overseer.Http.GetStringAsync("/settings", TestContext.Current.CancellationToken)));
     }
 
     [Fact]
@@ -152,7 +220,7 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
 
         var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Equal("acme/web can't be removed: the open Intent \"Export data\" has it in scope.", Alert(page));
-        Assert.Equal(["acme/web"], Configured(page));
+        Assert.Equal(["acme/web"], Listed(page));
     }
 
     [Fact]
@@ -183,24 +251,24 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
 
         var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Contains("acme/web is removed.", page);
-        Assert.Equal(["acme/API"], Configured(page));
+        Assert.Equal(["acme/API"], Listed(page));
     }
 
     [Theory]
     [InlineData(IntentState.Done)]
     [InlineData(IntentState.Cancelled)]
-    public async Task A_closed_Intent_leaves_the_Backlog_and_does_not_hold_a_repository_back_but_keeps_its_history(IntentState closed)
+    public async Task An_Intent_that_is_Done_or_Cancelled_leaves_the_Backlog_and_does_not_hold_a_repository_back_but_keeps_its_history(IntentState doneOrCancelled)
     {
         await using var overseer = await StartWithRepositoriesAsync("acme/web");
-        using var savedClosed = await SaveAsync(overseer, "Closed", "acme/web");
-        await SetStateAsync(overseer, "Closed", closed);
+        using var savedNotOpen = await SaveAsync(overseer, "Not open", "acme/web");
+        await SetStateAsync(overseer, "Not open", doneOrCancelled);
 
         Assert.Empty(Backlog(await overseer.Http.GetStringAsync("/", TestContext.Current.CancellationToken)));
         using var response = await RemoveAsync(overseer, "acme/web");
 
         var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Contains("acme/web is removed.", page);
-        Assert.Empty(Configured(page));
+        Assert.Empty(Listed(page));
         await using var database = overseer.OpenDatabase();
         Assert.Equal(["acme/web"], await database.Intents.SelectMany(intent => intent.RepositoriesInScope).Select(repository => repository.FullName).ToListAsync(TestContext.Current.CancellationToken));
     }
@@ -209,9 +277,9 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
     public async Task A_refusal_names_only_the_open_Intents()
     {
         await using var overseer = await StartWithRepositoriesAsync("acme/web");
-        using var savedClosed = await SaveAsync(overseer, "Closed", "acme/web");
+        using var savedNotOpen = await SaveAsync(overseer, "Not open", "acme/web");
         using var savedOpen = await SaveAsync(overseer, "Still open", "acme/web");
-        await SetStateAsync(overseer, "Closed", IntentState.Done);
+        await SetStateAsync(overseer, "Not open", IntentState.Done);
 
         using var response = await RemoveAsync(overseer, "acme/web");
 
@@ -288,25 +356,19 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
         Assert.NotEqual(intentSaved, repositoryRemoved);
         Assert.Equal(
             intentSaved ? ["acme/web"] : [],
-            Configured(await overseer.Http.GetStringAsync("/settings", TestContext.Current.CancellationToken)));
+            Listed(await overseer.Http.GetStringAsync("/settings", TestContext.Current.CancellationToken)));
         Assert.Equal(
             intentSaved ? [("Export data", "Repositories in scope: acme/web")] : [],
             Backlog(await overseer.Http.GetStringAsync("/", TestContext.Current.CancellationToken)));
     }
 
-    /// <summary>Closes an Intent directly: the Portal can't close one yet.</summary>
+    /// <summary>Sets an Intent's state directly: the Portal can't make one Done or Cancelled yet.</summary>
     private static async Task SetStateAsync(RunningOverseer overseer, string text, IntentState state)
     {
         await using var database = overseer.OpenDatabase();
         await database.Intents.Where(intent => intent.Text == text)
             .ExecuteUpdateAsync(intent => intent.SetProperty(record => record.State, state), TestContext.Current.CancellationToken);
     }
-
-    /// <summary>The Configured Repositories the Settings page lists, in its order.</summary>
-    private static IReadOnlyList<string> Configured(string page) =>
-        Regex.Match(page, "<ul[^>]*class=\"configured-repositories\"[^>]*>(.*?)</ul>", RegexOptions.Singleline) is { Success: true } list
-            ? [.. Regex.Matches(list.Groups[1].Value, "<a[^>]*>(.*?)</a>", RegexOptions.Singleline).Select(match => WebUtility.HtmlDecode(match.Groups[1].Value.Trim()))]
-            : [];
 
     /// <summary>Writes an Intent's text on the New Intent page, ticks exactly these repositories and saves it.</summary>
     private static Task<HttpResponseMessage> SaveAsync(RunningOverseer overseer, string text, params string[] repositories) =>
@@ -321,10 +383,6 @@ public class RepositoriesInScopeTests(PostgresServer postgres)
             // A browser sends a ticked checkbox as its value, and an unticked one not at all.
             .. repositories.Select(repository => KeyValuePair.Create("RepositoriesInScope", repository)),
         ]);
-
-    /// <summary>Presses the Remove button of <paramref name="repository"/> on the Settings page.</summary>
-    private static Task<HttpResponseMessage> RemoveAsync(RunningOverseer overseer, string repository) =>
-        overseer.SubmitFormAsync("/settings", "repository-remove", new Dictionary<string, string> { ["RemoveRepository"] = repository });
 
     /// <summary>The text of the page's alert, as a browser would show it.</summary>
     private static string Alert(string page) =>

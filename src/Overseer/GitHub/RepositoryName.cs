@@ -9,6 +9,14 @@ public sealed partial record RepositoryName(string Owner, string Name)
     /// <summary>Why what the user entered is not a repository.</summary>
     public const string NotARepositoryError = "Enter a repository as owner/name, such as octocat/Hello-World, or paste its GitHub URL.";
 
+    /// <summary>
+    /// Tells whether two names are the same repository, as GitHub does: regardless of case. A record's own equality does not, for it
+    /// also tells a name as the user typed it from how GitHub spells it.
+    /// </summary>
+    public static IEqualityComparer<RepositoryName> SameRepository { get; } = EqualityComparer<RepositoryName>.Create(
+        (first, second) => StringComparer.OrdinalIgnoreCase.Equals(first?.ToString(), second?.ToString()),
+        repository => StringComparer.OrdinalIgnoreCase.GetHashCode(repository.ToString()));
+
     public override string ToString() => $"{Owner}/{Name}";
 
     /// <summary>The repository's page on GitHub.</summary>
