@@ -6,23 +6,27 @@
 
 <PageTitle>Delete Intent · Overseer</PageTitle>
 
-<h1>Delete Intent</h1>
-
 @if (_error is not null)
 {
-    <p role="alert">@_error</p>
     <IntentBackLink IntentId="@(_exists ? Id : null)" />
+    <h1 class="mb-6">Delete Intent</h1>
+    <p role="alert" class="callout-warning">@_error</p>
 }
 else
 {
-    <p>Delete this Draft? It will be gone for good, not Cancelled.</p>
-    <MarkdownPreview Label="Intent text" Text="@_text" />
-    <form method="post" @formname="delete-intent" @onsubmit="SubmitAsync" class="delete-intent-form">
-        <AntiforgeryToken />
-        @* Nothing else deletes: opening this page doesn't, nor does a form submitted without pressing this button. *@
-        <button type="submit" name="DeleteConfirmation" value="@Confirmed">Delete this Draft</button>
-        <a href="intents/@Id">Keep it</a>
-    </form>
+    <h1 class="mb-6">Delete Intent</h1>
+    <article class="panel max-w-3xl overflow-hidden">
+        <header class="border-b border-line bg-danger-soft px-5 py-3.5 text-sm font-medium text-danger sm:px-6">
+            <p>Delete this Draft? It will be gone for good, not Cancelled.</p>
+        </header>
+        <MarkdownPreview Label="Intent text" Text="@_text" />
+        <form method="post" @formname="delete-intent" @onsubmit="SubmitAsync" class="buttons justify-end border-t border-line bg-raised px-5 py-3.5 sm:px-6">
+            <AntiforgeryToken />
+            <a href="intents/@Id" class="btn">Keep it</a>
+            @* Nothing else deletes: opening this page doesn't, nor does a form submitted without pressing this button. *@
+            <button type="submit" name="DeleteConfirmation" value="@Confirmed" class="btn-danger">Delete this Draft</button>
+        </form>
+    </article>
 }
 
 @code {

@@ -2,31 +2,35 @@
 @using Overseer.Intents
 @inherits LiveIntentsView<LiveIntent.Detail>
 
-@if (Shown?.Intent is { } intent)
-{
-    <p class="intent-facts">
-        <IntentStateAndLight Intent="intent" />
-        <span class="intent-repositories">@intent.RepositoriesInScopeLine</span>
-        <IntentWorkingTime Intent="intent" />
-    </p>
-    <MarkdownPreview Label="Intent text" Text="@intent.Text" />
-    @if (intent.State == IntentState.Draft)
-    {
-        <div class="intent-actions">
-            @* A plain form, posted by the browser, so Start works the same with or without the live connection. The static page handles it, under this name. *@
-            <form method="post" action="intents/@Id">
-                <input type="hidden" name="_handler" value="@Pages.IntentDetail.StartFormName" />
-                <AntiforgeryToken />
-                <button type="submit" disabled="@(Shown.WhyNotStartable is not null)">Start</button>
-            </form>
-            <a href="intents/@Id/edit">Edit</a>
-            <a href="intents/@Id/delete">Delete</a>
-        </div>
-    }
-}
 @if (Shown is { WhyNotStartable: { } why } && (Shown.Intent?.State is null or IntentState.Draft || StartRefused))
 {
-    <p role="alert">@why</p>
+    <p role="alert" class="callout-warning mb-4">@why</p>
+}
+@if (Shown?.Intent is { } intent)
+{
+    <article class="panel overflow-hidden">
+        <header class="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-line bg-raised px-5 py-3.5 sm:px-6">
+            <p class="intent-facts">
+                <IntentStateAndLight Intent="intent" />
+                <span class="intent-repositories">@intent.RepositoriesInScopeLine</span>
+                <IntentWorkingTime Intent="intent" />
+            </p>
+            @if (intent.State == IntentState.Draft)
+            {
+                <div class="intent-actions">
+                    <a href="intents/@Id/delete" class="btn">Delete</a>
+                    <a href="intents/@Id/edit" class="btn">Edit</a>
+                    @* A plain form, posted by the browser, so Start works the same with or without the live connection. The static page handles it, under this name. *@
+                    <form method="post" action="intents/@Id">
+                        <input type="hidden" name="_handler" value="@Pages.IntentDetail.StartFormName" />
+                        <AntiforgeryToken />
+                        <button type="submit" class="btn-primary" disabled="@(Shown.WhyNotStartable is not null)">Start</button>
+                    </form>
+                </div>
+            }
+        </header>
+        <MarkdownPreview Label="Intent text" Text="@intent.Text" />
+    </article>
 }
 
 @code {

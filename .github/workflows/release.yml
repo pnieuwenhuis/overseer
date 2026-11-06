@@ -44,6 +44,12 @@ jobs:
       - run: pwsh tests/Overseer.Tests/bin/Debug/net10.0/playwright.ps1 install-deps chromium
       # Unstamped on purpose: the tests check that a local build reports the development version.
       - run: dotnet test
+      # The Portal's stylesheet is committed; it must be what its Tailwind source builds.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci && npm run css
+      - run: git diff --exit-code -- src/Overseer/wwwroot/app.css
 
   cli:
     needs: [version, test]

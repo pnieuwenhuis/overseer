@@ -97,6 +97,17 @@ You need the .NET 10 SDK and Docker.
 
 Schema migrations are applied at startup, so an empty database gets the schema on the first run and later runs change nothing.
 
+### Portal styles
+
+The Portal is styled with [Tailwind CSS](https://tailwindcss.com) v4. Its source is `src/Overseer/Styles/app.css`: the colour tokens (with their dark-mode values, which follow the operating system), the base styles of headings and form controls, and the classes of the Portal's own parts, such as `intent-state` and `markdown-preview`. Pages and components use Tailwind's utility classes for layout and these classes for the rest; they have no `.razor.css` files of their own. Tailwind builds `src/Overseer/wwwroot/app.css`, which is committed, so building, testing and the image need no Node.js. After changing the source or a class in a `.razor` file, rebuild it with Node 24:
+
+```sh
+npm ci
+npm run css         # or `npm run css:watch` while you work
+```
+
+The release workflow fails when the committed `app.css` differs from what the source builds. Tests find some elements by their exact `class` attribute (such as `class="intent-state"`), so style those through their class in the source, never with utilities in their markup. The font, Schibsted Grotesk, is served from `wwwroot/fonts` under the SIL Open Font License.
+
 ## Backlog
 
 The Portal's Home page is the Backlog: the Intents under its filter, newest first. Each is listed by the first line of its text that says anything, without Markdown's heading markers, because an Intent has no title of its own, and with its state and light. Server-side code captures and reads Intents through `IntentLifecycle`, which owns their state.

@@ -4,11 +4,12 @@
 
 <PageTitle>Backlog · Overseer</PageTitle>
 
-<h1>Backlog</h1>
+<div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+    <h1>Backlog</h1>
+    <a href="intents/new" class="btn-primary">New Intent</a>
+</div>
 
-<p><a href="intents/new">New Intent</a></p>
-
-<nav class="backlog-filter" aria-label="Backlog filter">
+<nav class="segmented mb-4" aria-label="Backlog filter">
     @foreach (var offered in Enum.GetValues<BacklogFilter>())
     {
         <a href="@offered.Address()" aria-current="@(offered == Filter ? "page" : null)">@offered</a>

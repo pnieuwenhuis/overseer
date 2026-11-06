@@ -6,7 +6,8 @@
 
 <PageTitle>@(_intent?.FirstLine ?? "Intent") · Overseer</PageTitle>
 
-<h1>Intent</h1>
+<p class="mb-3"><a href="/" class="back-link">Back to the Backlog</a></p>
+<h1 class="mb-6">Intent</h1>
 
 @* A form submitted from a page opened earlier is handled whatever became of the Intent. *@
 @if (_intent is not null || IsSubmitted)
@@ -18,7 +19,6 @@
 {
     <form method="post" @formname="@StartFormName" @onsubmit="StartAsync"></form>
 }
-<p><a href="/">Back to the Backlog</a></p>
 
 @code {
     /// <summary>The name that a form submitted to this page starts the Intent under.</summary>

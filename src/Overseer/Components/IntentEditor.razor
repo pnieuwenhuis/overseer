@@ -5,38 +5,42 @@
 @inject ConfiguredRepositories Repositories
 @inject NavigationManager Navigation
 
-<form method="post" @formname="@FormName" @onsubmit="SubmitAsync" class="intent-editor-form">
-    <AntiforgeryToken />
-    @if (_error is not null)
-    {
-        <p class="intent-editor-error" role="alert">@_error</p>
-    }
-    <label>
-        Markdown
-        <textarea name="IntentText" rows="16" spellcheck="true" autofocus>@_text</textarea>
-    </label>
-    <fieldset class="intent-editor-repositories">
-        <legend>Repositories in scope</legend>
-        @if (_repositories.Count == 0)
+<div class="grid items-start gap-6 xl:grid-cols-2">
+    <form method="post" @formname="@FormName" @onsubmit="SubmitAsync" class="panel form p-5 sm:p-6">
+        <AntiforgeryToken />
+        @if (_error is not null)
         {
-            <p class="intent-editor-note">No repositories are configured, so this Intent will have none in scope.</p>
+            <p class="callout-danger" role="alert">@_error</p>
         }
-        @foreach (var repository in _repositories)
-        {
-            <label>
-                <input type="checkbox" name="RepositoriesInScope" value="@repository" checked="@(_selected?.Includes(repository) ?? true)" />
-                @repository
-            </label>
-        }
-    </fieldset>
-    <span class="intent-editor-buttons">
-        <button type="submit" name="IntentAction" value="preview">Preview</button>
-        <button type="submit" name="IntentAction" value="@SaveAction">@SaveLabel</button>
-    </span>
-</form>
+        <label>
+            Markdown
+            <textarea name="IntentText" rows="16" spellcheck="true" autofocus>@_text</textarea>
+        </label>
+        <fieldset>
+            <legend>Repositories in scope</legend>
+            @if (_repositories.Count == 0)
+            {
+                <p class="form-note">No repositories are configured, so this Intent will have none in scope.</p>
+            }
+            @foreach (var repository in _repositories)
+            {
+                <label>
+                    <input type="checkbox" name="RepositoriesInScope" value="@repository" checked="@(_selected?.Includes(repository) ?? true)" />
+                    @repository
+                </label>
+            }
+        </fieldset>
+        <span class="buttons">
+            <button type="submit" name="IntentAction" value="preview">Preview</button>
+            <button type="submit" name="IntentAction" value="@SaveAction" class="btn-primary">@SaveLabel</button>
+        </span>
+    </form>
 
-<h2>Preview</h2>
-<MarkdownPreview Label="Intent preview" Text="@_text" />
+    <section class="flex flex-col gap-3">
+        <h2>Preview</h2>
+        <MarkdownPreview Label="Intent preview" Text="@_text" />
+    </section>
+</div>
 
 @code {
     // The value of the button that saves. Any other submission only previews.

@@ -4,7 +4,13 @@
 
 @if (Shown is { Count: 0 })
 {
-    <p>@(Filter == BacklogFilter.Closed ? "No Intent is Done or Cancelled." : "The Backlog is empty.")</p>
+    <div class="panel px-6 py-14 text-center">
+        <p class="font-semibold">@(Filter == BacklogFilter.Closed ? "No Intent is Done or Cancelled." : "The Backlog is empty.")</p>
+        @if (Filter == BacklogFilter.Open)
+        {
+            <p class="mt-1 text-sm text-muted">Write down what you want built with New Intent. It stays a Draft until you start it.</p>
+        }
+    </div>
 }
 else if (Shown is not null)
 {
@@ -14,8 +20,10 @@ else if (Shown is not null)
             <li class="backlog-intent" data-intent @key="intent.Id">
                 <span class="intent-summary">
                     <a href="intents/@intent.Id" class="intent-first-line">@intent.FirstLine</a>
-                    <span class="intent-repositories">@intent.RepositoriesInScopeLine</span>
-                    <IntentWorkingTime Intent="intent" />
+                    <span class="intent-meta">
+                        <span class="intent-repositories">@intent.RepositoriesInScopeLine</span>
+                        <IntentWorkingTime Intent="intent" />
+                    </span>
                 </span>
                 <IntentStateAndLight Intent="intent" />
             </li>

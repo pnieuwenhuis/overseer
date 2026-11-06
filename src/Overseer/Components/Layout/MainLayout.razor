@@ -1,22 +1,43 @@
 @inherits LayoutComponentBase
 
-<header class="shell-header">
-    <span class="shell-name">Overseer @OverseerVersion.Current</span>
-    <AuthorizeView>
-        <nav class="shell-nav">
-            <NavLink href="" Match="NavLinkMatch.All">Home</NavLink>
-            <NavLink href="settings">Settings</NavLink>
-        </nav>
-        <form method="post" action="logout" class="shell-log-out">
-            <AntiforgeryToken />
-            <button type="submit">Log out</button>
-        </form>
-    </AuthorizeView>
-</header>
-
-<main class="shell-main">
-    @Body
-</main>
+<AuthorizeView>
+    <Authorized>
+        <div class="min-h-dvh lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]">
+            <aside class="flex items-center gap-x-4 gap-y-2 flex-wrap border-b border-line bg-surface px-4 py-3 sm:px-6 lg:sticky lg:top-0 lg:h-dvh lg:flex-col lg:flex-nowrap lg:items-stretch lg:gap-6 lg:border-b-0 lg:border-r lg:px-3 lg:py-5">
+                <a href="" class="flex items-center gap-2.5 rounded-lg px-1 text-[1.0625rem] font-[680] tracking-tight lg:px-2">
+                    <OverseerMark />
+                    Overseer
+                </a>
+                <nav class="order-last flex w-full gap-1 sm:order-none sm:w-auto lg:flex-col" aria-label="Portal">
+                    <NavLink href="" Match="NavLinkMatch.All" class="nav-link nav-backlog">Backlog</NavLink>
+                    <NavLink href="settings" class="nav-link nav-settings">Settings</NavLink>
+                </nav>
+                <div class="ml-auto flex items-center gap-3 lg:mt-auto lg:ml-0 lg:flex-col lg:items-stretch lg:gap-4 lg:border-t lg:border-line lg:pt-4">
+                    <form method="post" action="logout" class="lg:contents">
+                        <AntiforgeryToken />
+                        <button type="submit" class="btn-quiet lg:w-full lg:justify-start">Log out</button>
+                    </form>
+                    <p class="hidden px-2.5 text-xs text-muted lg:block"><span>Overseer @OverseerVersion.Current</span></p>
+                </div>
+            </aside>
+            <main class="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 lg:px-10 lg:py-10">
+                @Body
+            </main>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <main class="flex min-h-dvh flex-col items-center justify-center px-4 py-10">
+            <div class="w-full max-w-sm">
+                <div class="mb-8 flex items-center justify-center gap-2.5 text-xl font-[680] tracking-tight">
+                    <OverseerMark Large />
+                    Overseer
+                </div>
+                @Body
+                <p class="mt-8 text-center text-xs text-muted"><span>Overseer @OverseerVersion.Current</span></p>
+            </div>
+        </main>
+    </NotAuthorized>
+</AuthorizeView>
 
 <div id="blazor-error-ui" data-nosnippet>
     An unhandled error has occurred.

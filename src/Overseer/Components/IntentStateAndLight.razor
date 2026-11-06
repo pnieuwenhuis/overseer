@@ -2,7 +2,7 @@
 @using Overseer.Intents
 
 <span class="intent-state-and-light">
-    <span class="intent-state">@Intent.State.InWords()</span>
+    <span class="intent-state" data-state="@Intent.State">@Intent.State.InWords()</span>
     @if (IntentLifecycle.LightOf(Intent) is { } light)
     {
         <span class="intent-light" data-light="@light">@light.InWords()</span>

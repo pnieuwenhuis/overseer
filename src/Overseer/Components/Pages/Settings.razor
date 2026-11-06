@@ -14,388 +14,428 @@
 
 <PageTitle>Settings · Overseer</PageTitle>
 
-<h1>Settings</h1>
+<h1 class="mb-8">Settings</h1>
 
-<h2>Operating limits</h2>
+<div class="xl:grid xl:grid-cols-[11rem_minmax(0,1fr)] xl:gap-10">
+    <nav class="settings-index hidden xl:sticky xl:top-10 xl:block xl:self-start" aria-label="Settings sections">
+        <a href="settings#operating-limits">Operating limits</a>
+        <a href="settings#sandboxes">Sandboxes</a>
+        <a href="settings#review-guidelines">Review Guidelines</a>
+        <a href="settings#agents">Agents</a>
+        <a href="settings#model-provider-tokens">Model provider tokens</a>
+        <a href="settings#github">GitHub</a>
+        <a href="settings#repositories">Repositories</a>
+    </nav>
 
-@if (_values is not null)
-{
-    <form method="post" @formname="operating-limits" @onsubmit="SaveAsync" class="settings-form">
-        <AntiforgeryToken />
-        @if (_saved)
-        {
-            <p class="settings-saved" role="status">The operating limits are saved.</p>
-        }
-        @foreach (var (limit, field) in Fields)
-        {
-            <label>
-                @limit.Name
-                <span class="settings-value">
-                    <input name="@field" value="@_values[limit]" type="number" min="1" max="@limit.Maximum" step="1" required />
-                    @limit.Unit
-                </span>
-                @if (_errors.TryGetValue(limit, out var error))
-                {
-                    <span class="settings-error" role="alert">@error</span>
-                }
-            </label>
-        }
-        <button type="submit">Save</button>
-    </form>
-}
-
-<h2>Sandboxes</h2>
-
-@if (_machine is not null)
-{
-    <form method="post" @formname="sandbox-machine" @onsubmit="SaveMachineAsync" class="settings-form">
-        <AntiforgeryToken />
-        @if (_machineSaved)
-        {
-            <p class="settings-saved" role="status">The Sandbox settings are saved.</p>
-        }
-        @if (_machineError is not null)
-        {
-            <p class="settings-error" role="alert">@_machineError</p>
-        }
-        <p class="settings-note">A change applies to the next Sandbox created; existing Sandboxes keep what they have.</p>
-        <label>
-            VM size
-            <select name="SandboxVmSize">
-                @foreach (var size in SandboxMachine.VmSizes)
-                {
-                    <option value="@size.Name" selected="@(size.Name == _machine.VmSize)">@size.Name (@size.Description)</option>
-                }
-            </select>
-        </label>
-        <label class="settings-checkbox">
-            <input name="SandboxSpot" type="checkbox" value="true" checked="@_machine.Spot" />
-            Use spot instances: cheaper, but Azure may evict a Sandbox when it needs the capacity back, which deletes it
-        </label>
-        <button type="submit">Save</button>
-    </form>
-}
-
-<h2>Review Guidelines</h2>
-
-@if (_guidelines is not null)
-{
-    <form method="post" @formname="review-guidelines" @onsubmit="SubmitGuidelinesAsync" class="settings-form settings-form-wide">
-        <AntiforgeryToken />
-        @if (_guidelinesSaved)
-        {
-            <p class="settings-saved" role="status">The Review Guidelines are saved.</p>
-        }
-        <p class="settings-note">
-            What the Reviewer checks in every review, in every repository. Guidance for one repository belongs in that repository.
-        </p>
-        <label>
-            Markdown
-            <textarea name="ReviewGuidelines" rows="16" spellcheck="true">@_guidelines</textarea>
-        </label>
-        <span class="settings-buttons">
-            <button type="submit" name="ReviewGuidelinesAction" value="preview">Preview</button>
-            <button type="submit" name="ReviewGuidelinesAction" value="save">Save</button>
-        </span>
-    </form>
-    <h3>Preview</h3>
-    <MarkdownPreview Label="Review Guidelines preview" Text="@_guidelines" />
-}
-
-<h2>Agents</h2>
-
-@if (_harness is not null)
-{
-    <div class="settings-form settings-form-wide">
-        <p class="settings-note">
-            The agent harness configuration: the <code>opencode.json</code> every agent session starts with. A change applies
-            to the sessions started after it is saved.
-        </p>
-        <form method="post" @formname="agent-models" @onsubmit="SaveModelsAsync" class="settings-form">
-            <AntiforgeryToken />
-            <h3>Models</h3>
-            @if (_modelsSaved)
+    <div class="flex min-w-0 flex-col gap-8">
+        <section id="operating-limits" class="settings-section panel">
+            <header>
+                <h2>Operating limits</h2>
+                <p>How much Overseer runs at once, and for how long.</p>
+            </header>
+            @if (_values is not null)
             {
-                <p class="settings-saved" role="status">The models are saved.</p>
-            }
-            @if (_modelsError is not null)
-            {
-                <p class="settings-error" role="alert">@_modelsError</p>
-            }
-            @foreach (var (role, field) in ModelFields)
-            {
-                <label>
-                    @role
-                    <input name="@field" value="@_harness.ModelOf(role)" list="agent-model-suggestions" autocomplete="off" spellcheck="false" required />
-                </label>
-            }
-            <datalist id="agent-model-suggestions">
-                @foreach (var model in ModelSuggestions)
-                {
-                    <option value="@model"></option>
-                }
-            </datalist>
-            <p class="settings-note">As OpenCode names them: <code>provider/model</code>. Saving changes them in <code>opencode.json</code>.</p>
-            <button type="submit">Save models</button>
-        </form>
-        <form method="post" @formname="agent-harness" @onsubmit="SaveHarnessAsync" class="settings-form settings-form-wide">
-            <AntiforgeryToken />
-            <h3><code>opencode.json</code></h3>
-            @if (_harnessNotice is not null)
-            {
-                <p class="settings-saved" role="status">@_harnessNotice</p>
-            }
-            @if (_harnessError is not null)
-            {
-                <p class="settings-error" role="alert">@_harnessError</p>
-            }
-            @if (UnprovidedVariables is [_, ..] unprovided)
-            {
-                <p class="settings-warning" role="status">
-                    The configuration references the environment @(unprovided.Count == 1 ? "variable" : "variables")
-                    @for (var index = 0; index < unprovided.Count; index++)
+                <form method="post" @formname="operating-limits" @onsubmit="SaveAsync" class="settings-part form">
+                    <AntiforgeryToken />
+                    @if (_saved)
                     {
-                        @(index == 0 ? " " : index == unprovided.Count - 1 ? " and " : ", ")<code>@unprovided[index]</code>
-                    }, which no provider token provides.
-                </p>
+                        <p class="callout-success" role="status">The operating limits are saved.</p>
+                    }
+                    <div class="field-row">
+                        @foreach (var (limit, field) in Fields)
+                        {
+                            <label>
+                                @limit.Name
+                                <span class="settings-value">
+                                    <input name="@field" value="@_values[limit]" type="number" min="1" max="@limit.Maximum" step="1" required />
+                                    @limit.Unit
+                                </span>
+                                @if (_errors.TryGetValue(limit, out var error))
+                                {
+                                    <span class="field-error" role="alert">@error</span>
+                                }
+                            </label>
+                        }
+                    </div>
+                    <button type="submit" class="btn-primary">Save</button>
+                </form>
             }
-            <label>
-                JSON
-                <textarea name="AgentHarness" rows="24" spellcheck="false">@_harnessJson</textarea>
-            </label>
-            <button type="submit">Save</button>
-        </form>
-        <form method="post" @formname="agent-harness-default" @onsubmit="RestoreDefaultHarnessAsync" class="settings-form">
-            <AntiforgeryToken />
-            <p class="settings-note">Overseer's own configuration, which sets a model for every role, replaces yours.</p>
-            <button type="submit">Restore the default</button>
-        </form>
-    </div>
-}
+        </section>
 
-<h2>Model provider tokens</h2>
+        <section id="sandboxes" class="settings-section panel">
+            <header>
+                <h2>Sandboxes</h2>
+                <p>A change applies to the next Sandbox created; existing Sandboxes keep what they have.</p>
+            </header>
+            @if (_machine is not null)
+            {
+                <form method="post" @formname="sandbox-machine" @onsubmit="SaveMachineAsync" class="settings-part form">
+                    <AntiforgeryToken />
+                    @if (_machineSaved)
+                    {
+                        <p class="callout-success" role="status">The Sandbox settings are saved.</p>
+                    }
+                    @if (_machineError is not null)
+                    {
+                        <p class="callout-danger" role="alert">@_machineError</p>
+                    }
+                    <label class="max-w-md">
+                        VM size
+                        <select name="SandboxVmSize">
+                            @foreach (var size in SandboxMachine.VmSizes)
+                            {
+                                <option value="@size.Name" selected="@(size.Name == _machine.VmSize)">@size.Name (@size.Description)</option>
+                            }
+                        </select>
+                    </label>
+                    <label class="check">
+                        <input name="SandboxSpot" type="checkbox" value="true" checked="@_machine.Spot" />
+                        Use spot instances: cheaper, but Azure may evict a Sandbox when it needs the capacity back, which deletes it
+                    </label>
+                    <button type="submit" class="btn-primary">Save</button>
+                </form>
+            }
+        </section>
 
-@if (_providerTokens is not null)
-{
-    <div class="settings-form settings-form-wide">
-        @if (_providerTokenNotice is not null)
-        {
-            <p class="settings-saved" role="status">@_providerTokenNotice</p>
-        }
-        @if (_providerTokenError is not null)
-        {
-            <p class="settings-error" role="alert">@_providerTokenError</p>
-        }
-        <p class="settings-note">
-            Keys for the model providers in <code>opencode.json</code>, such as Azure Foundry or an AI gateway. Every agent
-            session gets each one as its environment variable, which <code>opencode.json</code> references as
-            <code>{env:NAME}</code>. Once stored, a token is never shown again.
-        </p>
-        @if (_providerTokens.Count == 0)
-        {
-            <p class="settings-note">No provider tokens are stored.</p>
-        }
-        else
-        {
-            <form method="post" @formname="provider-token-remove" @onsubmit="RemoveProviderTokenAsync">
-                <AntiforgeryToken />
-                <table class="provider-tokens">
-                    <thead>
-                        <tr><th>Name</th><th>Environment variable</th><th></th></tr>
-                    </thead>
-                    <tbody>
+        <section id="review-guidelines" class="settings-section panel">
+            <header>
+                <h2>Review Guidelines</h2>
+                <p>What the Reviewer checks in every review, in every repository. Guidance for one repository belongs in that repository.</p>
+            </header>
+            @if (_guidelines is not null)
+            {
+                <form method="post" @formname="review-guidelines" @onsubmit="SubmitGuidelinesAsync" class="settings-part form">
+                    <AntiforgeryToken />
+                    @if (_guidelinesSaved)
+                    {
+                        <p class="callout-success" role="status">The Review Guidelines are saved.</p>
+                    }
+                    <label>
+                        Markdown
+                        <textarea name="ReviewGuidelines" rows="16" spellcheck="true">@_guidelines</textarea>
+                    </label>
+                    <span class="buttons">
+                        <button type="submit" name="ReviewGuidelinesAction" value="preview">Preview</button>
+                        <button type="submit" name="ReviewGuidelinesAction" value="save" class="btn-primary">Save</button>
+                    </span>
+                </form>
+                <div class="settings-part">
+                    <h3>Preview</h3>
+                    <MarkdownPreview Label="Review Guidelines preview" Text="@_guidelines" />
+                </div>
+            }
+        </section>
+
+        <section id="agents" class="settings-section panel">
+            <header>
+                <h2>Agents</h2>
+                <p>
+                    The agent harness configuration: the <code>opencode.json</code> every agent session starts with. A change applies
+                    to the sessions started after it is saved.
+                </p>
+            </header>
+            @if (_harness is not null)
+            {
+                <form method="post" @formname="agent-models" @onsubmit="SaveModelsAsync" class="settings-part form">
+                    <AntiforgeryToken />
+                    <h3>Models</h3>
+                    @if (_modelsSaved)
+                    {
+                        <p class="callout-success" role="status">The models are saved.</p>
+                    }
+                    @if (_modelsError is not null)
+                    {
+                        <p class="callout-danger" role="alert">@_modelsError</p>
+                    }
+                    <div class="field-row">
+                        @foreach (var (role, field) in ModelFields)
+                        {
+                            <label>
+                                @role
+                                <input name="@field" value="@_harness.ModelOf(role)" list="agent-model-suggestions" autocomplete="off" spellcheck="false" required />
+                            </label>
+                        }
+                    </div>
+                    <datalist id="agent-model-suggestions">
+                        @foreach (var model in ModelSuggestions)
+                        {
+                            <option value="@model"></option>
+                        }
+                    </datalist>
+                    <p class="form-note">As OpenCode names them: <code>provider/model</code>. Saving changes them in <code>opencode.json</code>.</p>
+                    <button type="submit" class="btn-primary">Save models</button>
+                </form>
+                <form method="post" @formname="agent-harness" @onsubmit="SaveHarnessAsync" class="settings-part form">
+                    <AntiforgeryToken />
+                    <h3><code>opencode.json</code></h3>
+                    @if (_harnessNotice is not null)
+                    {
+                        <p class="callout-success" role="status">@_harnessNotice</p>
+                    }
+                    @if (_harnessError is not null)
+                    {
+                        <p class="callout-danger" role="alert">@_harnessError</p>
+                    }
+                    @if (UnprovidedVariables is [_, ..] unprovided)
+                    {
+                        <p class="settings-warning" role="status">
+                            The configuration references the environment @(unprovided.Count == 1 ? "variable" : "variables")
+                            @for (var index = 0; index < unprovided.Count; index++)
+                            {
+                                @(index == 0 ? " " : index == unprovided.Count - 1 ? " and " : ", ")<code>@unprovided[index]</code>
+                            }, which no provider token provides.
+                        </p>
+                    }
+                    <label>
+                        JSON
+                        <textarea name="AgentHarness" rows="24" spellcheck="false">@_harnessJson</textarea>
+                    </label>
+                    <button type="submit" class="btn-primary">Save</button>
+                </form>
+                <form method="post" @formname="agent-harness-default" @onsubmit="RestoreDefaultHarnessAsync" class="settings-part flex flex-wrap items-center justify-between gap-4 bg-raised">
+                    <AntiforgeryToken />
+                    <p class="form-note max-w-md">Overseer's own configuration, which sets a model for every role, replaces yours.</p>
+                    <button type="submit">Restore the default</button>
+                </form>
+            }
+        </section>
+
+        <section id="model-provider-tokens" class="settings-section panel">
+            <header>
+                <h2>Model provider tokens</h2>
+                <p>
+                    Keys for the model providers in <code>opencode.json</code>, such as Azure Foundry or an AI gateway. Every agent
+                    session gets each one as its environment variable, which <code>opencode.json</code> references as
+                    <code>{env:NAME}</code>. Once stored, a token is never shown again.
+                </p>
+            </header>
+            @if (_providerTokens is not null)
+            {
+                <div class="settings-part flex flex-col gap-4">
+                    @if (_providerTokenNotice is not null)
+                    {
+                        <p class="callout-success" role="status">@_providerTokenNotice</p>
+                    }
+                    @if (_providerTokenError is not null)
+                    {
+                        <p class="callout-danger" role="alert">@_providerTokenError</p>
+                    }
+                    @if (_providerTokens.Count == 0)
+                    {
+                        <p class="form-note">No provider tokens are stored.</p>
+                    }
+                    else
+                    {
+                        <form method="post" @formname="provider-token-remove" @onsubmit="RemoveProviderTokenAsync">
+                            <AntiforgeryToken />
+                            <table class="provider-tokens">
+                                <thead>
+                                    <tr><th>Name</th><th>Environment variable</th><th><span class="sr-only">Actions</span></th></tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var token in _providerTokens)
+                                    {
+                                        <tr>
+                                            <td>@token.Name</td>
+                                            <td><code>@token.EnvironmentVariable</code></td>
+                                            <td><button type="submit" name="RemoveProviderToken" value="@token.Name" aria-label="Remove @token.Name" class="btn-row">Remove</button></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </form>
+                    }
+                </div>
+                <form method="post" @formname="provider-token" @onsubmit="SaveProviderTokenAsync" class="settings-part form">
+                    <AntiforgeryToken />
+                    <h3>Add or replace a token</h3>
+                    <div class="field-row">
+                        <label>
+                            Name
+                            <input name="ProviderTokenName" value="@_providerTokenNameInput" list="provider-token-names" placeholder="azure-foundry" autocomplete="off" spellcheck="false" required />
+                        </label>
+                        <label>
+                            Token
+                            <input name="ProviderToken" type="password" autocomplete="off" spellcheck="false" required />
+                        </label>
+                    </div>
+                    <datalist id="provider-token-names">
                         @foreach (var token in _providerTokens)
                         {
-                            <tr>
-                                <td>@token.Name</td>
-                                <td><code>@token.EnvironmentVariable</code></td>
-                                <td><button type="submit" name="RemoveProviderToken" value="@token.Name" aria-label="Remove @token.Name">Remove</button></td>
-                            </tr>
+                            <option value="@token.Name"></option>
                         }
-                    </tbody>
-                </table>
-            </form>
-        }
-        <form method="post" @formname="provider-token" @onsubmit="SaveProviderTokenAsync" class="settings-form">
-            <AntiforgeryToken />
-            <h3>Add or replace a token</h3>
-            <label>
-                Name
-                <input name="ProviderTokenName" value="@_providerTokenNameInput" list="provider-token-names" placeholder="azure-foundry" autocomplete="off" spellcheck="false" required />
-            </label>
-            <datalist id="provider-token-names">
-                @foreach (var token in _providerTokens)
-                {
-                    <option value="@token.Name"></option>
-                }
-            </datalist>
-            <label>
-                Token
-                <input name="ProviderToken" type="password" autocomplete="off" spellcheck="false" required />
-            </label>
-            <p class="settings-note">
-                The environment variable is the name in capitals, with dashes as underscores, followed by <code>_API_KEY</code>:
-                <code>anthropic</code> gives <code>ANTHROPIC_API_KEY</code>. A name already stored replaces that token.
-            </p>
-            <button type="submit">Save</button>
-        </form>
-    </div>
-}
-
-<h2>GitHub</h2>
-
-<div class="settings-form">
-    @switch (_gitHubSaving)
-    {
-        case GitHubTokenSaving.Stored:
-            <p class="settings-saved" role="status">The GitHub token is saved.</p>
-            break;
-        case GitHubTokenSaving.Refused refused:
-            <p class="settings-error" role="alert">@refused.Error</p>
-            break;
-    }
-    @if (GitHubTokens.FailedCheck is { } failedCheck)
-    {
-        <form method="post" @formname="github-token-failed" @onsubmit="ResolveFailedGitHubTokenAsync" class="settings-form">
-            <AntiforgeryToken />
-            <p class="settings-error" role="alert">The token you entered fails the check: @failedCheck</p>
-            <p class="settings-note">
-                @(_gitHubTokenSet ? "The token in use stays" : "No token is stored") unless you store this one anyway.
-            </p>
-            <span class="settings-buttons">
-                <button type="submit" name="FailedGitHubTokenAction" value="store">Store it anyway</button>
-                <button type="submit" name="FailedGitHubTokenAction" value="discard">Discard it</button>
-            </span>
-        </form>
-    }
-    @if (_gitHubNotice is not null)
-    {
-        <p class="settings-saved" role="status">@_gitHubNotice</p>
-    }
-    @if (_gitHubError is not null)
-    {
-        <p class="settings-error" role="alert">@_gitHubError</p>
-    }
-    <p class="github-token-status">
-        @switch (_gitHubTokenSet ? _gitHubTokenCheck : null)
-        {
-            case null when !_gitHubTokenSet:
-                @:No GitHub token is set.
-                break;
-            case null:
-                @:A GitHub token is set.
-                break;
-            case GitHubTokenCheck.Works works:
-                @:A GitHub token is set, and works as <code>@works.Login</code>.
-                break;
-            case GitHubTokenCheck.Fails fails:
-                @:A GitHub token is set, but fails: @fails.Error
-                break;
-        }
-    </p>
-    <form method="post" @formname="github-token" @onsubmit="SaveGitHubTokenAsync" class="settings-form">
-        <AntiforgeryToken />
-        <p class="settings-note">
-            A fine-grained token that Overseer and its agents work with GitHub as. Once stored, it is never shown again.
-        </p>
-        <label>
-            @(_gitHubTokenSet ? "New token" : "Token")
-            <input name="GitHubToken" type="password" autocomplete="off" spellcheck="false" required />
-        </label>
-        <button type="submit">@(_gitHubTokenSet ? "Replace" : "Set")</button>
-    </form>
-    @if (_gitHubTokenSet)
-    {
-        <span class="settings-buttons">
-            <form method="post" @formname="github-token-check" @onsubmit="CheckGitHubTokenAsync">
-                <AntiforgeryToken />
-                <button type="submit">Check with GitHub</button>
-            </form>
-            <form method="post" @formname="github-token-remove" @onsubmit="RemoveGitHubTokenAsync">
-                <AntiforgeryToken />
-                <button type="submit">Remove the GitHub token</button>
-            </form>
-        </span>
-    }
-</div>
-
-<h2>Repositories</h2>
-
-@if (_repositories is not null)
-{
-    <div class="settings-form settings-form-wide">
-        @if (_repositoryNotice is not null)
-        {
-            <p class="settings-saved" role="status">@_repositoryNotice</p>
-        }
-        @if (_repositoryError is not null)
-        {
-            <p class="settings-error" role="alert">@_repositoryError</p>
-        }
-        <p class="settings-note">The GitHub repositories that make up the software Overseer builds.</p>
-        @if (_repositories.Count == 0)
-        {
-            <p class="settings-note">No repositories are configured.</p>
-        }
-        else
-        {
-            <form method="post" @formname="repository-remove" @onsubmit="RemoveRepositoryAsync">
-                <AntiforgeryToken />
-                <ul class="configured-repositories">
-                    @foreach (var repository in _repositories)
-                    {
-                        <li>
-                            <a href="@repository.WebUrl" target="_blank" rel="noopener noreferrer">@repository</a>
-                            <button type="submit" name="RemoveRepository" value="@repository" aria-label="Remove @repository">Remove</button>
-                        </li>
-                    }
-                </ul>
-            </form>
-        }
-        <form method="post" @formname="repository-add" @onsubmit="AddRepositoryAsync" class="settings-form">
-            <AntiforgeryToken />
-            <label>
-                Repository
-                <input name="Repository" value="@_repositoryInput" placeholder="owner/name or GitHub URL" autocomplete="off" spellcheck="false" required />
-            </label>
-            <p class="settings-note">GitHub must confirm that the GitHub token can reach it.</p>
-            <button type="submit">Add</button>
-        </form>
-        <form method="post" @formname="repository-setup" @onsubmit="StartRepositorySetupAsync" class="settings-form settings-form-wide">
-            <AntiforgeryToken />
-            <h3>Create a new repository</h3>
-            @if (_setupError is not null)
-            {
-                <p class="settings-error" role="alert">@_setupError</p>
+                    </datalist>
+                    <p class="form-note">
+                        The environment variable is the name in capitals, with dashes as underscores, followed by <code>_API_KEY</code>:
+                        <code>anthropic</code> gives <code>ANTHROPIC_API_KEY</code>. A name already stored replaces that token.
+                    </p>
+                    <button type="submit" class="btn-primary">Save</button>
+                </form>
             }
-            <p class="settings-note">
-                Overseer creates it on GitHub, private and empty, with the GitHub token, and adds it to the Configured Repositories.
-                Then an agent writes its starter README, agent guidance (AGENTS.md) and Repository Manifest (.overseer.yml)
-                in a Sandbox, and pushes them to main.
-            </p>
-            <span class="settings-buttons">
-                <label>
-                    Owner
-                    <input name="SetupOwner" value="@_setupInput.Owner" placeholder="your login or an organization" autocomplete="off" spellcheck="false" required />
+        </section>
+
+        <section id="github" class="settings-section panel">
+            <header>
+                <h2>GitHub</h2>
+                <p>A fine-grained token that Overseer and its agents work with GitHub as. Once stored, it is never shown again.</p>
+            </header>
+            <div class="settings-part flex flex-col gap-4">
+                @switch (_gitHubSaving)
+                {
+                    case GitHubTokenSaving.Stored:
+                        <p class="callout-success" role="status">The GitHub token is saved.</p>
+                        break;
+                    case GitHubTokenSaving.Refused refused:
+                        <p class="callout-danger" role="alert">@refused.Error</p>
+                        break;
+                }
+                @if (GitHubTokens.FailedCheck is { } failedCheck)
+                {
+                    <form method="post" @formname="github-token-failed" @onsubmit="ResolveFailedGitHubTokenAsync" class="form">
+                        <AntiforgeryToken />
+                        <p class="callout-danger" role="alert">The token you entered fails the check: @failedCheck</p>
+                        <p class="form-note">
+                            @(_gitHubTokenSet ? "The token in use stays" : "No token is stored") unless you store this one anyway.
+                        </p>
+                        <span class="buttons">
+                            <button type="submit" name="FailedGitHubTokenAction" value="store">Store it anyway</button>
+                            <button type="submit" name="FailedGitHubTokenAction" value="discard">Discard it</button>
+                        </span>
+                    </form>
+                }
+                @if (_gitHubNotice is not null)
+                {
+                    <p class="callout-success" role="status">@_gitHubNotice</p>
+                }
+                @if (_gitHubError is not null)
+                {
+                    <p class="callout-danger" role="alert">@_gitHubError</p>
+                }
+                <p class="github-token-status">
+                    @switch (_gitHubTokenSet ? _gitHubTokenCheck : null)
+                    {
+                        case null when !_gitHubTokenSet:
+                            @:No GitHub token is set.
+                            break;
+                        case null:
+                            @:A GitHub token is set.
+                            break;
+                        case GitHubTokenCheck.Works works:
+                            @:A GitHub token is set, and works as <code>@works.Login</code>.
+                            break;
+                        case GitHubTokenCheck.Fails fails:
+                            @:A GitHub token is set, but fails: @fails.Error
+                            break;
+                    }
+                </p>
+                @if (_gitHubTokenSet)
+                {
+                    <span class="buttons">
+                        <form method="post" @formname="github-token-check" @onsubmit="CheckGitHubTokenAsync">
+                            <AntiforgeryToken />
+                            <button type="submit">Check with GitHub</button>
+                        </form>
+                        <form method="post" @formname="github-token-remove" @onsubmit="RemoveGitHubTokenAsync">
+                            <AntiforgeryToken />
+                            <button type="submit" class="btn-row">Remove the GitHub token</button>
+                        </form>
+                    </span>
+                }
+            </div>
+            <form method="post" @formname="github-token" @onsubmit="SaveGitHubTokenAsync" class="settings-part form">
+                <AntiforgeryToken />
+                <label class="max-w-md">
+                    @(_gitHubTokenSet ? "New token" : "Token")
+                    <input name="GitHubToken" type="password" autocomplete="off" spellcheck="false" required />
                 </label>
-                <label>
-                    Name
-                    <input name="SetupName" value="@_setupInput.Name" autocomplete="off" spellcheck="false" required />
-                </label>
-            </span>
-            <label>
-                Purpose
-                <textarea name="SetupPurpose" rows="3" placeholder="What the repository is for" required>@_setupInput.Purpose</textarea>
-            </label>
-            <label>
-                Tech stack
-                <textarea name="SetupTechStack" rows="3" placeholder="Languages, frameworks and where it runs" required>@_setupInput.TechStack</textarea>
-            </label>
-            <button type="submit">Create</button>
-        </form>
-        <RepositorySetupProgress @rendermode="InteractiveServer" />
+                <button type="submit" class="btn-primary">@(_gitHubTokenSet ? "Replace" : "Set")</button>
+            </form>
+        </section>
+
+        <section id="repositories" class="settings-section panel">
+            <header>
+                <h2>Repositories</h2>
+                <p>The GitHub repositories that make up the software Overseer builds.</p>
+            </header>
+            @if (_repositories is not null)
+            {
+                <div class="settings-part flex flex-col gap-4">
+                    @if (_repositoryNotice is not null)
+                    {
+                        <p class="callout-success" role="status">@_repositoryNotice</p>
+                    }
+                    @if (_repositoryError is not null)
+                    {
+                        <p class="callout-danger" role="alert">@_repositoryError</p>
+                    }
+                    @if (_repositories.Count == 0)
+                    {
+                        <p class="form-note">No repositories are configured.</p>
+                    }
+                    else
+                    {
+                        <form method="post" @formname="repository-remove" @onsubmit="RemoveRepositoryAsync">
+                            <AntiforgeryToken />
+                            <ul class="configured-repositories">
+                                @foreach (var repository in _repositories)
+                                {
+                                    <li>
+                                        <a href="@repository.WebUrl" target="_blank" rel="noopener noreferrer">@repository</a>
+                                        <button type="submit" name="RemoveRepository" value="@repository" aria-label="Remove @repository" class="btn-row">Remove</button>
+                                    </li>
+                                }
+                            </ul>
+                        </form>
+                    }
+                    <form method="post" @formname="repository-add" @onsubmit="AddRepositoryAsync" class="form">
+                        <AntiforgeryToken />
+                        <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-end">
+                            <label class="grow">
+                                Repository
+                                <input name="Repository" value="@_repositoryInput" placeholder="owner/name or GitHub URL" autocomplete="off" spellcheck="false" required />
+                            </label>
+                            <button type="submit" class="btn-primary sm:h-[2.375rem]">Add</button>
+                        </div>
+                        <p class="form-note -mt-2">GitHub must confirm that the GitHub token can reach it.</p>
+                    </form>
+                </div>
+                <form method="post" @formname="repository-setup" @onsubmit="StartRepositorySetupAsync" class="settings-part form">
+                    <AntiforgeryToken />
+                    <h3>Create a new repository</h3>
+                    <p class="form-note">
+                        Overseer creates it on GitHub, private and empty, with the GitHub token, and adds it to the Configured Repositories.
+                        Then an agent writes its starter README, agent guidance (AGENTS.md) and Repository Manifest (.overseer.yml)
+                        in a Sandbox, and pushes them to main.
+                    </p>
+                    @if (_setupError is not null)
+                    {
+                        <p class="callout-danger" role="alert">@_setupError</p>
+                    }
+                    <div class="field-row">
+                        <label>
+                            Owner
+                            <input name="SetupOwner" value="@_setupInput.Owner" placeholder="your login or an organization" autocomplete="off" spellcheck="false" required />
+                        </label>
+                        <label>
+                            Name
+                            <input name="SetupName" value="@_setupInput.Name" autocomplete="off" spellcheck="false" required />
+                        </label>
+                    </div>
+                    <label>
+                        Purpose
+                        <textarea name="SetupPurpose" rows="3" placeholder="What the repository is for" required>@_setupInput.Purpose</textarea>
+                    </label>
+                    <label>
+                        Tech stack
+                        <textarea name="SetupTechStack" rows="3" placeholder="Languages, frameworks and where it runs" required>@_setupInput.TechStack</textarea>
+                    </label>
+                    <button type="submit" class="btn-primary">Create</button>
+                </form>
+                <RepositorySetupProgress @rendermode="InteractiveServer" />
+            }
+        </section>
     </div>
-}
+</div>
 
 @code {
     [CascadingParameter]

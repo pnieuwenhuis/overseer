@@ -68,7 +68,7 @@ public class DraftEditingTests(PostgresServer postgres)
         using var response = await overseer.Http.GetAsync(string.Format(address, Guid.NewGuid()), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        Assert.Contains("Sorry, the content you are looking for does not exist.", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        Assert.Contains("Page not found", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]

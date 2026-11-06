@@ -6,7 +6,11 @@
 
 <PageTitle>Edit Intent · Overseer</PageTitle>
 
-<h1>Edit Intent</h1>
+@if (_lookedUp)
+{
+    <IntentBackLink IntentId="@(_intent?.Id)" />
+}
+<h1 class="mb-6">Edit Intent</h1>
 
 @* Only once the Intent is looked up, as the editor starts from it. *@
 @if (_lookedUp)
@@ -19,9 +23,8 @@
     }
     else
     {
-        <p role="alert">@_notEditable</p>
+        <p role="alert" class="callout-warning">@_notEditable</p>
     }
-    <IntentBackLink IntentId="@(_intent?.Id)" />
 }
 
 @code {

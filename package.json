@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "description": "Builds the Portal's stylesheet with Tailwind CSS; see README.md.",
+  "scripts": {
+    "css": "tailwindcss --input src/Overseer/Styles/app.css --output src/Overseer/wwwroot/app.css --minify",
+    "css:watch": "tailwindcss --input src/Overseer/Styles/app.css --output src/Overseer/wwwroot/app.css --watch"
+  },
+  "devDependencies": {
+    "@fontsource-variable/schibsted-grotesk": "5.3.0",
+    "@tailwindcss/cli": "4.3.4",
+    "tailwindcss": "4.3.4"
+  }
+}
