@@ -135,6 +135,7 @@ public static class OverseerServer
             {
                 await database.Database.MigrateAsync(cancellationToken);
             }
+            await app.Services.GetRequiredService<IntentLifecycle>().RecordStartsBeforeTransitionsAsync(cancellationToken);
             await app.StartAsync(cancellationToken);
             switch (app.Services.GetRequiredService<ISandboxProvider>())
             {

@@ -124,7 +124,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
             return new IntentChange.Refused(notStartable);
         }
 
-        await TransitionAsync(database, id, IntentState.Draft, IntentState.Refining, cancellationToken);
+        await TransitionAsync(database, id, IntentState.Refining, cancellationToken);
         return await CommitAndAnnounceAsync(transaction, cancellationToken);
     }
 
@@ -169,6 +169,25 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     }
 
     /// <summary>
+    /// Gives each Intent that left Draft before transitions were recorded the start it must have had, now: when it was started isn't
+    /// known, so its Working Time counts from the upgrade rather than from its capture, which would count its time as a Draft. Run at
+    /// startup, once the schema is up to date and before anything else changes an Intent; an Intent that has its start already is left
+    /// alone, so a later startup changes nothing.
+    /// </summary>
+    public async Task RecordStartsBeforeTransitionsAsync(CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        var unstarted = await database.Intents
+            .Where(intent => intent.State != IntentState.Draft && !intent.Transitions.Any(transition => transition.From != null))
+            .Select(intent => new { intent.Id, intent.State })
+            .ToListAsync(cancellationToken);
+        var now = time.GetUtcNow();
+        database.Set<IntentTransitionRecord>().AddRange(unstarted.Select(intent =>
+            new IntentTransitionRecord { IntentId = intent.Id, From = IntentState.Draft, To = intent.State, At = now }));
+        await database.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>
     /// Says which open Intents have <paramref name="repository"/> in scope, in any case, by their first lines, newest first; <c>null</c>
     /// when none has.
     /// </summary>
@@ -192,12 +211,15 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     }
 
     /// <summary>
-    /// Moves the Intent with this id, whose row <paramref name="database"/>'s transaction has locked, from one state to another, and
-    /// records the transition with its time. Every change of state goes through here: the transitions are what Working Time is derived
-    /// from, and what later tickets rely on, such as which state a Paused Intent resumes to.
+    /// Moves the Intent with this id to <paramref name="to"/>, and records the transition with its time and the state it left, as read
+    /// under the lock on its row that <paramref name="database"/>'s transaction takes here if it hasn't already. Every change of state
+    /// goes through here: the transitions are what Working Time is derived from, and what later tickets rely on, such as which state a
+    /// Paused Intent resumes to.
     /// </summary>
-    private async Task TransitionAsync(OverseerDbContext database, Guid id, IntentState from, IntentState to, CancellationToken cancellationToken)
+    private async Task TransitionAsync(OverseerDbContext database, Guid id, IntentState to, CancellationToken cancellationToken)
     {
+        var from = await LockStateAsync(database, id, cancellationToken)
+            ?? throw new InvalidOperationException($"There is no Intent {id} to move to {to}: decide on a transition under the lock on its row.");
         await database.Intents.Where(intent => intent.Id == id)
             .ExecuteUpdateAsync(intent => intent.SetProperty(record => record.State, to), cancellationToken);
         database.Set<IntentTransitionRecord>().Add(new IntentTransitionRecord { IntentId = id, From = from, To = to, At = time.GetUtcNow() });
@@ -205,11 +227,17 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     }
 
     /// <summary>
-    /// The Working Time of an Intent with these transitions, in the order they were made: the sum of the periods from a transition into
-    /// an Active state to the next one, and the time since the last one while the Intent is still Active.
+    /// The Working Time of an Intent in <paramref name="state"/> with these transitions, in the order they were made: the sum of the
+    /// periods from a transition into an Active state to the next one, and the time since the last one while the Intent is still Active.
+    /// A Draft has none, as no work on it has begun.
     /// </summary>
-    private static WorkingTime WorkingTimeOf(IEnumerable<(IntentState To, DateTimeOffset At)> transitions)
+    private static WorkingTime? WorkingTimeOf(IntentState state, IEnumerable<Transition> transitions)
     {
+        if (state == IntentState.Draft)
+        {
+            return null;
+        }
+
         var accrued = TimeSpan.Zero;
         DateTimeOffset? activeSince = null;
         foreach (var (to, at) in transitions)
@@ -296,6 +324,8 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     private static async Task<IReadOnlyList<Intent>> ReadAsync(IQueryable<IntentRecord> intents, CancellationToken cancellationToken)
     {
         var stored = await intents
+            // One query for the Repositories in scope and one for the transitions, rather than a row for each combination of them.
+            .AsSplitQuery()
             .OrderByDescending(intent => intent.CreatedAt)
             .Select(intent => new
             {
@@ -304,7 +334,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
                 intent.State,
                 Repositories = intent.RepositoriesInScope.Select(repository => repository.FullName).ToList(),
                 // In the order they were made, as two can be made at the same moment.
-                Transitions = intent.Transitions.OrderBy(transition => transition.Id).Select(transition => new { transition.To, transition.At }).ToList(),
+                Transitions = intent.Transitions.OrderBy(transition => transition.Id).Select(transition => new Transition(transition.To, transition.At)).ToList(),
             })
             .ToListAsync(cancellationToken);
         return [.. stored.Select(intent => new Intent(
@@ -312,8 +342,11 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
             intent.Text,
             intent.State,
             ConfiguredRepositories.ParseSortedByName(intent.Repositories),
-            WorkingTimeOf(intent.Transitions.Select(transition => (transition.To, transition.At)))))];
+            WorkingTimeOf(intent.State, intent.Transitions)))];
     }
+
+    /// <summary>A transition as Working Time needs it: the state the Intent moved to, and when.</summary>
+    private readonly record struct Transition(IntentState To, DateTimeOffset At);
 }
 
 /// <summary>
@@ -378,7 +411,8 @@ public abstract record IntentChange
 }
 
 /// <summary>An Intent, as the human described it, how far it has come, the Configured Repositories it may change and its Working Time.</summary>
-public sealed partial record Intent(Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope, WorkingTime WorkingTime)
+/// <param name="WorkingTime"><c>null</c> for a Draft, which has none.</param>
+public sealed partial record Intent(Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope, WorkingTime? WorkingTime)
 {
     /// <summary>
     /// An Intent's text as Overseer keeps it, from what the user wrote: LF line breaks whatever the browser sent, and empty when
@@ -412,6 +446,9 @@ public readonly record struct WorkingTime(TimeSpan Accrued, DateTimeOffset? Acti
 {
     /// <summary>The Working Time at <paramref name="now"/>.</summary>
     public TimeSpan At(DateTimeOffset now) => ActiveSince is { } since && now > since ? Accrued + (now - since) : Accrued;
+
+    /// <summary>The Working Time at <paramref name="now"/> as it is shown: in whole minutes, a part of a minute left out.</summary>
+    public TimeSpan ShownAt(DateTimeOffset now) => TimeSpan.FromMinutes(Math.Floor(At(now).TotalMinutes));
 }
 
 /// <summary>Where an Intent is in its lifecycle.</summary>

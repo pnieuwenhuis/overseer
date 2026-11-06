@@ -39,14 +39,12 @@ namespace Overseer.Persistence.Migrations
                 table: "IntentTransitions",
                 column: "IntentId");
 
-            // The Intents captured before transitions were recorded get the history they would have had as far as it is known: each
-            // was captured as a Draft, and one that has left Draft could only have been started. When it was started isn't known, so its
-            // Working Time counts from this upgrade rather than from its capture, which would count its time as a Draft.
+            // The Intents captured before transitions were recorded get their capture as a Draft. One that has left Draft could only
+            // have been started, at a time that isn't known: IntentLifecycle.RecordStartsBeforeTransitionsAsync records that at the
+            // first start after this upgrade, by Overseer's clock.
             migrationBuilder.Sql("""
                 INSERT INTO "IntentTransitions" ("IntentId", "From", "To", "At")
                 SELECT "Id", NULL, 'Draft', "CreatedAt" FROM "Intents";
-                INSERT INTO "IntentTransitions" ("IntentId", "From", "To", "At")
-                SELECT "Id", 'Draft', "State", now() FROM "Intents" WHERE "State" <> 'Draft';
                 """);
         }
 

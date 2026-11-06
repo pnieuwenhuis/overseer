@@ -18,11 +18,11 @@ internal static class IntentWords
         _ => throw new ArgumentOutOfRangeException(nameof(light), light, null),
     };
 
-    /// <summary>A Working Time as the user reads it, in whole hours and minutes, such as "2 h 15 min": a part of a minute isn't shown.</summary>
-    public static string WorkingTimeInWords(TimeSpan workingTime)
+    /// <summary>A Working Time as the user reads it, in hours and minutes, such as "2 h 15 min".</summary>
+    /// <param name="shown">The Working Time as <see cref="WorkingTime.ShownAt"/> gives it, in whole minutes.</param>
+    public static string WorkingTimeInWords(TimeSpan shown)
     {
-        var hours = (long)workingTime.TotalHours;
-        var minutes = workingTime.Minutes;
+        var (hours, minutes) = Math.DivRem((long)shown.TotalMinutes, 60);
         return (hours, minutes) switch
         {
             (0, _) => $"{minutes} min",

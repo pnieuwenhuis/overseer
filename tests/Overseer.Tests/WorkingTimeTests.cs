@@ -21,18 +21,23 @@ public class WorkingTimeTests(PostgresServer postgres)
             await database.GetService<IMigrator>().MigrateAsync("20261105131458_AddRepositoriesInScope", TestContext.Current.CancellationToken);
             await database.Database.ExecuteSqlAsync($"""
                 INSERT INTO "Intents" ("Id", "Text", "State", "CreatedAt") VALUES
-                    ({Guid.NewGuid()}, 'Export data', 'Refining', {DateTimeOffset.UtcNow.AddDays(-1)}),
-                    ({Guid.NewGuid()}, 'Import data', 'Draft', {DateTimeOffset.UtcNow.AddDays(-1)})
+                    ({Guid.NewGuid()}, 'Export data', 'Refining', {Morning.AddDays(-1)}),
+                    ({Guid.NewGuid()}, 'Import data', 'Draft', {Morning.AddDays(-1)})
                 """, TestContext.Current.CancellationToken);
         }
 
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new FakeTimeProvider(Morning);
+        await using (var upgraded = await RunningOverseer.StartAsync(connectionString, time: time))
+        {
+            time.Advance(TimeSpan.FromMinutes(90));
+        }
+
+        // Starting again doesn't move the upgrade's moment.
         await using var overseer = await RunningOverseer.StartAsync(connectionString, time: time);
         await overseer.LogInAsync();
-        // The upgrade happened moments ago, by the database's clock. The half minute absorbs that, and any difference between the clocks.
-        time.SetUtcNow(DateTimeOffset.UtcNow.AddMinutes(90.5));
+        time.Advance(TimeSpan.FromMinutes(15));
 
-        Assert.Equal("1 h 30 min", ElementText(await GetAsync(overseer, await AddressAsync(overseer, "Export data")), "intent-working-time"));
+        Assert.Equal("1 h 45 min", ElementText(await GetAsync(overseer, await AddressAsync(overseer, "Export data")), "intent-working-time"));
         Assert.DoesNotContain("Working Time", await GetAsync(overseer, await AddressAsync(overseer, "Import data")));
     }
 
