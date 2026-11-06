@@ -45,6 +45,34 @@ namespace Overseer.Persistence.Migrations
                     b.ToTable("Intents");
                 });
 
+            modelBuilder.Entity("Overseer.Intents.IntentTransitionRecord", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("At")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("From")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("To")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IntentId");
+
+                    b.ToTable("IntentTransitions", (string)null);
+                });
+
             modelBuilder.Entity("Overseer.Intents.RepositoryInScopeRecord", b =>
                 {
                     b.Property<Guid>("IntentId")
@@ -148,6 +176,15 @@ namespace Overseer.Persistence.Migrations
                     b.ToTable("Settings");
                 });
 
+            modelBuilder.Entity("Overseer.Intents.IntentTransitionRecord", b =>
+                {
+                    b.HasOne("Overseer.Intents.IntentRecord", null)
+                        .WithMany("Transitions")
+                        .HasForeignKey("IntentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Overseer.Intents.RepositoryInScopeRecord", b =>
                 {
                     b.HasOne("Overseer.Intents.IntentRecord", null)
@@ -160,6 +197,8 @@ namespace Overseer.Persistence.Migrations
             modelBuilder.Entity("Overseer.Intents.IntentRecord", b =>
                 {
                     b.Navigation("RepositoriesInScope");
+
+                    b.Navigation("Transitions");
                 });
 #pragma warning restore 612, 618
         }

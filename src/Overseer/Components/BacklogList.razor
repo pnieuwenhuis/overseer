@@ -15,6 +15,7 @@ else if (Shown is not null)
                 <span class="intent-summary">
                     <a href="intents/@intent.Id" class="intent-first-line">@intent.FirstLine</a>
                     <span class="intent-repositories">@intent.RepositoriesInScopeLine</span>
+                    <IntentWorkingTime Intent="intent" />
                 </span>
                 <IntentStateAndLight Intent="intent" />
             </li>

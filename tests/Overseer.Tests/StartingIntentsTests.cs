@@ -463,10 +463,6 @@ public class StartingIntentsTests(PostgresServer postgres)
     private static async Task<string> ShownStateAsync(HttpResponseMessage response) =>
         ElementText(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), "intent-state");
 
-    /// <summary>Opens the Intent's detail page and presses Start, whether or not the page offers it.</summary>
-    private static Task<HttpResponseMessage> StartAsync(RunningOverseer overseer, string address) =>
-        overseer.SubmitFormAsync(address, "start-intent", []);
-
     /// <summary>Whether the Start button on the page is disabled; the page must have one.</summary>
     private static bool StartIsDisabled(string page) => Regex.Match(page, @"<button[^>]*>\s*Start\s*</button>") is { Success: true } button
         ? Regex.IsMatch(button.Value, @"\sdisabled\b")

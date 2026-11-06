@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 using Microsoft.Playwright;
 using Overseer.Intents;
 using static Microsoft.Playwright.Assertions;
@@ -209,6 +210,37 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
     }
 
     [Fact]
+    public async Task The_Working_Time_of_an_Active_Intent_keeps_advancing_on_an_open_Backlog_and_detail_page_without_a_reload()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var overseer = await StartOverseerAsync(time);
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        await using var session = await chromium.LogInAsync(overseer);
+        var detail = await OpenAsync(session, address);
+        var backlog = await OpenAsync(session, "/");
+        await AwaitDetailConnectedAsync(overseer, address, "Export data", detail);
+        await AwaitBacklogConnectedAsync(overseer, backlog);
+        using var started = await StartAsync(overseer, address);
+        var detailWorkingTime = detail.Locator(".intent-working-time");
+        var backlogWorkingTime = BacklogIntent(backlog, "Export data").Locator(".intent-working-time");
+        await Expect(detailWorkingTime).ToHaveTextAsync("0 min");
+        await Expect(backlogWorkingTime).ToHaveTextAsync("0 min");
+
+        time.Advance(TimeSpan.FromMinutes(135));
+
+        await Expect(detailWorkingTime).ToHaveTextAsync("2 h 15 min");
+        await Expect(backlogWorkingTime).ToHaveTextAsync("2 h 15 min");
+
+        time.Advance(TimeSpan.FromMinutes(1));
+
+        await Expect(detailWorkingTime).ToHaveTextAsync("2 h 16 min");
+        await Expect(backlogWorkingTime).ToHaveTextAsync("2 h 16 min");
+        Assert.True(await WasNotReloadedAsync(detail));
+        Assert.True(await WasNotReloadedAsync(backlog));
+    }
+
+    [Fact]
     public async Task A_page_going_live_keeps_showing_what_the_server_rendered_rather_than_blanking_it_first()
     {
         await using var overseer = await StartOverseerAsync();
@@ -244,8 +276,8 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         return tab;
     }
 
-    private async Task<RunningOverseer> StartOverseerAsync() =>
-        await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/web"], environment: PortalChromium.ServerEnvironment);
+    private async Task<RunningOverseer> StartOverseerAsync(TimeProvider? time = null) =>
+        await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/web"], time, PortalChromium.ServerEnvironment);
 
     /// <summary>Opens a page in a new tab and marks it, so that a test can tell whether the browser loaded it again.</summary>
     private static async Task<IPage> OpenAsync(IBrowserContext session, string address)

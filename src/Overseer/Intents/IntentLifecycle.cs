@@ -36,13 +36,15 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
             return new IntentChange.Refused(refusal);
         }
 
+        var now = time.GetUtcNow();
         database.Intents.Add(new IntentRecord
         {
             Id = Guid.NewGuid(),
             Text = text,
             State = IntentState.Draft,
-            CreatedAt = time.GetUtcNow(),
+            CreatedAt = now,
             RepositoriesInScope = [.. configured.Select(repository => new RepositoryInScopeRecord { FullName = repository.ToString() })],
+            Transitions = [new IntentTransitionRecord { From = null, To = IntentState.Draft, At = now }],
         });
         await database.SaveChangesAsync(cancellationToken);
         return await CommitAndAnnounceAsync(transaction, cancellationToken);
@@ -122,8 +124,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
             return new IntentChange.Refused(notStartable);
         }
 
-        await database.Intents.Where(intent => intent.Id == id)
-            .ExecuteUpdateAsync(intent => intent.SetProperty(record => record.State, IntentState.Refining), cancellationToken);
+        await TransitionAsync(database, id, IntentState.Draft, IntentState.Refining, cancellationToken);
         return await CommitAndAnnounceAsync(transaction, cancellationToken);
     }
 
@@ -188,6 +189,40 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         await transaction.CommitAsync(cancellationToken);
         Changed?.Invoke();
         return new IntentChange.Made();
+    }
+
+    /// <summary>
+    /// Moves the Intent with this id, whose row <paramref name="database"/>'s transaction has locked, from one state to another, and
+    /// records the transition with its time. Every change of state goes through here: the transitions are what Working Time is derived
+    /// from, and what later tickets rely on, such as which state a Paused Intent resumes to.
+    /// </summary>
+    private async Task TransitionAsync(OverseerDbContext database, Guid id, IntentState from, IntentState to, CancellationToken cancellationToken)
+    {
+        await database.Intents.Where(intent => intent.Id == id)
+            .ExecuteUpdateAsync(intent => intent.SetProperty(record => record.State, to), cancellationToken);
+        database.Set<IntentTransitionRecord>().Add(new IntentTransitionRecord { IntentId = id, From = from, To = to, At = time.GetUtcNow() });
+        await database.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// The Working Time of an Intent with these transitions, in the order they were made: the sum of the periods from a transition into
+    /// an Active state to the next one, and the time since the last one while the Intent is still Active.
+    /// </summary>
+    private static WorkingTime WorkingTimeOf(IEnumerable<(IntentState To, DateTimeOffset At)> transitions)
+    {
+        var accrued = TimeSpan.Zero;
+        DateTimeOffset? activeSince = null;
+        foreach (var (to, at) in transitions)
+        {
+            if (activeSince is { } since)
+            {
+                accrued += at - since;
+            }
+
+            activeSince = ActiveStates.Contains(to) ? at : null;
+        }
+
+        return new WorkingTime(accrued, activeSince);
     }
 
     /// <summary>Why this text and selection can't be saved on an Intent, or <c>null</c> when they can.</summary>
@@ -262,9 +297,22 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     {
         var stored = await intents
             .OrderByDescending(intent => intent.CreatedAt)
-            .Select(intent => new { intent.Id, intent.Text, intent.State, Repositories = intent.RepositoriesInScope.Select(repository => repository.FullName).ToList() })
+            .Select(intent => new
+            {
+                intent.Id,
+                intent.Text,
+                intent.State,
+                Repositories = intent.RepositoriesInScope.Select(repository => repository.FullName).ToList(),
+                // In the order they were made, as two can be made at the same moment.
+                Transitions = intent.Transitions.OrderBy(transition => transition.Id).Select(transition => new { transition.To, transition.At }).ToList(),
+            })
             .ToListAsync(cancellationToken);
-        return [.. stored.Select(intent => new Intent(intent.Id, intent.Text, intent.State, ConfiguredRepositories.ParseSortedByName(intent.Repositories)))];
+        return [.. stored.Select(intent => new Intent(
+            intent.Id,
+            intent.Text,
+            intent.State,
+            ConfiguredRepositories.ParseSortedByName(intent.Repositories),
+            WorkingTimeOf(intent.Transitions.Select(transition => (transition.To, transition.At)))))];
     }
 }
 
@@ -329,8 +377,8 @@ public abstract record IntentChange
     public sealed record Refused(string Error) : IntentChange;
 }
 
-/// <summary>An Intent, as the human described it, how far it has come, and the Configured Repositories it may change.</summary>
-public sealed partial record Intent(Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope)
+/// <summary>An Intent, as the human described it, how far it has come, the Configured Repositories it may change and its Working Time.</summary>
+public sealed partial record Intent(Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope, WorkingTime WorkingTime)
 {
     /// <summary>
     /// An Intent's text as Overseer keeps it, from what the user wrote: LF line breaks whatever the browser sent, and empty when
@@ -353,6 +401,17 @@ public sealed partial record Intent(Guid Id, string Text, IntentState State, IRe
     // As CommonMark defines an ATX heading: "# C#" is a heading about C#, "## ##" is an empty heading, and "#hashtag" isn't a heading.
     [GeneratedRegex(@"^ {0,3}#{1,6}(?:[ \t]+(?<heading>.*?))??(?:[ \t]+#+)?[ \t]*$")]
     private static partial Regex AtxHeading();
+}
+
+/// <summary>
+/// The total time an Intent has spent in Active states: what it had accrued by its last transition, and since when it has been adding
+/// to that while it is still Active, so that it goes on advancing without the Intent changing.
+/// </summary>
+/// <param name="ActiveSince">When the Intent last became Active; <c>null</c> when it isn't Active.</param>
+public readonly record struct WorkingTime(TimeSpan Accrued, DateTimeOffset? ActiveSince)
+{
+    /// <summary>The Working Time at <paramref name="now"/>.</summary>
+    public TimeSpan At(DateTimeOffset now) => ActiveSince is { } since && now > since ? Accrued + (now - since) : Accrued;
 }
 
 /// <summary>Where an Intent is in its lifecycle.</summary>
@@ -382,6 +441,24 @@ public sealed class IntentRecord
     public required IntentState State { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
     public List<RepositoryInScopeRecord> RepositoriesInScope { get; init; } = [];
+
+    /// <summary>Every change of the Intent's state, from its capture as a Draft on.</summary>
+    public List<IntentTransitionRecord> Transitions { get; init; } = [];
+}
+
+/// <summary>A change of an Intent's state, with its time, as PostgreSQL holds it.</summary>
+public sealed class IntentTransitionRecord
+{
+    /// <summary>Increases with each transition recorded, so that it orders transitions made at the same moment.</summary>
+    public long Id { get; init; }
+
+    public Guid IntentId { get; init; }
+
+    /// <summary>The state the Intent left; <c>null</c> for its capture as a Draft.</summary>
+    public required IntentState? From { get; init; }
+
+    public required IntentState To { get; init; }
+    public required DateTimeOffset At { get; init; }
 }
 
 /// <summary>

@@ -1,0 +1,62 @@
+@* An Intent's Working Time, as of now; a Draft has none to show. Live, an Active Intent's goes on advancing as each minute passes. *@
+@using System.Xml
+@using Overseer.Intents
+@implements IDisposable
+@inject TimeProvider Time
+
+@if (Intent.State != IntentState.Draft)
+{
+    var shown = WholeMinutes(Intent.WorkingTime.At(Time.GetUtcNow()));
+    <span class="working-time">Working Time <time class="intent-working-time" datetime="@XmlConvert.ToString(shown)">@IntentWords.WorkingTimeInWords(shown)</time></span>
+}
+
+@code {
+    private ITimer? _nextMinute;
+
+    [Parameter, EditorRequired]
+    public required Intent Intent { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        // The server's rendering of the page shows it once and is done.
+        if (RendererInfo.IsInteractive)
+        {
+            AwaitNextMinute();
+        }
+    }
+
+    /// <summary>Renders again when the shown Working Time next changes, as long as the Intent is Active, and never otherwise.</summary>
+    private void AwaitNextMinute()
+    {
+        if (Intent.State == IntentState.Draft || Intent.WorkingTime.ActiveSince is null)
+        {
+            _nextMinute?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            return;
+        }
+
+        var workingTime = Intent.WorkingTime.At(Time.GetUtcNow());
+        var untilNextMinute = TimeSpan.FromMinutes(1) - (workingTime - WholeMinutes(workingTime));
+        _nextMinute ??= Time.CreateTimer(_ => _ = OnNextMinuteAsync(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _nextMinute.Change(untilNextMinute, Timeout.InfiniteTimeSpan);
+    }
+
+    private async Task OnNextMinuteAsync()
+    {
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                StateHasChanged();
+                AwaitNextMinute();
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            // The page was closed meanwhile.
+        }
+    }
+
+    private static TimeSpan WholeMinutes(TimeSpan workingTime) => TimeSpan.FromMinutes(Math.Floor(workingTime.TotalMinutes));
+
+    public void Dispose() => _nextMinute?.Dispose();
+}

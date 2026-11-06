@@ -17,4 +17,17 @@ internal static class IntentWords
         IntentLight.Green => "Working",
         _ => throw new ArgumentOutOfRangeException(nameof(light), light, null),
     };
+
+    /// <summary>A Working Time as the user reads it, in whole hours and minutes, such as "2 h 15 min": a part of a minute isn't shown.</summary>
+    public static string WorkingTimeInWords(TimeSpan workingTime)
+    {
+        var hours = (long)workingTime.TotalHours;
+        var minutes = workingTime.Minutes;
+        return (hours, minutes) switch
+        {
+            (0, _) => $"{minutes} min",
+            (_, 0) => $"{hours} h",
+            _ => $"{hours} h {minutes} min",
+        };
+    }
 }

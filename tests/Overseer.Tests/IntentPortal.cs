@@ -67,6 +67,19 @@ public static class IntentPortal
             .ExecuteUpdateAsync(intent => intent.SetProperty(record => record.State, state), TestContext.Current.CancellationToken);
     }
 
+    /// <summary>
+    /// Moves an Intent to a state as the Intent Lifecycle does, recording the transition at the clock's time, for the transitions the
+    /// Portal can't make yet. Like <see cref="SetStateAsync"/> it announces nothing.
+    /// </summary>
+    public static async Task TransitionAsync(RunningOverseer overseer, string text, IntentState to, TimeProvider time)
+    {
+        await using var database = overseer.OpenDatabase();
+        var intent = await database.Intents.SingleAsync(intent => intent.Text == text, TestContext.Current.CancellationToken);
+        database.Set<IntentTransitionRecord>().Add(new IntentTransitionRecord { IntentId = intent.Id, From = intent.State, To = to, At = time.GetUtcNow() });
+        await database.SaveChangesAsync(TestContext.Current.CancellationToken);
+        await SetStateAsync(overseer, text, to);
+    }
+
     /// <summary>The text of the page's alert, as a browser would show it.</summary>
     public static string Alert(string page) =>
         Regex.Match(page, "<p[^>]*role=\"alert\"[^>]*>(.*?)</p>", RegexOptions.Singleline) is { Success: true } alert
@@ -105,6 +118,10 @@ public static class IntentPortal
     /// <summary>Opens the Intent's editor, writes this text, ticks exactly these repositories and presses the button with the given value.</summary>
     public static Task<HttpResponseMessage> EditAsync(RunningOverseer overseer, string address, string action, string text, params string[] repositories) =>
         overseer.SubmitFormAsync(address + "/edit", "edit-intent", EditorFields(text, action, repositories));
+
+    /// <summary>Opens the Intent's detail page and presses Start, whether or not the page offers it.</summary>
+    public static Task<HttpResponseMessage> StartAsync(RunningOverseer overseer, string address) =>
+        overseer.SubmitFormAsync(address, "start-intent", []);
 
     /// <summary>Opens the Intent's delete page and confirms.</summary>
     public static Task<HttpResponseMessage> DeleteAsync(RunningOverseer overseer, string address) =>

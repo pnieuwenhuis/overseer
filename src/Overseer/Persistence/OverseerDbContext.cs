@@ -41,5 +41,12 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             repository.Property(record => record.FullName).UseCollation(CaseInsensitive);
             repository.HasOne<IntentRecord>().WithMany(intent => intent.RepositoriesInScope).HasForeignKey(record => record.IntentId);
         });
+        modelBuilder.Entity<IntentTransitionRecord>(transition =>
+        {
+            transition.ToTable("IntentTransitions");
+            transition.Property(record => record.From).HasConversion<string>();
+            transition.Property(record => record.To).HasConversion<string>();
+            transition.HasOne<IntentRecord>().WithMany(intent => intent.Transitions).HasForeignKey(record => record.IntentId);
+        });
     }
 }
