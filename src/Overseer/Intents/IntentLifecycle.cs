@@ -3,14 +3,14 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Overseer.GitHub;
 using Overseer.Persistence;
-using Overseer.Refinement;
 using Overseer.Repositories;
 using Overseer.Settings;
 
 namespace Overseer.Intents;
 
 /// <summary>Owns the Intents' state: everything else asks it to capture or change an Intent and never sets state directly.</summary>
-public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databases, SettingsStore settings, TimeProvider time)
+public sealed class IntentLifecycle(
+    IDbContextFactory<OverseerDbContext> databases, SettingsStore settings, TimeProvider time, IIntentFailures failures)
 {
     /// <summary>The states of an Active Intent, each occupying a slot; what counts towards the maximum is defined here and nowhere else.</summary>
     private static readonly IntentState[] ActiveStates = [IntentState.Refining, IntentState.Implementing, IntentState.InReview];
@@ -25,10 +25,11 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     public event Action? Changed;
 
     /// <summary>
-    /// The side effect of a transition into Refining: Refinement is to launch the Analyst for the Intent with this id. Raised once
-    /// the transition is committed, after <see cref="Changed"/>. Handlers must not throw, and only start the work.
+    /// An Intent moved to a state: the hook for the side effects of transitions, such as Refinement launching the Analyst when one
+    /// moves to Refining. Raised with the Intent's id and its new state once the transition is committed, after <see cref="Changed"/>.
+    /// Handlers must not throw, and only start the work.
     /// </summary>
-    public event Action<Guid>? RefinementRequested;
+    public event Action<Guid, IntentState>? Transitioned;
 
     /// <summary>Captures what the user wrote as a new Draft, with the Configured Repositories they selected in scope.</summary>
     /// <param name="selection">Selecting none is fine: only starting an Intent needs a Repository in scope.</param>
@@ -133,7 +134,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
 
         await TransitionAsync(database, id, IntentState.Refining, cancellationToken);
         var made = await CommitAndAnnounceAsync(transaction, cancellationToken);
-        RefinementRequested?.Invoke(id);
+        Transitioned?.Invoke(id, IntentState.Refining);
         return made;
     }
 
@@ -150,13 +151,13 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     /// The light an Intent shows, or <c>null</c> when it has none. This is the one place a light is derived. The tickets that introduce a
     /// condition add it here, reading whatever <see cref="Intent"/> then carries, each with its member of <see cref="IntentLight"/>, its
     /// colour and its label in <see cref="IntentWords"/>, so that the light doesn't come to rely on the colour. Checked in this order:
-    /// first red, labelled Failed (so far a failed Refinement, as when its Sandbox couldn't be created; later a Failed Task or a failed
-    /// merge), as a failure outweighs a question; then orange, labelled Needs Attention (an unanswered Round, a Spec awaiting approval, an
+    /// first red, labelled Failed, when <see cref="Intent.HasFailed"/> (so far a failed Refinement, as when its Sandbox couldn't be
+    /// created; later a Failed Task or a failed merge, each through <see cref="IIntentFailures"/>), as a failure outweighs a question; then orange, labelled Needs Attention (an unanswered Round, a Spec awaiting approval, an
     /// agent's question, Review Comments awaiting triage). Implementing and InReview aren't settled by the green below: the tickets that
     /// make them reachable decide their light, as an Intent In Review can be up to the user rather than to agents.
     /// </summary>
     public static IntentLight? LightOf(Intent intent) =>
-        intent.Failure is not null ? IntentLight.Red
+        intent.HasFailed ? IntentLight.Red
         // What is left is an Active Intent or a state in which nothing runs. AwaitingSpecApproval isn't Active, so it has no light until
         // its orange condition is added above.
         : ActiveStates.Contains(intent.State) ? IntentLight.Green
@@ -166,16 +167,16 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     public async Task<IReadOnlyList<Intent>> ListBacklogAsync(BacklogFilter filter, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        return filter == BacklogFilter.Closed
-            ? await ReadAsync(database.Intents.Where(intent => ClosedStates.Contains(intent.State)), cancellationToken)
-            : await ListOpenAsync(database.Intents, cancellationToken);
+        return await ReadAsync(
+            database, filter == BacklogFilter.Closed ? database.Intents.Where(intent => ClosedStates.Contains(intent.State)) : Open(database.Intents),
+            cancellationToken);
     }
 
     /// <summary>The Intent with this id, in whatever state; <c>null</c> when there is none, as after it was deleted.</summary>
     public async Task<Intent?> FindAsync(Guid id, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        return (await ReadAsync(database.Intents.Where(intent => intent.Id == id), cancellationToken)).SingleOrDefault();
+        return (await ReadAsync(database, database.Intents.Where(intent => intent.Id == id), cancellationToken)).SingleOrDefault();
     }
 
     /// <summary>
@@ -204,10 +205,10 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     internal static async Task<string?> DescribeOpenWithInScopeAsync(OverseerDbContext database, RepositoryName repository, CancellationToken cancellationToken)
     {
         var fullName = repository.ToString();
-        var open = await ListOpenAsync(database.Intents.Where(intent => intent.RepositoriesInScope.Any(inScope => inScope.FullName == fullName)), cancellationToken);
+        var open = await QuotedFirstLinesAsync(Open(database.Intents.Where(intent => intent.RepositoriesInScope.Any(inScope => inScope.FullName == fullName))), cancellationToken);
         return open.Count == 0
             ? null
-            : Prose.Agreeing([.. open.Select(QuotedFirstLine)],
+            : Prose.Agreeing(open,
                 one: firstLine => $"the open Intent {firstLine} has it in scope",
                 many: firstLines => $"the open Intents {firstLines} have it in scope");
     }
@@ -281,13 +282,13 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
 
         var hasRepositoryInScope = await database.Set<RepositoryInScopeRecord>().AnyAsync(repository => repository.IntentId == id, cancellationToken);
         // The maximum may have been lowered below the number of Active Intents: they stay, and Start waits until there is a free slot.
-        var active = await ReadAsync(database.Intents.Where(intent => ActiveStates.Contains(intent.State)), cancellationToken);
+        var active = await QuotedFirstLinesAsync(database.Intents.Where(intent => ActiveStates.Contains(intent.State)), cancellationToken);
 
         // Both at once, so that dealing with one doesn't lead straight to the other.
         string?[] problems =
         [
             hasRepositoryInScope ? null : "Start needs at least one Repository in scope: edit this Draft to select one.",
-            active.Count < maxActiveIntents ? null : $"All Active Intent slots are taken, by {Prose.List([.. active.Select(QuotedFirstLine)])}. You can raise the maximum in Settings.",
+            active.Count < maxActiveIntents ? null : $"All Active Intent slots are taken, by {Prose.List(active)}. You can raise the maximum in Settings.",
         ];
         return AllOf(problems);
     }
@@ -295,8 +296,6 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     /// <summary>The problems there are, as one message; <c>null</c> when there are none.</summary>
     private static string? AllOf(string?[] problems) =>
         problems.OfType<string>().ToList() is { Count: > 0 } found ? string.Join(" ", found) : null;
-
-    private static string QuotedFirstLine(Intent intent) => $"\"{intent.FirstLine}\"";
 
     // Names Draft rather than the states it refuses, so that a state added later is refused, open or not.
     private static string? WhyNotADraft(IntentState? state, Func<string, string> refusal) => state switch
@@ -326,13 +325,21 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     private static Task HoldActiveIntentSlotsAsync(OverseerDbContext database, CancellationToken cancellationToken) =>
         database.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock({ActiveIntentSlotsLock})", cancellationToken);
 
-    private static Task<IReadOnlyList<Intent>> ListOpenAsync(IQueryable<IntentRecord> intents, CancellationToken cancellationToken) =>
+    private static IQueryable<IntentRecord> Open(IQueryable<IntentRecord> intents) =>
         // Names the closed states rather than the open ones, so that a state added later counts as open.
-        ReadAsync(intents.Where(intent => !ClosedStates.Contains(intent.State)), cancellationToken);
+        intents.Where(intent => !ClosedStates.Contains(intent.State));
 
-    /// <summary>These Intents, newest first.</summary>
-    private static async Task<IReadOnlyList<Intent>> ReadAsync(IQueryable<IntentRecord> intents, CancellationToken cancellationToken)
+    /// <summary>These Intents' first lines, in quotes, newest first.</summary>
+    private static async Task<IReadOnlyList<string>> QuotedFirstLinesAsync(IQueryable<IntentRecord> intents, CancellationToken cancellationToken)
     {
+        var texts = await intents.OrderByDescending(intent => intent.CreatedAt).Select(intent => intent.Text).ToListAsync(cancellationToken);
+        return [.. texts.Select(text => $"\"{Intent.FirstLineOf(text)}\"")];
+    }
+
+    /// <summary>These Intents of <paramref name="database"/>, newest first.</summary>
+    private async Task<IReadOnlyList<Intent>> ReadAsync(OverseerDbContext database, IQueryable<IntentRecord> intents, CancellationToken cancellationToken)
+    {
+        var failed = failures.FailedIn(database);
         var stored = await intents
             // One query for the Repositories in scope and one for the transitions, rather than a row for each combination of them.
             .AsSplitQuery()
@@ -345,7 +352,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
                 Repositories = intent.RepositoriesInScope.Select(repository => repository.FullName).ToList(),
                 // In the order they were made, as two can be made at the same moment.
                 Transitions = intent.Transitions.OrderBy(transition => transition.Id).Select(transition => new Transition(transition.To, transition.At)).ToList(),
-                Refinement = intent.Refinement == null ? null : new RefinementProgress(intent.Refinement.Phase, intent.Refinement.Error),
+                HasFailed = failed.Contains(intent.Id),
             })
             .ToListAsync(cancellationToken);
         return [.. stored.Select(intent => new Intent(
@@ -354,15 +361,8 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
             intent.State,
             ConfiguredRepositories.ParseSortedByName(intent.Repositories),
             WorkingTimeOf(intent.State, intent.Transitions),
-            RefinementOf(intent.State, intent.Refinement)))];
+            intent.HasFailed))];
     }
-
-    /// <summary>
-    /// Where the Refinement of an Intent in <paramref name="state"/> stands, from what is <paramref name="recorded"/>; <c>null</c> unless it
-    /// is Refining. A Refining Intent whose Refinement hasn't recorded anything yet is about to provision its Sandbox.
-    /// </summary>
-    private static RefinementProgress? RefinementOf(IntentState state, RefinementProgress? recorded) =>
-        state == IntentState.Refining ? recorded ?? new RefinementProgress(RefinementPhase.ProvisioningSandbox, Error: null) : null;
 
     /// <summary>A transition as Working Time needs it: the state the Intent moved to, and when.</summary>
     private readonly record struct Transition(IntentState To, DateTimeOffset At);
@@ -433,17 +433,16 @@ public abstract record IntentChange
 }
 
 /// <summary>
-/// An Intent, as the human described it, how far it has come, the Configured Repositories it may change, its Working Time and, while it
-/// is Refining, where its Refinement stands.
+/// An Intent, as the human described it, how far it has come, the Configured Repositories it may change, its Working Time, and whether
+/// it has failed.
 /// </summary>
 /// <param name="WorkingTime"><c>null</c> for a Draft, which has none.</param>
-/// <param name="Refinement"><c>null</c> unless the Intent is Refining.</param>
+/// <param name="HasFailed">
+/// Whether work on it has failed, as a module that works on it says (<see cref="IIntentFailures"/>), which turns its light red.
+/// </param>
 public sealed partial record Intent(
-    Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope, WorkingTime? WorkingTime, RefinementProgress? Refinement)
+    Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope, WorkingTime? WorkingTime, bool HasFailed)
 {
-    /// <summary>Why the Intent has failed, which turns its light red; <c>null</c> when it hasn't.</summary>
-    public string? Failure => Refinement is { Phase: RefinementPhase.Failed } failed ? failed.Error : null;
-
     /// <summary>
     /// An Intent's text as Overseer keeps it, from what the user wrote: LF line breaks whatever the browser sent, and empty when
     /// there is nothing but whitespace.
@@ -454,9 +453,12 @@ public sealed partial record Intent(
     /// What the Backlog lists the Intent by, since an Intent has no title: the first line that says anything, without Markdown's
     /// heading markers. Text with nothing but heading markers shows its first line as it is.
     /// </summary>
-    public string FirstLine =>
-        Text.Split('\n').Select(line => AtxHeading().Replace(line, "${heading}").Trim()).FirstOrDefault(line => line != "")
-        ?? Text.Trim().Split('\n', 2)[0].Trim();
+    public string FirstLine => FirstLineOf(Text);
+
+    /// <inheritdoc cref="FirstLine"/>
+    public static string FirstLineOf(string text) =>
+        text.Split('\n').Select(line => AtxHeading().Replace(line, "${heading}").Trim()).FirstOrDefault(line => line != "")
+        ?? text.Trim().Split('\n', 2)[0].Trim();
 
     /// <summary>The Repositories in scope, in a line of their own.</summary>
     public string RepositoriesInScopeLine =>
@@ -511,9 +513,6 @@ public sealed class IntentRecord
 
     /// <summary>Every change of the Intent's state, from its capture as a Draft on.</summary>
     public List<IntentTransitionRecord> Transitions { get; init; } = [];
-
-    /// <summary>Its Refinement, once one has recorded where it stands.</summary>
-    public RefinementRecord? Refinement { get; init; }
 }
 
 /// <summary>A change of an Intent's state, with its time, as PostgreSQL holds it.</summary>

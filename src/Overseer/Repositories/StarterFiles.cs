@@ -7,7 +7,7 @@ namespace Overseer.Repositories;
 /// The agent part of a Repository Setup: in a temporary Sandbox owned by the Repository Setup, one agent session writes
 /// the new repository's starter README, agent guidance and Repository Manifest, and pushes them to main.
 /// </summary>
-public sealed class StarterFiles(SandboxRegistry sandboxes, IGitHubGateway gitHub, ILogger<StarterFiles> logger)
+public sealed class StarterFiles(SandboxRegistry sandboxes, IGitHubGateway gitHub)
 {
     /// <summary>The Repository Manifest, which must be on main when the agent is done.</summary>
     public const string ManifestPath = ".overseer.yml";
@@ -63,17 +63,7 @@ public sealed class StarterFiles(SandboxRegistry sandboxes, IGitHubGateway gitHu
         }
         finally
         {
-            // Also when serve stops, so a stopped Overseer leaves no Sandbox running.
-            try
-            {
-                await sandboxes.DestroyAsync(sandbox, CancellationToken.None);
-            }
-            catch (Exception exception)
-            {
-                // The next start of serve destroys it, as a left-over.
-                logger.LogError(exception, "The Sandbox {Sandbox} of the Repository Setup of {Repository} could not be destroyed.",
-                    sandbox.ResourceId, setup.Repository);
-            }
+            await sandboxes.DestroyOrLeaveAsync(sandbox);
         }
     }
 

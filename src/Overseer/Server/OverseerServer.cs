@@ -58,6 +58,7 @@ public static class OverseerServer
         builder.Services.AddSingleton<RepositorySetups>();
         builder.Services.AddHostedService(services => services.GetRequiredService<RepositorySetups>());
         builder.Services.AddSingleton<ModelProviderTokens>();
+        builder.Services.AddSingleton<IIntentFailures, RefinementFailures>();
         builder.Services.AddSingleton<IntentLifecycle>();
         builder.Services.AddSingleton<Refinements>();
         builder.Services.AddHostedService(services => services.GetRequiredService<Refinements>());

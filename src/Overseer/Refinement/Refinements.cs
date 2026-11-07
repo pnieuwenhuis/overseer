@@ -1,5 +1,5 @@
-using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Overseer.Intents;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
@@ -11,48 +11,37 @@ namespace Overseer.Refinement;
 /// owns, holding its Repositories in scope. Where each Refinement stands is kept in PostgreSQL. It never sets an Intent's
 /// state: a Refinement that fails leaves the Intent Refining, in its slot, and red until a Retry.
 /// </summary>
-public sealed class Refinements : IHostedService
+public sealed class Refinements(
+    IntentLifecycle lifecycle, SandboxRegistry sandboxes, IDbContextFactory<OverseerDbContext> databases, ILogger<Refinements> logger)
+    : IHostedService
 {
-    private readonly IntentLifecycle _lifecycle;
-    private readonly SandboxRegistry _sandboxes;
-    private readonly IDbContextFactory<OverseerDbContext> _databases;
-    private readonly ILogger<Refinements> _logger;
-
-    // Cancelled when serve stops: the Refinements running then are interrupted, and the next start marks them failed.
-    private readonly CancellationTokenSource _stopping = new();
-
-    // What runs in the background, which stopping waits for.
-    private readonly ConcurrentDictionary<Task, bool> _running = new();
-
-    public Refinements(
-        IntentLifecycle lifecycle, SandboxRegistry sandboxes, IDbContextFactory<OverseerDbContext> databases, ILogger<Refinements> logger)
-    {
-        _lifecycle = lifecycle;
-        _sandboxes = sandboxes;
-        _databases = databases;
-        _logger = logger;
-        _lifecycle.RefinementRequested += Run;
-    }
+    private readonly SandboxedWork _work = new(sandboxes, SandboxOwnerKind.Intent, logger);
 
     /// <summary>
     /// Raised whenever a Refinement changes phase, on the thread that changed it, once the change is committed. Handlers must
-    /// not throw; read the Intent again with <see cref="IntentLifecycle.FindAsync"/>.
+    /// not throw; read the Refinement again with <see cref="ProgressOfAsync"/>.
     /// </summary>
     public event Action? Changed;
 
     /// <summary>
-    /// Marks the Refinements that a stop of serve interrupted as failed, so they can be retried, and destroys the Sandboxes
-    /// they left behind. Runs as serve starts, before the Portal takes requests, so no Start or Retry comes first.
+    /// Marks the Refinements that a stop of serve interrupted as failed, so they can be retried, destroys the Sandboxes they
+    /// left behind, and from then on launches the Analyst for each Intent that moves to Refining. Runs as serve starts, before
+    /// the Portal takes requests, so no Start or Retry comes first.
     /// </summary>
     async Task IHostedService.StartAsync(CancellationToken cancellationToken)
     {
-        await using (var database = await _databases.CreateDbContextAsync(cancellationToken))
+        // A stopgap until Refinement resumes from its transcript (ticket 05): an interrupted Refinement fails, with Retry.
+        await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
             // Also a Refining Intent without a Refinement: one started before Refinement existed, or as serve stopped.
             var interrupted = await database.Intents
-                .Where(intent => intent.State == IntentState.Refining
-                    && (intent.Refinement == null || intent.Refinement.Phase != RefinementPhase.Failed))
-                .Select(intent => new { intent.Id, Phase = intent.Refinement == null ? (RefinementPhase?)null : intent.Refinement.Phase })
+                .Where(intent => intent.State == IntentState.Refining)
+                .Select(intent => new
+                {
+                    intent.Id,
+                    Phase = database.Refinements.Where(refinement => refinement.IntentId == intent.Id).Select(refinement => (RefinementPhase?)refinement.Phase).SingleOrDefault(),
+                })
+                .Where(intent => intent.Phase != RefinementPhase.Failed)
                 .ToListAsync(cancellationToken);
             foreach (var intent in interrupted)
             {
@@ -63,32 +52,33 @@ public sealed class Refinements : IHostedService
             }
         }
 
-        // No Refinement runs yet, so every Sandbox an Intent owns is left over, from a crash or a failed destruction. Those
-        // are listed now, before a Start or Retry creates a new one, but destroyed in the background: in Azure that takes minutes.
-        var leftOver = await _sandboxes.ListRecordedAsync(SandboxOwnerKind.Intent, cancellationToken);
-        if (leftOver.Count > 0)
-        {
-            Track(Task.Run(async () =>
-            {
-                foreach (var sandbox in leftOver)
-                {
-                    await DestroyAsync(sandbox);
-                }
-            }));
-        }
+        // No Refinement runs yet, so every Sandbox an Intent owns is left over.
+        await _work.DestroyLeftOverAsync(cancellationToken);
+        lifecycle.Transitioned += OnTransitioned;
     }
 
-    async Task IHostedService.StopAsync(CancellationToken cancellationToken)
+    Task IHostedService.StopAsync(CancellationToken cancellationToken)
     {
-        await _stopping.CancelAsync();
-        try
+        lifecycle.Transitioned -= OnTransitioned;
+        return _work.StopAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Where the Refinement of <paramref name="intent"/> stands; <c>null</c> unless it is Refining. A Refining Intent whose
+    /// Refinement hasn't recorded anything yet is about to provision its Sandbox.
+    /// </summary>
+    public async Task<RefinementProgress?> ProgressOfAsync(Intent intent, CancellationToken cancellationToken)
+    {
+        if (intent.State != IntentState.Refining)
         {
-            await Task.WhenAll(_running.Keys).WaitAsync(cancellationToken);
+            return null;
         }
-        catch (Exception exception) when (exception is OperationCanceledException or AggregateException)
-        {
-            // Stopping no longer waits; the next start marks what was running failed and destroys its Sandboxes.
-        }
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        return await database.Refinements
+            .Where(refinement => refinement.IntentId == intent.Id)
+            .Select(refinement => new RefinementProgress(refinement.Phase, refinement.Error))
+            .SingleOrDefaultAsync(cancellationToken)
+            ?? new RefinementProgress(RefinementPhase.ProvisioningSandbox, Error: null);
     }
 
     /// <summary>
@@ -98,10 +88,10 @@ public sealed class Refinements : IHostedService
     /// <returns>Whether it launched again: not when there is no such Intent, or its Refinement hasn't failed.</returns>
     public async Task<bool> RetryAsync(Guid intentId, CancellationToken cancellationToken)
     {
-        await using (var database = await _databases.CreateDbContextAsync(cancellationToken))
+        await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
             // Only one of two Retries pressed at once finds it failed.
-            var retried = await database.Set<RefinementRecord>()
+            var retried = await database.Refinements
                 .Where(refinement => refinement.IntentId == intentId && refinement.Phase == RefinementPhase.Failed
                     && database.Intents.Any(intent => intent.Id == intentId && intent.State == IntentState.Refining))
                 .ExecuteUpdateAsync(refinement => refinement
@@ -117,45 +107,20 @@ public sealed class Refinements : IHostedService
         return true;
     }
 
-    private void Track(Task task)
+    private void OnTransitioned(Guid intentId, IntentState to)
     {
-        _running[task] = true;
-        task.ContinueWith(done => _running.TryRemove(done, out _), TaskScheduler.Default);
+        if (to == IntentState.Refining)
+        {
+            Run(intentId);
+        }
     }
 
     /// <summary>Runs the Intent's Refinement in the background, from provisioning its Sandbox on.</summary>
-    private void Run(Guid intentId) => Track(Task.Run(async () =>
-    {
-        string? error;
-        try
-        {
-            error = await RefineAsync(intentId, _stopping.Token);
-        }
-        catch (Exception exception) when (!_stopping.IsCancellationRequested)
-        {
-            _logger.LogError(exception, "The Refinement of the Intent {IntentId} failed.", intentId);
-            error = exception.Message;
-        }
-        catch (Exception)
-        {
-            error = "";
-        }
-        // A failure as serve stops, such as an agent session the stop broke off, is the stop's doing: the phase is left as
-        // it is, and the next start marks the Refinement failed because of the restart.
-        if (error is null || _stopping.IsCancellationRequested)
-        {
-            return;
-        }
-        try
-        {
-            await EnterPhaseAsync(intentId, RefinementPhase.Failed, error, CancellationToken.None);
-        }
-        catch (Exception exception)
-        {
-            // The next start of serve marks it failed.
-            _logger.LogError(exception, "The Refinement of the Intent {IntentId} could not be marked failed.", intentId);
-        }
-    }));
+    private void Run(Guid intentId) => _work.Run(
+        $"the Refinement of the Intent {intentId}",
+        stopping => RefineAsync(intentId, stopping),
+        // Nothing to record when it is no longer the Intent's to run.
+        error => error is null ? Task.CompletedTask : EnterPhaseAsync(intentId, RefinementPhase.Failed, error, CancellationToken.None));
 
     /// <summary>
     /// Provisions the Intent's Sandbox and has the Analyst work in it, destroying the Sandbox once it is no longer used.
@@ -163,7 +128,7 @@ public sealed class Refinements : IHostedService
     /// <returns>Why the Refinement failed; <c>null</c> when it is no longer the Intent's to run.</returns>
     private async Task<string?> RefineAsync(Guid intentId, CancellationToken cancellationToken)
     {
-        if (await _lifecycle.FindAsync(intentId, cancellationToken) is not { State: IntentState.Refining } intent)
+        if (await lifecycle.FindAsync(intentId, cancellationToken) is not { State: IntentState.Refining } intent)
         {
             return null;
         }
@@ -172,7 +137,7 @@ public sealed class Refinements : IHostedService
         Sandbox sandbox;
         try
         {
-            sandbox = await _sandboxes.CreateAsync(
+            sandbox = await sandboxes.CreateAsync(
                 new SandboxOwner(SandboxOwnerKind.Intent, intent.Id), [.. intent.RepositoriesInScope.Select(repository => repository.ToString())],
                 cancellationToken);
         }
@@ -186,11 +151,11 @@ public sealed class Refinements : IHostedService
             IAgentSession started;
             try
             {
-                started = await _sandboxes.StartAgentSessionAsync(sandbox, AgentRole.Analyst, cancellationToken);
+                started = await sandboxes.StartAgentSessionAsync(sandbox, AgentRole.Analyst, cancellationToken);
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
             {
-                _logger.LogError(exception, "The Analyst's session for the Intent {IntentId} could not be started.", intentId);
+                logger.LogError(exception, "The Analyst's session for the Intent {IntentId} could not be started.", intentId);
                 return $"The Analyst's session failed: {exception.Message}";
             }
             await using var session = started;
@@ -217,39 +182,57 @@ public sealed class Refinements : IHostedService
         }
         finally
         {
-            // Also when serve stops, so a stopped Overseer leaves no Sandbox running.
-            await DestroyAsync(sandbox);
-        }
-    }
-
-    private async Task DestroyAsync(Sandbox sandbox)
-    {
-        try
-        {
-            await _sandboxes.DestroyAsync(sandbox, CancellationToken.None);
-        }
-        catch (Exception exception)
-        {
-            // The next start of serve destroys it, as a left-over.
-            _logger.LogError(exception, "The Sandbox {Sandbox} of the Intent {IntentId} could not be destroyed.", sandbox.ResourceId, sandbox.Owner.Id);
+            await sandboxes.DestroyOrLeaveAsync(sandbox);
         }
     }
 
     private async Task EnterPhaseAsync(Guid intentId, RefinementPhase phase, string? error, CancellationToken cancellationToken)
     {
-        await using (var database = await _databases.CreateDbContextAsync(cancellationToken))
+        await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
             await EnterPhaseAsync(database, intentId, phase, error, cancellationToken);
         }
         Changed?.Invoke();
     }
 
-    /// <summary>Records where the Intent's Refinement stands, whether or not it had one before.</summary>
-    private static Task EnterPhaseAsync(OverseerDbContext database, Guid intentId, RefinementPhase phase, string? error, CancellationToken cancellationToken) =>
-        database.Database.ExecuteSqlAsync($"""
-            INSERT INTO "Refinements" ("IntentId", "Phase", "Error") VALUES ({intentId}, {phase.ToString()}, {error})
-            ON CONFLICT ("IntentId") DO UPDATE SET "Phase" = EXCLUDED."Phase", "Error" = EXCLUDED."Error"
-            """, cancellationToken);
+    /// <summary>
+    /// Records where the Intent's Refinement stands, whether or not it had one before: updated when it has, and inserted when
+    /// it hasn't. Should another insert come first meanwhile, this one is applied after it, as an update.
+    /// </summary>
+    private static async Task EnterPhaseAsync(OverseerDbContext database, Guid intentId, RefinementPhase phase, string? error, CancellationToken cancellationToken)
+    {
+        if (await UpdateAsync() > 0)
+        {
+            return;
+        }
+        database.Refinements.Add(new RefinementRecord { IntentId = intentId, Phase = phase, Error = error });
+        try
+        {
+            await database.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            database.ChangeTracker.Clear();
+            await UpdateAsync();
+        }
+
+        Task<int> UpdateAsync() => database.Refinements
+            .Where(refinement => refinement.IntentId == intentId)
+            .ExecuteUpdateAsync(refinement => refinement.SetProperty(r => r.Phase, phase).SetProperty(r => r.Error, error), cancellationToken);
+    }
+}
+
+/// <summary>
+/// Turns the light of an Intent whose Refinement failed red, for the Intent Lifecycle, which derives the light: a failed
+/// Refinement leaves the Intent Refining, until a Retry.
+/// </summary>
+public sealed class RefinementFailures : IIntentFailures
+{
+    public IQueryable<Guid> FailedIn(OverseerDbContext database) =>
+        database.Refinements
+            .Where(refinement => refinement.Phase == RefinementPhase.Failed
+                && database.Intents.Any(intent => intent.Id == refinement.IntentId && intent.State == IntentState.Refining))
+            .Select(refinement => refinement.IntentId);
 }
 
 /// <summary>Where an Intent's Refinement stands.</summary>

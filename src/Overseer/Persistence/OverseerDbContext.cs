@@ -15,6 +15,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<ConfiguredRepositoryRecord> ConfiguredRepositories => Set<ConfiguredRepositoryRecord>();
     public DbSet<RepositorySetupRecord> RepositorySetups => Set<RepositorySetupRecord>();
     public DbSet<IntentRecord> Intents => Set<IntentRecord>();
+    public DbSet<RefinementRecord> Refinements => Set<RefinementRecord>();
 
     private const string CaseInsensitive = "case_insensitive";
 
@@ -47,7 +48,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             refinement.ToTable("Refinements");
             refinement.HasKey(record => record.IntentId);
             refinement.Property(record => record.Phase).HasConversion<string>();
-            refinement.HasOne<IntentRecord>().WithOne(intent => intent.Refinement).HasForeignKey<RefinementRecord>(record => record.IntentId);
+            refinement.HasOne<IntentRecord>().WithOne().HasForeignKey<RefinementRecord>(record => record.IntentId);
         });
         modelBuilder.Entity<IntentTransitionRecord>(transition =>
         {

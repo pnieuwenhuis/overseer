@@ -47,16 +47,9 @@ public sealed class SandboxRegistry(
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
-            // Whatever the provider left of it goes now; should that fail too, it stays recorded for the next start's sweep.
-            // Not while Overseer stops, which shouldn't wait for that: the sweep sees to it then.
-            try
-            {
-                await DestroyAsync(sandbox, CancellationToken.None);
-            }
-            catch (Exception destroying)
-            {
-                logger.LogError(destroying, "What is left of the Sandbox {Sandbox} could not be destroyed.", sandbox.ResourceId);
-            }
+            // Whatever the provider left of it goes now. Not while Overseer stops, which shouldn't wait for that: the next
+            // start's sweep sees to it then.
+            await DestroyOrLeaveAsync(sandbox);
             throw;
         }
         return sandbox;
@@ -111,6 +104,23 @@ public sealed class SandboxRegistry(
         await database.Sandboxes
             .Where(record => record.ResourceId == sandbox.ResourceId && record.DestroyedAt == null)
             .ExecuteUpdateAsync(record => record.SetProperty(r => r.DestroyedAt, destroyedAt), cancellationToken);
+    }
+
+    /// <summary>
+    /// Destroys a Sandbox that work is done with, also as serve stops, so that a stopped Overseer leaves no Sandbox running.
+    /// Should that fail, it is logged rather than thrown: the Sandbox stays recorded, and the next start's sweep destroys it.
+    /// </summary>
+    public async Task DestroyOrLeaveAsync(Sandbox sandbox)
+    {
+        try
+        {
+            await DestroyAsync(sandbox, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "The Sandbox {Sandbox} of the {OwnerKind} {OwnerId} could not be destroyed; the next start destroys it.",
+                sandbox.ResourceId, sandbox.Owner.Kind, sandbox.Owner.Id);
+        }
     }
 }
 

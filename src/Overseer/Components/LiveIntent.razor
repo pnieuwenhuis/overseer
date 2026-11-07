@@ -1,5 +1,6 @@
 @* An Intent's state, text and what can be done with it, updated live as Intents change. *@
 @using Overseer.Intents
+@using Overseer.Refinement
 @inherits LiveIntentsView<LiveIntent.Detail>
 
 @if (Shown is { WhyNotStartable: { } why } && (Shown.Intent?.State is null or IntentState.Draft || StartRefused))
@@ -29,7 +30,7 @@
                 </div>
             }
         </header>
-        @if (intent.Refinement is { } refinement)
+        @if (Shown.Refinement is { } refinement)
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
                 <RefinementSteps IntentId="Id" Refinement="refinement" />
@@ -47,10 +48,17 @@
     [Parameter]
     public bool StartRefused { get; set; }
 
-    protected override async Task<Detail> ReadAsync(CancellationToken cancellationToken) =>
-        new(await Lifecycle.FindAsync(Id, cancellationToken), await Lifecycle.WhyNotStartableAsync(Id, cancellationToken));
+    protected override async Task<Detail> ReadAsync(CancellationToken cancellationToken)
+    {
+        var intent = await Lifecycle.FindAsync(Id, cancellationToken);
+        return new(
+            intent,
+            await Lifecycle.WhyNotStartableAsync(Id, cancellationToken),
+            intent is null ? null : await Refinements.ProgressOfAsync(intent, cancellationToken));
+    }
 
     /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
     /// <param name="WhyNotStartable">Why it can't be started at the moment, as a Draft's page explains and a refused Start says.</param>
-    public sealed record Detail(Intent? Intent, string? WhyNotStartable);
+    /// <param name="Refinement">Where its Refinement stands; <c>null</c> unless it is Refining.</param>
+    public sealed record Detail(Intent? Intent, string? WhyNotStartable, RefinementProgress? Refinement);
 }

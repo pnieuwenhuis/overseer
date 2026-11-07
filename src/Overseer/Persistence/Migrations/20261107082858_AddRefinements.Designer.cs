@@ -217,7 +217,7 @@ namespace Overseer.Persistence.Migrations
             modelBuilder.Entity("Overseer.Refinement.RefinementRecord", b =>
                 {
                     b.HasOne("Overseer.Intents.IntentRecord", null)
-                        .WithOne("Refinement")
+                        .WithOne()
                         .HasForeignKey("Overseer.Refinement.RefinementRecord", "IntentId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -225,8 +225,6 @@ namespace Overseer.Persistence.Migrations
 
             modelBuilder.Entity("Overseer.Intents.IntentRecord", b =>
                 {
-                    b.Navigation("Refinement");
-
                     b.Navigation("RepositoriesInScope");
 
                     b.Navigation("Transitions");

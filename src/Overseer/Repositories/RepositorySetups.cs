@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Overseer.GitHub;
@@ -16,11 +15,7 @@ public sealed class RepositorySetups(
     IDbContextFactory<OverseerDbContext> databases, IGitHubGateway gitHub, StarterFiles starterFiles, SandboxRegistry sandboxes,
     TimeProvider time, ILogger<RepositorySetups> logger) : IHostedService
 {
-    // Cancelled when serve stops: the agent parts running then are interrupted, and the next start marks them failed.
-    private readonly CancellationTokenSource _stopping = new();
-
-    // What runs in the background, which stopping waits for.
-    private readonly ConcurrentDictionary<Task, bool> _running = new();
+    private readonly SandboxedWork _work = new(sandboxes, SandboxOwnerKind.RepositorySetup, logger);
 
     /// <summary>
     /// Marks the Repository Setups that a stop of serve interrupted as failed, so they can be retried, and destroys the
@@ -43,46 +38,11 @@ public sealed class RepositorySetups(
             await database.SaveChangesAsync(cancellationToken);
         }
 
-        // No Repository Setup runs yet, so every Sandbox one owns is left over, from a crash or a failed destruction.
-        // Those are listed now, before a Retry creates a new one, but destroyed in the background: in Azure that takes minutes.
-        var leftOver = await sandboxes.ListRecordedAsync(SandboxOwnerKind.RepositorySetup, cancellationToken);
-        if (leftOver.Count > 0)
-        {
-            Track(Task.Run(async () =>
-            {
-                foreach (var sandbox in leftOver)
-                {
-                    try
-                    {
-                        await sandboxes.DestroyAsync(sandbox, _stopping.Token);
-                    }
-                    catch (Exception exception) when (!_stopping.IsCancellationRequested)
-                    {
-                        logger.LogError(exception, "The left-over Sandbox {Sandbox} of a Repository Setup could not be destroyed.", sandbox.ResourceId);
-                    }
-                }
-            }));
-        }
+        // No Repository Setup runs yet, so every Sandbox one owns is left over.
+        await _work.DestroyLeftOverAsync(cancellationToken);
     }
 
-    async Task IHostedService.StopAsync(CancellationToken cancellationToken)
-    {
-        await _stopping.CancelAsync();
-        try
-        {
-            await Task.WhenAll(_running.Keys).WaitAsync(cancellationToken);
-        }
-        catch (Exception exception) when (exception is OperationCanceledException or AggregateException)
-        {
-            // Stopping no longer waits; the next start marks what was running failed and destroys its Sandboxes.
-        }
-    }
-
-    private void Track(Task task)
-    {
-        _running[task] = true;
-        task.ContinueWith(done => _running.TryRemove(done, out _), TaskScheduler.Default);
-    }
+    Task IHostedService.StopAsync(CancellationToken cancellationToken) => _work.StopAsync(cancellationToken);
 
     /// <summary>
     /// Raised whenever a Repository Setup starts or changes phase, on the thread that changed it. Handlers must not
@@ -184,40 +144,11 @@ public sealed class RepositorySetups(
     }
 
     /// <summary>Runs the Repository Setup's agent part in the background, from the phase of provisioning the Sandbox.</summary>
-    private void Run(RepositorySetup setup) => Track(Task.Run(async () =>
-    {
-        string? error;
-        try
-        {
-            error = await starterFiles.WriteAsync(
-                setup, () => EnterPhaseAsync(setup.Id, RepositorySetupPhase.AgentWorking, error: null, _stopping.Token), _stopping.Token);
-        }
-        catch (Exception exception) when (!_stopping.IsCancellationRequested)
-        {
-            logger.LogError(exception, "The Repository Setup of {Repository} failed.", setup.Repository);
-            error = exception.Message;
-        }
-        catch (Exception)
-        {
-            error = "";
-        }
-        // A failure as serve stops, such as an agent session the stop broke off, is the stop's doing: the phase is left
-        // as it is, and the next start marks the Repository Setup failed because of the restart.
-        if (error is not null && _stopping.IsCancellationRequested)
-        {
-            logger.LogWarning("Overseer stopped during the Repository Setup of {Repository}.", setup.Repository);
-            return;
-        }
-        try
-        {
-            await EnterPhaseAsync(setup.Id, error is null ? RepositorySetupPhase.Done : RepositorySetupPhase.Failed, error, CancellationToken.None);
-        }
-        catch (Exception exception)
-        {
-            // The next start of serve marks it failed.
-            logger.LogError(exception, "The Repository Setup of {Repository} could not be marked finished.", setup.Repository);
-        }
-    }));
+    private void Run(RepositorySetup setup) => _work.Run(
+        $"the Repository Setup of {setup.Repository}",
+        stopping => starterFiles.WriteAsync(
+            setup, () => EnterPhaseAsync(setup.Id, RepositorySetupPhase.AgentWorking, error: null, stopping), stopping),
+        error => EnterPhaseAsync(setup.Id, error is null ? RepositorySetupPhase.Done : RepositorySetupPhase.Failed, error, CancellationToken.None));
 
     private async Task EnterPhaseAsync(Guid id, RepositorySetupPhase phase, string? error, CancellationToken cancellationToken)
     {
