@@ -88,7 +88,7 @@ public class RefinementTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task By_default_the_Analyst_may_use_the_web_and_the_shell_but_git_push_is_denied()
+    public async Task By_default_the_Analyst_may_fetch_web_pages_and_use_the_shell_without_asking_but_git_push_is_denied()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         using var saved = await SaveAsync(overseer, "Export data", "acme/web");
@@ -97,14 +97,18 @@ public class RefinementTests(PostgresServer postgres)
 
         var session = await EventuallyAsync(() => Task.FromResult(overseer.Sandboxes.AgentSessionsStarted.SingleOrDefault()), "the Analyst's session");
         var configuration = JsonNode.Parse(session.HarnessJson)!;
-        // Every tool, fetching web pages and the shell among them, is allowed without asking: no one is there to answer.
-        Assert.Equal("allow", configuration["permission"]!.GetValue<string>());
-        // OpenCode applies the last rule that matches a command, and an agent's rules over the global ones, so these override
-        // the "*" before them and the global "allow".
+        // OpenCode applies the last rule that matches a command, so these override the "*" before them.
         var bash = configuration["agent"]!["analyst"]!["permission"]!["bash"]!.AsObject();
         Assert.Equal(
             [("*", "allow"), ("git push", "deny"), ("git push *", "deny")],
             bash.Select(rule => (rule.Key, rule.Value!.GetValue<string>())));
+        // Allowed, rather than asked about: no one is there to answer.
+        var permissions = OpenCodePermissions.Of(session.HarnessJson, "analyst");
+        Assert.Equal("allow", permissions.Evaluate("webfetch", "https://learn.microsoft.com/en-us/dotnet/"));
+        Assert.Equal("allow", permissions.Evaluate("bash", "curl -fsSL https://learn.microsoft.com/en-us/dotnet/"));
+        Assert.Equal("allow", permissions.Evaluate("bash", "git status"));
+        Assert.Equal("deny", permissions.Evaluate("bash", "git push"));
+        Assert.Equal("deny", permissions.Evaluate("bash", "git push origin main"));
     }
 
     [Fact]

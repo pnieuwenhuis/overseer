@@ -53,45 +53,94 @@ public sealed partial class AgentHarnessConfiguration
     public static string AgentName(AgentRole role) => role.ToString().ToLowerInvariant();
 
     /// <summary>
-    /// The configuration Overseer ships: the strongest model where judgement matters most, a cheaper one elsewhere. Every tool is
-    /// allowed without asking, as no one is there to answer, except that the Analyst may not <c>git push</c>: OpenCode applies the
-    /// last bash rule that matches, and an agent's rules over the global ones (https://opencode.ai/docs/permissions/). That is no
-    /// guarantee, since it misses a push written otherwise, such as <c>git -C web push</c>, and the user can edit it: the guarantee
-    /// has to come from the Analyst's Sandbox itself.
+    /// The configuration Overseer ships, for the OpenCode release Sandboxes install (<c>opencode_version</c> in
+    /// <c>Setup/setup-sandbox.sh</c>): the strongest model where judgement matters most, a cheaper one elsewhere. Agent
+    /// sessions run headless, with no one to answer when OpenCode asks for approval, so each agent allows in its own
+    /// permissions everything it needs that OpenCode might ask about: reading files (<c>.env</c> files too), editing and
+    /// searching them, the shell, fetching web pages (<c>webfetch</c>), paths outside the directory OpenCode starts in
+    /// (<c>external_directory</c>), and repeating a tool call (<c>doom_loop</c>). Anything else keeps OpenCode's defaults
+    /// (https://opencode.ai/docs/permissions/). An agent reaches the web only by fetching pages over HTTP, with
+    /// <c>webfetch</c> or <c>curl</c>: OpenCode offers its <c>websearch</c> tool only with a search service, and Overseer
+    /// sets none up.
     /// </summary>
+    /// <remarks>
+    /// The Analyst may not <c>git push</c>: OpenCode applies the last bash rule that matches. That is no guarantee, since it
+    /// misses a push written otherwise, such as <c>git -C web push</c>, and the user can edit it: the guarantee has to come
+    /// from the Analyst's Sandbox itself.
+    /// </remarks>
     public static AgentHarnessConfiguration Default { get; } = Parse(
         """
         {
           "$schema": "https://opencode.ai/config.json",
           "autoupdate": false,
-          "permission": "allow",
           "agent": {
             "analyst": {
               "description": "Questions the user about an Intent and writes its Spec.",
               "mode": "primary",
               "model": "anthropic/claude-opus-5-5",
               "permission": {
+                "read": "allow",
+                "edit": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "list": "allow",
                 "bash": {
                   "*": "allow",
                   "git push": "deny",
                   "git push *": "deny"
-                }
+                },
+                "webfetch": "allow",
+                "external_directory": "allow",
+                "doom_loop": "allow"
               }
             },
             "designer": {
               "description": "Works out the UI and UX for a Spec with UI changes.",
               "mode": "primary",
-              "model": "anthropic/claude-sonnet-5-5"
+              "model": "anthropic/claude-sonnet-5-5",
+              "permission": {
+                "read": "allow",
+                "edit": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "list": "allow",
+                "bash": "allow",
+                "webfetch": "allow",
+                "external_directory": "allow",
+                "doom_loop": "allow"
+              }
             },
             "developer": {
               "description": "Implements a Task, including the tests for its own work.",
               "mode": "primary",
-              "model": "anthropic/claude-sonnet-5-5"
+              "model": "anthropic/claude-sonnet-5-5",
+              "permission": {
+                "read": "allow",
+                "edit": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "list": "allow",
+                "bash": "allow",
+                "webfetch": "allow",
+                "external_directory": "allow",
+                "doom_loop": "allow"
+              }
             },
             "reviewer": {
               "description": "Reviews an Intent's pull requests against the Approved Spec and the Review Guidelines.",
               "mode": "primary",
-              "model": "anthropic/claude-opus-5-5"
+              "model": "anthropic/claude-opus-5-5",
+              "permission": {
+                "read": "allow",
+                "edit": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "list": "allow",
+                "bash": "allow",
+                "webfetch": "allow",
+                "external_directory": "allow",
+                "doom_loop": "allow"
+              }
             }
           }
         }

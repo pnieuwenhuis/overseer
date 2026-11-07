@@ -38,6 +38,43 @@ public class AgentHarnessConfigurationTests(PostgresServer postgres)
         Assert.Equal((AgentRole.Reviewer, Editor(page), Picker(page, AgentRole.Reviewer)), (received.Role, received.HarnessJson, received.Model));
     }
 
+    [Theory]
+    [InlineData(AgentRole.Analyst)]
+    [InlineData(AgentRole.Designer)]
+    [InlineData(AgentRole.Developer)]
+    [InlineData(AgentRole.Reviewer)]
+    public async Task By_default_an_agent_never_waits_for_approval_of_what_it_needs_as_no_one_is_there_to_give_it(AgentRole role)
+    {
+        await using var overseer = await RunningOverseer.StartAsync(await postgres.CreateEmptyDatabaseAsync());
+
+        var session = await overseer.StartAgentSessionAsync(role);
+
+        // Each agent says what it may do: the default allows nothing for every agent at once.
+        Assert.Null(JsonNode.Parse(session.HarnessJson)!["permission"]);
+        var permissions = OpenCodePermissions.Of(session.HarnessJson, role.ToString().ToLowerInvariant());
+        (string Permission, string Pattern)[] needs =
+        [
+            ("read", "src/Orders/Export.cs"),
+            // OpenCode asks before reading these, unless told otherwise.
+            ("read", ".env"),
+            ("read", "config/.env.local"),
+            ("edit", "src/Orders/Export.cs"),
+            ("glob", "src/**/*.cs"),
+            ("grep", "class Export"),
+            ("list", "src"),
+            ("bash", "dotnet test"),
+            ("bash", "curl -fsSL https://learn.microsoft.com/en-us/dotnet/"),
+            ("webfetch", "https://learn.microsoft.com/en-us/dotnet/"),
+            // Outside the directory OpenCode started in, such as a package cache or another Repository in scope.
+            ("external_directory", "/home/overseer/.nuget/packages/*"),
+            // The same tool call a third time in a row.
+            ("doom_loop", "bash"),
+        ];
+        Assert.Equal(
+            needs.Select(need => (need.Permission, need.Pattern, "allow")),
+            needs.Select(need => (need.Permission, need.Pattern, permissions.Evaluate(need.Permission, need.Pattern))));
+    }
+
     [Fact]
     public async Task A_saved_configuration_is_shown_in_the_pickers_and_kept_across_a_restart()
     {
