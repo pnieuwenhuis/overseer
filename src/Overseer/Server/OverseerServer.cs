@@ -8,6 +8,7 @@ using Overseer.Intents;
 using Overseer.Login;
 using Overseer.ModelProviders;
 using Overseer.Persistence;
+using Overseer.Refinement;
 using Overseer.Repositories;
 using Overseer.Sandboxes;
 using Overseer.Secrets;
@@ -58,6 +59,8 @@ public static class OverseerServer
         builder.Services.AddHostedService(services => services.GetRequiredService<RepositorySetups>());
         builder.Services.AddSingleton<ModelProviderTokens>();
         builder.Services.AddSingleton<IntentLifecycle>();
+        builder.Services.AddSingleton<Refinements>();
+        builder.Services.AddHostedService(services => services.GetRequiredService<Refinements>());
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(options =>
@@ -111,6 +114,17 @@ public static class OverseerServer
             // Not retried when it isn't failed, as after a second press: the Settings page shows where it is.
             await setups.RetryAsync(id, context.RequestAborted);
             return Results.LocalRedirect("/settings");
+        }).RequireAuthorization();
+        // The Retry button of an Intent whose Refinement failed, on its detail page.
+        app.MapPost("/intents/{id:guid}/retry", async (Guid id, HttpContext context, IAntiforgery antiforgery, Refinements refinements) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+            {
+                return Results.BadRequest();
+            }
+            // Not retried when it hasn't failed, as after a second press: the detail page shows where it is.
+            await refinements.RetryAsync(id, context.RequestAborted);
+            return Results.LocalRedirect($"/intents/{id}");
         }).RequireAuthorization();
         // Every page requires the logged-in user; only the login page opts out with [AllowAnonymous].
         app.MapRazorComponents<App>()

@@ -1,11 +1,12 @@
 using Microsoft.AspNetCore.Components;
 using Overseer.Intents;
+using Overseer.Refinement;
 
 namespace Overseer.Components;
 
 /// <summary>
 /// A view of Intents that stays current: it reads what it shows when it starts and when its parameters change, and again whenever an
-/// Intent changes. Rendered with <c>InteractiveServer</c> it updates over Blazor's SignalR connection.
+/// Intent or its Refinement changes. Rendered with <c>InteractiveServer</c> it updates over Blazor's SignalR connection.
 /// </summary>
 /// <typeparam name="TShown">What the view reads from the Intent Lifecycle to show.</typeparam>
 public abstract class LiveIntentsView<TShown> : ComponentBase, IDisposable
@@ -15,6 +16,9 @@ public abstract class LiveIntentsView<TShown> : ComponentBase, IDisposable
 
     [Inject]
     protected IntentLifecycle Lifecycle { get; set; } = default!;
+
+    [Inject]
+    private Refinements Refinements { get; set; } = default!;
 
     /// <summary>
     /// What was last read; <c>null</c> until the first read is done. Persisted from the server's rendering of the page into the live
@@ -32,6 +36,7 @@ public abstract class LiveIntentsView<TShown> : ComponentBase, IDisposable
         if (RendererInfo.IsInteractive)
         {
             Lifecycle.Changed += OnChanged;
+            Refinements.Changed += OnChanged;
         }
     }
 
@@ -64,6 +69,7 @@ public abstract class LiveIntentsView<TShown> : ComponentBase, IDisposable
     public void Dispose()
     {
         Lifecycle.Changed -= OnChanged;
+        Refinements.Changed -= OnChanged;
         _disposed.Cancel();
         _disposed.Dispose();
         GC.SuppressFinalize(this);

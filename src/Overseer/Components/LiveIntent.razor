@@ -29,6 +29,12 @@
                 </div>
             }
         </header>
+        @if (intent.Refinement is { } refinement)
+        {
+            <div class="border-b border-line px-5 py-4 sm:px-6">
+                <RefinementSteps IntentId="Id" Refinement="refinement" />
+            </div>
+        }
         <MarkdownPreview Label="Intent text" Text="@intent.Text" />
     </article>
 }

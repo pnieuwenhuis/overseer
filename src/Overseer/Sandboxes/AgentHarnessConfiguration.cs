@@ -52,7 +52,12 @@ public sealed partial class AgentHarnessConfiguration
     /// <summary>The name of the OpenCode agent for <paramref name="role"/>.</summary>
     public static string AgentName(AgentRole role) => role.ToString().ToLowerInvariant();
 
-    /// <summary>The configuration Overseer ships: the strongest model where judgement matters most, a cheaper one elsewhere.</summary>
+    /// <summary>
+    /// The configuration Overseer ships: the strongest model where judgement matters most, a cheaper one elsewhere. Every tool is
+    /// allowed without asking, as no one is there to answer, except that the Analyst may not <c>git push</c>: OpenCode applies the
+    /// last bash rule that matches. That is no guarantee, since the user can edit it: the guarantee has to come from the Analyst's
+    /// Sandbox itself.
+    /// </summary>
     public static AgentHarnessConfiguration Default { get; } = Parse(
         """
         {
@@ -63,7 +68,14 @@ public sealed partial class AgentHarnessConfiguration
             "analyst": {
               "description": "Questions the user about an Intent and writes its Spec.",
               "mode": "primary",
-              "model": "anthropic/claude-opus-5-5"
+              "model": "anthropic/claude-opus-5-5",
+              "permission": {
+                "bash": {
+                  "*": "allow",
+                  "git push": "deny",
+                  "git push *": "deny"
+                }
+              }
             },
             "designer": {
               "description": "Works out the UI and UX for a Spec with UI changes.",

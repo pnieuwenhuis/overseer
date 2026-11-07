@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Overseer.Intents;
+using Overseer.Refinement;
 using Overseer.Repositories;
 using Overseer.Sandboxes;
 using Overseer.Settings;
@@ -40,6 +41,13 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             repository.HasKey(record => new { record.IntentId, record.FullName });
             repository.Property(record => record.FullName).UseCollation(CaseInsensitive);
             repository.HasOne<IntentRecord>().WithMany(intent => intent.RepositoriesInScope).HasForeignKey(record => record.IntentId);
+        });
+        modelBuilder.Entity<RefinementRecord>(refinement =>
+        {
+            refinement.ToTable("Refinements");
+            refinement.HasKey(record => record.IntentId);
+            refinement.Property(record => record.Phase).HasConversion<string>();
+            refinement.HasOne<IntentRecord>().WithOne(intent => intent.Refinement).HasForeignKey<RefinementRecord>(record => record.IntentId);
         });
         modelBuilder.Entity<IntentTransitionRecord>(transition =>
         {

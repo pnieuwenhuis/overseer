@@ -653,6 +653,15 @@
         --intent-light-colour: var(--color-signal);
     }
 
+    /* A failure doesn't glow: it waits for the user. */
+    .intent-light[data-light="Red"] {
+        --intent-light-colour: var(--color-danger);
+    }
+
+    .intent-light[data-light="Red"]::before {
+        animation: none;
+    }
+
     @media (prefers-reduced-motion: reduce) {
         .intent-light::before {
             animation: none;
@@ -975,20 +984,23 @@
         font-weight: 600;
     }
 
-    .repository-setup-steps {
+    .repository-setup-steps,
+    .refinement-steps {
         display: flex;
         flex-direction: column;
         gap: 0.5rem;
         font-size: 0.875rem;
     }
 
-    .repository-setup-steps li {
+    .repository-setup-steps li,
+    .refinement-steps li {
         display: flex;
         align-items: flex-start;
         gap: 0.625rem;
     }
 
-    .repository-setup-steps li::before {
+    .repository-setup-steps li::before,
+    .refinement-steps li::before {
         content: "";
         width: 1.125rem;
         height: 1.125rem;
@@ -1034,6 +1046,24 @@
     }
 
     .repository-setup-status.settings-error {
+        color: var(--color-danger);
+        font-weight: 500;
+    }
+
+    /* A Refining Intent's Refinement, on its page: the same steps as a Repository Setup's. */
+    .refinement {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.875rem;
+    }
+
+    .refinement-status {
+        color: var(--color-muted);
+        font-size: 0.8125rem;
+    }
+
+    .refinement-status[role="alert"] {
         color: var(--color-danger);
         font-weight: 500;
     }

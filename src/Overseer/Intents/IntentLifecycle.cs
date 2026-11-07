@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Overseer.GitHub;
 using Overseer.Persistence;
+using Overseer.Refinement;
 using Overseer.Repositories;
 using Overseer.Settings;
 
@@ -22,6 +23,12 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
 
     /// <summary>An Intent was captured, edited, deleted or changed state. Raised once the change is committed, so that a read then sees it.</summary>
     public event Action? Changed;
+
+    /// <summary>
+    /// The side effect of a transition into Refining: Refinement is to launch the Analyst for the Intent with this id. Raised once
+    /// the transition is committed, after <see cref="Changed"/>. Handlers must not throw, and only start the work.
+    /// </summary>
+    public event Action<Guid>? RefinementRequested;
 
     /// <summary>Captures what the user wrote as a new Draft, with the Configured Repositories they selected in scope.</summary>
     /// <param name="selection">Selecting none is fine: only starting an Intent needs a Repository in scope.</param>
@@ -125,7 +132,9 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
         }
 
         await TransitionAsync(database, id, IntentState.Refining, cancellationToken);
-        return await CommitAndAnnounceAsync(transaction, cancellationToken);
+        var made = await CommitAndAnnounceAsync(transaction, cancellationToken);
+        RefinementRequested?.Invoke(id);
+        return made;
     }
 
     /// <summary>Why the Intent with this id can't be started at the moment, with what a refused Start says, or <c>null</c> when it can.</summary>
@@ -138,19 +147,20 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
     }
 
     /// <summary>
-    /// The light an Intent shows, or <c>null</c> when it has none. This is the one place a light is derived, and so far only green can be
-    /// reached, by a Refining Intent. The tickets that introduce a condition add it here, ahead of the green below and reading whatever
-    /// <see cref="Intent"/> then carries, each with its member of <see cref="IntentLight"/>, its colour and its label in
-    /// <see cref="IntentWords"/>, so that the light doesn't come to rely on the colour. Checked in this order: first red, labelled Failed
-    /// (a Failed Task, Sandbox creation failed, a merge failed), as a failure outweighs a question; then orange, labelled Needs Attention
-    /// (an unanswered Round, a Spec awaiting approval, an agent's question, Review Comments awaiting triage). Implementing and InReview
-    /// aren't settled by the green below: the tickets that make them reachable decide their light, as an Intent In Review can be up to the
-    /// user rather than to agents.
+    /// The light an Intent shows, or <c>null</c> when it has none. This is the one place a light is derived. The tickets that introduce a
+    /// condition add it here, reading whatever <see cref="Intent"/> then carries, each with its member of <see cref="IntentLight"/>, its
+    /// colour and its label in <see cref="IntentWords"/>, so that the light doesn't come to rely on the colour. Checked in this order:
+    /// first red, labelled Failed (so far a failed Refinement, as when its Sandbox couldn't be created; later a Failed Task or a failed
+    /// merge), as a failure outweighs a question; then orange, labelled Needs Attention (an unanswered Round, a Spec awaiting approval, an
+    /// agent's question, Review Comments awaiting triage). Implementing and InReview aren't settled by the green below: the tickets that
+    /// make them reachable decide their light, as an Intent In Review can be up to the user rather than to agents.
     /// </summary>
     public static IntentLight? LightOf(Intent intent) =>
+        intent.Failure is not null ? IntentLight.Red
         // What is left is an Active Intent or a state in which nothing runs. AwaitingSpecApproval isn't Active, so it has no light until
         // its orange condition is added above.
-        ActiveStates.Contains(intent.State) ? IntentLight.Green : null;
+        : ActiveStates.Contains(intent.State) ? IntentLight.Green
+        : null;
 
     /// <summary>The Intents the Backlog shows under this filter, newest first.</summary>
     public async Task<IReadOnlyList<Intent>> ListBacklogAsync(BacklogFilter filter, CancellationToken cancellationToken)
@@ -335,6 +345,7 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
                 Repositories = intent.RepositoriesInScope.Select(repository => repository.FullName).ToList(),
                 // In the order they were made, as two can be made at the same moment.
                 Transitions = intent.Transitions.OrderBy(transition => transition.Id).Select(transition => new Transition(transition.To, transition.At)).ToList(),
+                Refinement = intent.Refinement == null ? null : new RefinementProgress(intent.Refinement.Phase, intent.Refinement.Error),
             })
             .ToListAsync(cancellationToken);
         return [.. stored.Select(intent => new Intent(
@@ -342,8 +353,16 @@ public sealed class IntentLifecycle(IDbContextFactory<OverseerDbContext> databas
             intent.Text,
             intent.State,
             ConfiguredRepositories.ParseSortedByName(intent.Repositories),
-            WorkingTimeOf(intent.State, intent.Transitions)))];
+            WorkingTimeOf(intent.State, intent.Transitions),
+            RefinementOf(intent.State, intent.Refinement)))];
     }
+
+    /// <summary>
+    /// Where the Refinement of an Intent in <paramref name="state"/> stands, from what is <paramref name="recorded"/>; <c>null</c> unless it
+    /// is Refining. A Refining Intent whose Refinement hasn't recorded anything yet is about to provision its Sandbox.
+    /// </summary>
+    private static RefinementProgress? RefinementOf(IntentState state, RefinementProgress? recorded) =>
+        state == IntentState.Refining ? recorded ?? new RefinementProgress(RefinementPhase.ProvisioningSandbox, Error: null) : null;
 
     /// <summary>A transition as Working Time needs it: the state the Intent moved to, and when.</summary>
     private readonly record struct Transition(IntentState To, DateTimeOffset At);
@@ -394,6 +413,9 @@ public enum IntentLight
 {
     /// <summary>Agents are working.</summary>
     Green,
+
+    /// <summary>The Intent has failed, and can't go on until the user acts, such as with Retry.</summary>
+    Red,
 }
 
 /// <summary>What capturing, editing, deleting or starting an Intent did.</summary>
@@ -410,10 +432,18 @@ public abstract record IntentChange
     public sealed record Refused(string Error) : IntentChange;
 }
 
-/// <summary>An Intent, as the human described it, how far it has come, the Configured Repositories it may change and its Working Time.</summary>
+/// <summary>
+/// An Intent, as the human described it, how far it has come, the Configured Repositories it may change, its Working Time and, while it
+/// is Refining, where its Refinement stands.
+/// </summary>
 /// <param name="WorkingTime"><c>null</c> for a Draft, which has none.</param>
-public sealed partial record Intent(Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope, WorkingTime? WorkingTime)
+/// <param name="Refinement"><c>null</c> unless the Intent is Refining.</param>
+public sealed partial record Intent(
+    Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope, WorkingTime? WorkingTime, RefinementProgress? Refinement)
 {
+    /// <summary>Why the Intent has failed, which turns its light red; <c>null</c> when it hasn't.</summary>
+    public string? Failure => Refinement is { Phase: RefinementPhase.Failed } failed ? failed.Error : null;
+
     /// <summary>
     /// An Intent's text as Overseer keeps it, from what the user wrote: LF line breaks whatever the browser sent, and empty when
     /// there is nothing but whitespace.
@@ -481,6 +511,9 @@ public sealed class IntentRecord
 
     /// <summary>Every change of the Intent's state, from its capture as a Draft on.</summary>
     public List<IntentTransitionRecord> Transitions { get; init; } = [];
+
+    /// <summary>Its Refinement, once one has recorded where it stands.</summary>
+    public RefinementRecord? Refinement { get; init; }
 }
 
 /// <summary>A change of an Intent's state, with its time, as PostgreSQL holds it.</summary>

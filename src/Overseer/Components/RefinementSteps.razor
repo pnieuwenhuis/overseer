@@ -1,0 +1,46 @@
+@* Where a Refining Intent's Refinement stands: its steps, what is happening now, and Retry once it has failed. *@
+@using Overseer.Refinement
+
+<section class="refinement" data-phase="@Refinement.Phase" aria-label="Refinement">
+    <ol class="refinement-steps">
+        <li class="@StepClass(RefinementPhase.ProvisioningSandbox)">Provision a Sandbox holding the Repositories in scope</li>
+        <li class="@StepClass(RefinementPhase.AnalystWorking)">The Analyst works on the Intent</li>
+    </ol>
+    @if (Refinement.Phase == RefinementPhase.Failed)
+    {
+        <p class="refinement-status" role="alert">@Refinement.Error</p>
+        @* A plain form, posted by the browser, so Retry works the same with or without the live connection. *@
+        <form method="post" action="intents/@IntentId/retry">
+            <AntiforgeryToken />
+            <button type="submit" class="btn-primary">Retry</button>
+        </form>
+    }
+    else
+    {
+        <p class="refinement-status" role="status">@Status</p>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public required Guid IntentId { get; set; }
+
+    [Parameter, EditorRequired]
+    public required RefinementProgress Refinement { get; set; }
+
+    private string Status => Refinement.Phase switch
+    {
+        RefinementPhase.ProvisioningSandbox => "Provisioning a Sandbox for the Analyst. A new Sandbox takes a few minutes.",
+        RefinementPhase.AnalystWorking => "The Analyst is working on the Intent.",
+        _ => "",
+    };
+
+    /// <summary>Whether the step of <paramref name="step"/> is done, under way or still to come.</summary>
+    private string StepClass(RefinementPhase step) => Refinement.Phase switch
+    {
+        RefinementPhase.Failed => "step-stopped",
+        var phase when phase == step => "step-current",
+        var phase when phase > step => "step-done",
+        _ => "step-pending",
+    };
+}

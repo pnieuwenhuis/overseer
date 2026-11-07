@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Intents;
+using Overseer.Sandboxes;
 using Overseer.Settings;
 using static Overseer.Tests.RepositorySetupPortal;
 
@@ -21,6 +22,8 @@ public static class IntentPortal
         string connectionString, string[] repositories, TimeProvider? time = null, IReadOnlyDictionary<string, string?>? environment = null)
     {
         var overseer = await RunningOverseer.StartAsync(connectionString, environment, time: time);
+        // A started Intent's Analyst works until the test scripts it otherwise: any outcome it ends a turn with fails it yet.
+        AnalystKeepsWorking(overseer);
         await overseer.LogInAsync();
         overseer.GitHub.AcceptToken(Token, "octocat");
         using var saved = await overseer.SubmitFormAsync("/settings", "github-token", new Dictionary<string, string> { ["GitHubToken"] = Token });
@@ -32,6 +35,10 @@ public static class IntentPortal
         }
         return overseer;
     }
+
+    /// <summary>Makes every Analyst session from now on work until it is stopped, as a started Intent's Analyst does while it refines.</summary>
+    public static void AnalystKeepsWorking(RunningOverseer overseer) =>
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(FakeAgentTurn.Endless()));
 
     /// <summary>Saves this maximum of Active Intents on the Settings page, with the other limits at their defaults.</summary>
     public static async Task SetMaxActiveIntentsAsync(RunningOverseer overseer, int maximum)

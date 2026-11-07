@@ -87,6 +87,23 @@ namespace Overseer.Persistence.Migrations
                     b.ToTable("RepositoriesInScope", (string)null);
                 });
 
+            modelBuilder.Entity("Overseer.Refinement.RefinementRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Phase")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("IntentId");
+
+                    b.ToTable("Refinements", (string)null);
+                });
+
             modelBuilder.Entity("Overseer.Repositories.ConfiguredRepositoryRecord", b =>
                 {
                     b.Property<string>("FullName")
@@ -194,8 +211,19 @@ namespace Overseer.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Overseer.Refinement.RefinementRecord", b =>
+                {
+                    b.HasOne("Overseer.Intents.IntentRecord", null)
+                        .WithOne("Refinement")
+                        .HasForeignKey("Overseer.Refinement.RefinementRecord", "IntentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Overseer.Intents.IntentRecord", b =>
                 {
+                    b.Navigation("Refinement");
+
                     b.Navigation("RepositoriesInScope");
 
                     b.Navigation("Transitions");

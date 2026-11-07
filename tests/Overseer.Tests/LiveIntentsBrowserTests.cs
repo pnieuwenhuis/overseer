@@ -276,6 +276,54 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         return tab;
     }
 
+    [Fact]
+    public async Task An_open_detail_page_follows_the_Refinement_live_through_provisioning_a_failure_and_a_Retry_to_the_Analyst_working()
+    {
+        var time = new FakeTimeProvider();
+        await using var overseer = await StartOverseerAsync(time);
+        overseer.Sandboxes.ProvisioningDelay = TimeSpan.FromMinutes(4);
+        overseer.Sandboxes.FailNextCreation("Allocation failed.");
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        await using var session = await chromium.LogInAsync(overseer);
+        var detail = await OpenAsync(session, address);
+        await AwaitDetailConnectedAsync(overseer, address, "Export data", detail);
+
+        using var started = await overseer.SubmitFormAsync(address, "start-intent", []);
+
+        var refinement = detail.Locator(".refinement");
+        await Expect(refinement).ToHaveAttributeAsync("data-phase", "ProvisioningSandbox");
+        await Expect(refinement.GetByRole(AriaRole.Status)).ToHaveTextAsync("Provisioning a Sandbox for the Analyst. A new Sandbox takes a few minutes.");
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Green");
+        await AdvanceUntilAsync(time, refinement, "Failed");
+        await Expect(refinement.GetByRole(AriaRole.Alert)).ToHaveTextAsync("The Sandbox could not be created: Allocation failed.");
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Red");
+        await Expect(detail.Locator(".intent-light")).ToHaveTextAsync("Failed");
+        Assert.True(await WasNotReloadedAsync(detail));
+
+        await detail.GetByRole(AriaRole.Button, new PageGetByRoleOptions { Name = "Retry" }).ClickAsync();
+
+        await AdvanceUntilAsync(time, refinement, "AnalystWorking");
+        await Expect(refinement.GetByRole(AriaRole.Status)).ToHaveTextAsync("The Analyst is working on the Intent.");
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Green");
+        await Expect(detail.Locator(".intent-state")).ToHaveTextAsync("Refining");
+    }
+
+    /// <summary>
+    /// Advances the clock until the Refinement shows this phase: until the fake Sandbox Provider has started waiting, advancing it doesn't
+    /// end its wait, so it is advanced on each look.
+    /// </summary>
+    private static async Task AdvanceUntilAsync(FakeTimeProvider time, ILocator refinement, string phase)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (await refinement.GetAttributeAsync("data-phase") != phase)
+        {
+            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for the Refinement to show {phase}.");
+            time.Advance(TimeSpan.FromMinutes(4));
+            await Task.Delay(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+        }
+    }
+
     private async Task<RunningOverseer> StartOverseerAsync(TimeProvider? time = null) =>
         await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/web"], time, PortalChromium.ServerEnvironment);
 
