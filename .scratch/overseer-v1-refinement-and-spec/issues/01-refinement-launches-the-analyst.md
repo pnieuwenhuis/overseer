@@ -12,14 +12,14 @@ If the Sandbox can't be created, the Intent stays Refining and keeps its slot. I
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Starting an Intent creates a Sandbox owned by that Intent, holding exactly its Repositories in scope, on the Sandbox machine chosen in Settings
-- [ ] Once the Sandbox is ready, an Analyst session starts in it. Its first message holds the Intent's text, the Repositories in scope and the Analyst's instructions (web search, reading code, building and running tests allowed; pushing forbidden)
-- [ ] The session gets the current harness configuration and model provider tokens like any agent session
-- [ ] Overseer's default `opencode.json` gives the Analyst web access and shell access, and denies `git push`
-- [ ] The detail page shows the Refinement phase (provisioning the Sandbox, Analyst working) and updates it live; the light is green in both phases
-- [ ] A Sandbox creation failure keeps the Intent Refining and in its slot, turns its light red with the provider's error, and offers Retry; a successful Retry turns it green again
-- [ ] A failed agent session turns the Intent red with the session's error and offers Retry, which starts a new Analyst session in a fresh Sandbox
-- [ ] Every Sandbox the Intent owned is destroyed once it is no longer used
-- [ ] Covered by tests through the application with the fake Sandbox Provider
+- [x] Starting an Intent creates a Sandbox owned by that Intent, holding exactly its Repositories in scope, on the Sandbox machine chosen in Settings
+- [x] Once the Sandbox is ready, an Analyst session starts in it. Its first message holds the Intent's text, the Repositories in scope and the Analyst's instructions (web search, reading code, building and running tests allowed; pushing forbidden)
+- [x] The session gets the current harness configuration and model provider tokens like any agent session
+- [x] Overseer's default `opencode.json` gives the Analyst web access and shell access, and denies `git push`
+- [x] The detail page shows the Refinement phase (provisioning the Sandbox, Analyst working) and updates it live; the light is green in both phases
+- [x] A Sandbox creation failure keeps the Intent Refining and in its slot, turns its light red with the provider's error, and offers Retry; a successful Retry turns it green again
+- [x] A failed agent session turns the Intent red with the session's error and offers Retry, which starts a new Analyst session in a fresh Sandbox
+- [x] Every Sandbox the Intent owned is destroyed once it is no longer used
+- [x] Covered by tests through the application with the fake Sandbox Provider
