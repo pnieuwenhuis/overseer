@@ -313,16 +313,16 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
     /// Advances the clock until the Refinement shows this phase: until the fake Sandbox Provider has started waiting, advancing it doesn't
     /// end its wait, so it is advanced on each look.
     /// </summary>
-    private static async Task AdvanceUntilAsync(FakeTimeProvider time, ILocator refinement, string phase)
-    {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
-        while (await refinement.GetAttributeAsync("data-phase") != phase)
+    private static Task AdvanceUntilAsync(FakeTimeProvider time, ILocator refinement, string phase) =>
+        RepositorySetupPortal.EventuallyAsync(async () =>
         {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for the Refinement to show {phase}.");
+            if (await refinement.GetAttributeAsync("data-phase") == phase)
+            {
+                return "";
+            }
             time.Advance(TimeSpan.FromMinutes(4));
-            await Task.Delay(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
-        }
-    }
+            return null;
+        }, $"the Refinement to show {phase}");
 
     private async Task<RunningOverseer> StartOverseerAsync(TimeProvider? time = null) =>
         await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/web"], time, PortalChromium.ServerEnvironment);

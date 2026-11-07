@@ -2,7 +2,7 @@
 @using Overseer.Refinement
 
 <section class="refinement" data-phase="@Refinement.Phase" aria-label="Refinement">
-    <ol class="refinement-steps">
+    <ol class="steps">
         <li class="@StepClass(RefinementPhase.ProvisioningSandbox)">Provision a Sandbox holding the Repositories in scope</li>
         <li class="@StepClass(RefinementPhase.AnalystWorking)">The Analyst works on the Intent</li>
     </ol>
@@ -35,12 +35,5 @@
         _ => "",
     };
 
-    /// <summary>Whether the step of <paramref name="step"/> is done, under way or still to come.</summary>
-    private string StepClass(RefinementPhase step) => Refinement.Phase switch
-    {
-        RefinementPhase.Failed => "step-stopped",
-        var phase when phase == step => "step-current",
-        var phase when phase > step => "step-done",
-        _ => "step-pending",
-    };
+    private string StepClass(RefinementPhase step) => Steps.ClassOf(Refinement.Phase, step, failed: RefinementPhase.Failed);
 }

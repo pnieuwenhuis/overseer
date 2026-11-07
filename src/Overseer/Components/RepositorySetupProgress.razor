@@ -11,14 +11,14 @@
         {
             <section class="repository-setup" data-repository="@setup.Repository" data-phase="@setup.Phase">
                 <h4><a href="@setup.Repository.WebUrl" target="_blank" rel="noopener noreferrer">@setup.Repository</a></h4>
-                <ol class="repository-setup-steps">
+                <ol class="steps">
                     <li class="step-done">Create the repository on GitHub</li>
                     <li class="@StepClass(setup.Phase, RepositorySetupPhase.ProvisioningSandbox)">Provision a Sandbox</li>
                     <li class="@StepClass(setup.Phase, RepositorySetupPhase.AgentWorking)">An agent writes the README, AGENTS.md and .overseer.yml, and pushes them to main</li>
                 </ol>
                 @if (setup.Phase == RepositorySetupPhase.Failed)
                 {
-                    <p class="repository-setup-status settings-error" role="alert">@setup.Error</p>
+                    <p class="repository-setup-status" role="alert">@setup.Error</p>
                     @* A plain form, posted by the browser, so Retry works the same with or without the live connection. *@
                     <form method="post" action="repository-setups/@setup.Id/retry">
                         <AntiforgeryToken />
@@ -65,15 +65,8 @@
         _ => "",
     };
 
-    /// <summary>Whether the step of <paramref name="step"/> is done, under way or still to come, in <paramref name="phase"/>.</summary>
-    private static string StepClass(RepositorySetupPhase phase, RepositorySetupPhase step) => phase switch
-    {
-        RepositorySetupPhase.Done => "step-done",
-        RepositorySetupPhase.Failed => "step-stopped",
-        _ when phase == step => "step-current",
-        _ when phase > step => "step-done",
-        _ => "step-pending",
-    };
+    private static string StepClass(RepositorySetupPhase phase, RepositorySetupPhase step) =>
+        Steps.ClassOf(phase, step, failed: RepositorySetupPhase.Failed);
 
     public void Dispose()
     {
