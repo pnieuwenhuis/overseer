@@ -304,6 +304,32 @@ public class RefinementTests(PostgresServer postgres)
         }, "the left-over Sandbox to be destroyed");
     }
 
+    [Fact]
+    public async Task A_Sandbox_whose_destruction_fails_while_serve_runs_stays_recorded_and_the_next_start_destroys_it()
+    {
+        var connectionString = await postgres.CreateEmptyDatabaseAsync();
+        await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"]))
+        {
+            first.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done())));
+            first.Sandboxes.FailNextDestruction("Azure could not be reached.");
+            using var saved = await SaveAsync(first, "Export data", "acme/web");
+            var address = await AddressAsync(first, "Export data");
+
+            using var started = await StartAsync(first, address);
+
+            // The Sandbox is destroyed before the Refinement is marked failed.
+            await FailedAsync(first, address);
+            await using var database = first.OpenDatabase();
+            var recorded = await database.Sandboxes.SingleAsync(TestContext.Current.CancellationToken);
+            Assert.Null(recorded.DestroyedAt);
+            Assert.Equal([recorded.ResourceId], (await first.Sandboxes.ListAsync(TestContext.Current.CancellationToken)).Select(sandbox => sandbox.ResourceId));
+        }
+
+        await using var second = await StartWithRepositoriesAsync(connectionString, []);
+
+        await NoSandboxLeftAsync(second);
+    }
+
     /// <summary>Waits for every Sandbox to be destroyed, and recorded destroyed.</summary>
     private static Task NoSandboxLeftAsync(RunningOverseer overseer) =>
         EventuallyAsync(async () =>
