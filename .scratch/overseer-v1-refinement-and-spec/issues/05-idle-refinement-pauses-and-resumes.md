@@ -4,6 +4,8 @@
 
 The resume mechanism is the one the rest of the work reuses: starting a fresh Analyst session from the saved transcript. Sending a Spec back (07) and a Revision use it too. A restart of `serve` while an Intent is Refining recovers the same way: the old Analyst session is gone, so Refinement continues in a fresh Sandbox from the transcript. That old Sandbox is destroyed.
 
+This replaces ticket 01's restart behaviour, a deliberate stopgap until now: `Refinements.StartAsync` marks every interrupted Refinement failed, with Retry, and the tests of that behaviour in `RefinementTests` change with it.
+
 The idle timeout runs on the clock seam (a `TimeProvider`), so tests don't wait. A user-initiated Pause button, and the Paused → Refining Revision, come with the pause, resume, Revision and cancel tickets.
 
 Decided: an unanswered Round that was paused stays answerable after Resume. The resumed Analyst is told which Round is still open, rather than asking it again.
