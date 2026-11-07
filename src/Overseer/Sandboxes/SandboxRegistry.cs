@@ -63,14 +63,21 @@ public sealed class SandboxRegistry(
     }
 
     /// <summary>
-    /// Starts an agent in the given role, with the agent harness configuration the Settings hold now, and every model
-    /// provider token stored now in its environment variable.
+    /// The environment variable that gives an agent OpenCode's <c>websearch</c> tool, which OpenCode offers only with it set,
+    /// unless the model comes through OpenCode's own provider (https://opencode.ai/docs/tools/#websearch). It searches through
+    /// Exa's hosted service, without a key. <c>webfetch</c>, reading a page, needs nothing.
+    /// </summary>
+    public const string WebSearchVariable = "OPENCODE_ENABLE_EXA";
+
+    /// <summary>
+    /// Starts an agent in the given role, with the agent harness configuration the Settings hold now, every model provider
+    /// token stored now in its environment variable, and web search (<see cref="WebSearchVariable"/>).
     /// </summary>
     /// <inheritdoc cref="ISandboxProvider.StartAgentSessionAsync"/>
     public async Task<IAgentSession> StartAgentSessionAsync(Sandbox sandbox, AgentRole role, CancellationToken cancellationToken)
     {
         var harness = await settings.GetAgentHarnessAsync(cancellationToken);
-        var environment = new Dictionary<string, string>();
+        var environment = new Dictionary<string, string> { [WebSearchVariable] = "1" };
         foreach (var token in await providerTokens.ListAsync(cancellationToken))
         {
             // Null when the token was removed since it was listed.

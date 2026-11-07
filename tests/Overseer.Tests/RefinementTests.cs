@@ -97,7 +97,10 @@ public class RefinementTests(PostgresServer postgres)
         var configuration = JsonNode.Parse(session.HarnessJson)!;
         // Every tool, the web and the shell among them, is allowed without asking: no one is there to answer.
         Assert.Equal("allow", configuration["permission"]!.GetValue<string>());
-        // OpenCode applies the last rule that matches a command, so these override the "*" before them.
+        // OpenCode offers websearch only with this set, unless the model comes through its own provider; webfetch needs nothing.
+        Assert.Equal("1", session.Environment["OPENCODE_ENABLE_EXA"]);
+        // OpenCode applies the last rule that matches a command, and an agent's rules over the global ones, so these override
+        // the "*" before them and the global "allow".
         var bash = configuration["agent"]!["analyst"]!["permission"]!["bash"]!.AsObject();
         Assert.Equal(
             [("*", "allow"), ("git push", "deny"), ("git push *", "deny")],

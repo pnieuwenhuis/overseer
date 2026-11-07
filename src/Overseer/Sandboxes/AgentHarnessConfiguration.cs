@@ -55,8 +55,9 @@ public sealed partial class AgentHarnessConfiguration
     /// <summary>
     /// The configuration Overseer ships: the strongest model where judgement matters most, a cheaper one elsewhere. Every tool is
     /// allowed without asking, as no one is there to answer, except that the Analyst may not <c>git push</c>: OpenCode applies the
-    /// last bash rule that matches. That is no guarantee, since the user can edit it: the guarantee has to come from the Analyst's
-    /// Sandbox itself.
+    /// last bash rule that matches, and an agent's rules over the global ones (https://opencode.ai/docs/permissions/). That is no
+    /// guarantee, since it misses a push written otherwise, such as <c>git -C web push</c>, and the user can edit it: the guarantee
+    /// has to come from the Analyst's Sandbox itself.
     /// </summary>
     public static AgentHarnessConfiguration Default { get; } = Parse(
         """
