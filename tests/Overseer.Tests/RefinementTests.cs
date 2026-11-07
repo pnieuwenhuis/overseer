@@ -1,8 +1,10 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Time.Testing;
+using Npgsql;
 using Overseer.Sandboxes;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
@@ -298,6 +300,50 @@ public class RefinementTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task After_a_restart_the_Portal_answers_no_request_until_the_interrupted_Refinements_are_marked_failed()
+    {
+        var connectionString = await postgres.CreateEmptyDatabaseAsync();
+        string address;
+        await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"]))
+        {
+            using var saved = await SaveAsync(first, "Export data", "acme/web");
+            address = await AddressAsync(first, "Export data");
+            using var started = await StartAsync(first, address);
+            await EventuallyAsync(async () => RefinementOn(await GetAsync(first, address)) is { Phase: "AnalystWorking" } shown ? shown : null, "the Analyst to start working");
+        }
+        // Holds the Refinement's row, so that marking it failed waits until the test lets go.
+        await using var holder = new NpgsqlConnection(connectionString);
+        await holder.OpenAsync(TestContext.Current.CancellationToken);
+        await using var holding = await holder.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        await using (var hold = new NpgsqlCommand("""SELECT 1 FROM "Refinements" FOR UPDATE""", holder, holding))
+        {
+            await hold.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+        var port = FreePort();
+
+        var starting = RunningOverseer.StartAsync(
+            connectionString, new Dictionary<string, string?> { ["OVERSEER_URLS"] = $"http://127.0.0.1:{port}" });
+
+        await EventuallyAsync(async () =>
+        {
+            // On a connection of its own: within the holding transaction, what PostgreSQL says of its activity doesn't change.
+            await using var watcher = new NpgsqlConnection(connectionString);
+            await watcher.OpenAsync(TestContext.Current.CancellationToken);
+            await using var waiting = new NpgsqlCommand(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'", watcher);
+            return (long)(await waiting.ExecuteScalarAsync(TestContext.Current.CancellationToken))! > 0 ? "" : null;
+        }, "marking the Refinement failed to wait for its row");
+        using (var client = new TcpClient())
+        {
+            await Assert.ThrowsAnyAsync<SocketException>(() => client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken).AsTask());
+        }
+        await holding.RollbackAsync(TestContext.Current.CancellationToken);
+        await using var second = await starting;
+        await second.LogInAsync();
+        Assert.Equal("Failed", RefinementOn(await GetAsync(second, address))!.Phase);
+    }
+
+    [Fact]
     public async Task A_Sandbox_left_over_from_a_crash_is_destroyed_when_serve_starts_again()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
@@ -370,6 +416,14 @@ public class RefinementTests(PostgresServer postgres)
             "/" + WebUtility.HtmlDecode(form.Groups[1].Value),
             new FormUrlEncodedContent(new Dictionary<string, string> { ["__RequestVerificationToken"] = token }),
             TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>A local port nothing listens on at the moment.</summary>
+    private static int FreePort()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     /// <summary>The id of the Intent at this address of its detail page.</summary>
