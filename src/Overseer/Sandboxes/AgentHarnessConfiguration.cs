@@ -57,6 +57,8 @@ public sealed partial class AgentHarnessConfiguration
         """
         {
           "$schema": "https://opencode.ai/config.json",
+          "autoupdate": false,
+          "permission": "allow",
           "agent": {
             "analyst": {
               "description": "Questions the user about an Intent and writes its Spec.",
