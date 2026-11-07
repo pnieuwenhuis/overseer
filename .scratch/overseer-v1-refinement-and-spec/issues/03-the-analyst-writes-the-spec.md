@@ -23,13 +23,13 @@ An invalid Spec is never stored. The Analyst gets the validation errors and trie
 
 **Blocked by:** 02 (Rounds: the Analyst asks, the user answers)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A turn that ends with a valid Spec stores it as Spec version 1 and moves the Intent to AwaitingSpecApproval through the Intent Lifecycle
-- [ ] The Refinement Sandbox is destroyed and the Analyst session stopped once the Spec is stored
-- [ ] An Intent awaiting Spec approval takes no Active Intent slot (new test for story 42) and shows an orange light labelled Needs Attention
-- [ ] The detail page shows the Spec's sections rendered as Markdown, with Analyst's Choices visibly marked and the optional sections only when present, followed by the ordered Task list with each Task's title, description, role and repositories
-- [ ] The transcript stays readable alongside the Spec
-- [ ] An invalid Spec is never stored; the Analyst gets the validation errors, and the Intent stays Refining
-- [ ] Working Time stops accruing when the Intent leaves Refining
-- [ ] Covered by tests through the application with the fake Sandbox Provider
+- [x] A turn that ends with a valid Spec stores it as Spec version 1 and moves the Intent to AwaitingSpecApproval through the Intent Lifecycle
+- [x] The Refinement Sandbox is destroyed and the Analyst session stopped once the Spec is stored
+- [x] An Intent awaiting Spec approval takes no Active Intent slot (new test for story 42) and shows an orange light labelled Needs Attention
+- [x] The detail page shows the Spec's sections rendered as Markdown, with Analyst's Choices visibly marked and the optional sections only when present, followed by the ordered Task list with each Task's title, description, role and repositories
+- [x] The transcript stays readable alongside the Spec
+- [x] An invalid Spec is never stored; the Analyst gets the validation errors, and the Intent stays Refining
+- [x] Working Time stops accruing when the Intent leaves Refining
+- [x] Covered by tests through the application with the fake Sandbox Provider
