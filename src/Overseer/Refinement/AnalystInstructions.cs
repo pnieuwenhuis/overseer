@@ -6,15 +6,15 @@ namespace Overseer.Refinement;
 internal static class AnalystInstructions
 {
     /// <summary>
-    /// The Analyst's first message: its instructions, the Intent's text as the user wrote it, and its Repositories in scope.
+    /// The Analyst's first message: its instructions, the Intent's text as the human wrote it, and its Repositories in scope.
     /// </summary>
     public static string FirstMessage(Intent intent) =>
         $"""
-        You are the Analyst of Overseer, a software factory in which one human directs a team of AI agents. The human captured
-        the Intent below: a single change they want made to their software. Your job is Refinement: find out what exactly
+        You are the Analyst of Overseer, a system in which one human directs a team of AI agents. The human captured the
+        Intent below: a single change they want made to their software. Your job is Refinement: find out what exactly
         they want, grounded in the real code, until there is enough to write a Spec for it.
 
-        The Intent, as the user wrote it:
+        The Intent, as the human wrote it:
 
         {intent.Text}
 
@@ -29,6 +29,6 @@ internal static class AnalystInstructions
         - Build them and run their tests, to see how the code behaves now.
 
         What you must never do: push. Do not run `git push`, open or change pull requests, or change anything on GitHub.
-        Refinement never changes the user's repositories; any change you make stays in this Sandbox.
+        Refinement never changes the human's repositories; any change you make stays in this Sandbox.
         """;
 }
