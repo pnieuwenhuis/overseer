@@ -65,18 +65,19 @@ public sealed class AzureSandboxProvider(
     /// <summary>How to reach each Sandbox, by VM name, so that only the first command after a restart asks Azure.</summary>
     private readonly ConcurrentDictionary<string, SshTarget> _targets = new();
 
-    public async Task<Sandbox> CreateAsync(
-        SandboxOwner owner, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
+    public Sandbox Name(SandboxOwner owner) => new(ResourceId($"sandbox-{Guid.NewGuid():N}"), owner);
+
+    public async Task CreateAsync(
+        Sandbox sandbox, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
     {
-        var name = $"sandbox-{Guid.NewGuid():N}";
+        var name = VirtualMachine(sandbox);
         try
         {
-            await ProvisionAsync(name, owner, machine, cancellationToken);
-            return new Sandbox(ResourceId(name), owner);
+            await ProvisionAsync(name, sandbox.Owner, machine, cancellationToken);
         }
         catch (Exception exception)
         {
-            // A Sandbox that isn't ready goes again: nothing records it, and its VM would cost money for nothing.
+            // A Sandbox that isn't ready goes again: its VM would cost money for nothing.
             string? leftOver = null;
             try
             {

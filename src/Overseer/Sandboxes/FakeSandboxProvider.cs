@@ -59,8 +59,10 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
             ? repositories
             : throw new InvalidOperationException($"Sandbox {sandbox.ResourceId} was never created.");
 
-    public async Task<Sandbox> CreateAsync(
-        SandboxOwner owner, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
+    public Sandbox Name(SandboxOwner owner) => new($"fake-sandbox-{Guid.NewGuid():N}", owner);
+
+    public async Task CreateAsync(
+        Sandbox sandbox, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
     {
         await Task.Delay(ProvisioningDelay, time, cancellationToken);
         if (_creationFailures.TryDequeue(out var error))
@@ -68,11 +70,9 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
             throw new SandboxCreationFailedException(error);
         }
 
-        var sandbox = new Sandbox($"fake-sandbox-{Guid.NewGuid():N}", owner);
         _machines[sandbox.ResourceId] = machine;
         _repositoriesInScope[sandbox.ResourceId] = [.. repositoriesInScope];
         _sandboxes[sandbox.ResourceId] = sandbox;
-        return sandbox;
     }
 
     public Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken)

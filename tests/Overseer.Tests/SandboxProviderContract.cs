@@ -157,7 +157,7 @@ public abstract class SandboxProviderContract : IAsyncDisposable
 
     private async Task<Sandbox> CreateAsync(SandboxOwner owner, SandboxMachine? machine = null)
     {
-        var sandbox = await Provider.CreateAsync(
+        var sandbox = await Provider.NameAndCreateAsync(
             owner, machine ?? SandboxMachine.Default, ["pnieuwenhuis/overseer"], TestContext.Current.CancellationToken);
         _created.Add(sandbox);
         return sandbox;
@@ -226,5 +226,18 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
     {
         Directory.Delete(_directory, recursive: true);
         return ValueTask.CompletedTask;
+    }
+}
+
+public static class SandboxProviders
+{
+    /// <summary>Names a new Sandbox for <paramref name="owner"/> and creates it, as the Sandbox registry does without recording it.</summary>
+    public static async Task<Sandbox> NameAndCreateAsync(
+        this ISandboxProvider provider, SandboxOwner owner, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope,
+        CancellationToken cancellationToken)
+    {
+        var sandbox = provider.Name(owner);
+        await provider.CreateAsync(sandbox, machine, repositoriesInScope, cancellationToken);
+        return sandbox;
     }
 }

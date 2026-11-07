@@ -233,6 +233,55 @@ public class RefinementTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task A_Sandbox_is_recorded_for_its_Intent_before_it_is_provisioned_so_a_crash_meanwhile_leaves_nothing_unrecorded()
+    {
+        var time = new FakeTimeProvider();
+        await using var overseer = await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/web"], time);
+        overseer.Sandboxes.ProvisioningDelay = TimeSpan.FromMinutes(4);
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+
+        using var started = await StartAsync(overseer, address);
+
+        // The clock never moves, so the Sandbox is still being provisioned.
+        var recorded = await EventuallyAsync(async () =>
+        {
+            await using var database = overseer.OpenDatabase();
+            return await database.Sandboxes.SingleOrDefaultAsync(TestContext.Current.CancellationToken);
+        }, "the Sandbox to be recorded");
+        Assert.Equal((SandboxOwnerKind.Intent, IdOf(address), null), (recorded.OwnerKind, recorded.OwnerId, recorded.DestroyedAt));
+        Assert.Equal("ProvisioningSandbox", RefinementOn(await GetAsync(overseer, address))!.Phase);
+    }
+
+    [Fact]
+    public async Task After_a_restart_during_provisioning_the_Refinement_is_shown_failed_and_the_Sandbox_it_was_provisioning_is_destroyed()
+    {
+        var connectionString = await postgres.CreateEmptyDatabaseAsync();
+        string address;
+        await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"], new FakeTimeProvider()))
+        {
+            first.Sandboxes.ProvisioningDelay = TimeSpan.FromMinutes(4);
+            using var saved = await SaveAsync(first, "Export data", "acme/web");
+            address = await AddressAsync(first, "Export data");
+            using var started = await StartAsync(first, address);
+            await EventuallyAsync(async () =>
+            {
+                await using var database = first.OpenDatabase();
+                return await database.Sandboxes.AnyAsync(TestContext.Current.CancellationToken) ? "" : null;
+            }, "the Sandbox to be recorded");
+        }
+
+        await using var second = await StartWithRepositoriesAsync(connectionString, []);
+
+        Assert.Equal(
+            new ShownRefinement(
+                "Failed", "Overseer restarted while a Sandbox was being provisioned for the Analyst. Retry to start the Analyst again.",
+                ("Red", "Failed"), $"intents/{IdOf(address)}/retry"),
+            RefinementOn(await GetAsync(second, address)));
+        await NoSandboxLeftAsync(second);
+    }
+
+    [Fact]
     public async Task A_Sandbox_left_over_from_a_crash_is_destroyed_when_serve_starts_again()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();

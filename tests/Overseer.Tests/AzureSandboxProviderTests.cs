@@ -31,7 +31,7 @@ public sealed class AzureSandboxProviderTests : IDisposable
     {
         var owner = new SandboxOwner(SandboxOwnerKind.RepositorySetup, Guid.NewGuid());
 
-        var sandbox = await Provider().CreateAsync(owner, SandboxMachine.Default, ["pnieuwenhuis/overseer"], TestContext.Current.CancellationToken);
+        var sandbox = await Provider().NameAndCreateAsync(owner, SandboxMachine.Default, ["pnieuwenhuis/overseer"], TestContext.Current.CancellationToken);
 
         var vm = _az.CallTo("vm", "create");
         Assert.Equal(Subscription, FakeAzureCli.Value(vm, "--subscription"));
@@ -378,7 +378,7 @@ public sealed class AzureSandboxProviderTests : IDisposable
     }
 
     private Task<Sandbox> CreateAsync(AzureSandboxProvider provider, SandboxMachine? machine = null) =>
-        provider.CreateAsync(
+        provider.NameAndCreateAsync(
             new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), machine ?? SandboxMachine.Default, ["pnieuwenhuis/overseer"],
             TestContext.Current.CancellationToken);
 

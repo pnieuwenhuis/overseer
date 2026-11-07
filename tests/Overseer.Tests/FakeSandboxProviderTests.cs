@@ -154,7 +154,7 @@ public class FakeSandboxProviderTests
     public async Task The_messages_sent_to_agents_and_the_repositories_Sandboxes_hold_are_recorded()
     {
         var owner = new SandboxOwner(SandboxOwnerKind.RepositorySetup, Guid.NewGuid());
-        var sandbox = await _provider.CreateAsync(owner, SandboxMachine.Default, ["acme/web"], TestContext.Current.CancellationToken);
+        var sandbox = await _provider.NameAndCreateAsync(owner, SandboxMachine.Default, ["acme/web"], TestContext.Current.CancellationToken);
 
         await SendFirstMessageAsync(sandbox, AgentRole.Developer);
 
@@ -183,5 +183,5 @@ public class FakeSandboxProviderTests
     }
 
     private Task<Sandbox> CreateAsync() =>
-        _provider.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), SandboxMachine.Default, [], TestContext.Current.CancellationToken);
+        _provider.NameAndCreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), SandboxMachine.Default, [], TestContext.Current.CancellationToken);
 }

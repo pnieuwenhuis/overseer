@@ -16,7 +16,8 @@ public sealed class SandboxRegistry(
     ModelProviderTokens providerTokens,
     ISecretReader secrets,
     IDbContextFactory<OverseerDbContext> databases,
-    TimeProvider time)
+    TimeProvider time,
+    ILogger<SandboxRegistry> logger)
 {
     /// <summary>
     /// Creates a Sandbox holding the Repositories in scope, tagged with its owner, on the machine the Settings say now.
@@ -26,16 +27,38 @@ public sealed class SandboxRegistry(
     public async Task<Sandbox> CreateAsync(SandboxOwner owner, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
     {
         var machine = await settings.GetSandboxMachineAsync(cancellationToken);
-        var sandbox = await provider.CreateAsync(owner, machine, repositoriesInScope, cancellationToken);
-        await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        database.Sandboxes.Add(new SandboxRecord
+        // Recorded before the provider is asked, so that whatever stops Overseer while the Sandbox is provisioned, a crash
+        // among them, leaves it recorded for the next start's sweep.
+        var sandbox = provider.Name(owner);
+        await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
-            OwnerKind = owner.Kind,
-            OwnerId = owner.Id,
-            ResourceId = sandbox.ResourceId,
-            CreatedAt = time.GetUtcNow(),
-        });
-        await database.SaveChangesAsync(cancellationToken);
+            database.Sandboxes.Add(new SandboxRecord
+            {
+                OwnerKind = owner.Kind,
+                OwnerId = owner.Id,
+                ResourceId = sandbox.ResourceId,
+                CreatedAt = time.GetUtcNow(),
+            });
+            await database.SaveChangesAsync(cancellationToken);
+        }
+        try
+        {
+            await provider.CreateAsync(sandbox, machine, repositoriesInScope, cancellationToken);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Whatever the provider left of it goes now; should that fail too, it stays recorded for the next start's sweep.
+            // Not while Overseer stops, which shouldn't wait for that: the sweep sees to it then.
+            try
+            {
+                await DestroyAsync(sandbox, CancellationToken.None);
+            }
+            catch (Exception destroying)
+            {
+                logger.LogError(destroying, "What is left of the Sandbox {Sandbox} could not be destroyed.", sandbox.ResourceId);
+            }
+            throw;
+        }
         return sandbox;
     }
 
@@ -69,7 +92,10 @@ public sealed class SandboxRegistry(
         return [.. records.Select(record => new Sandbox(record.ResourceId, new SandboxOwner(record.OwnerKind, record.OwnerId)))];
     }
 
-    /// <summary>Destroys the Sandbox and records when; the record itself is kept.</summary>
+    /// <summary>
+    /// Destroys the Sandbox and records when; the record itself is kept. When destroying fails, the Sandbox stays recorded
+    /// undestroyed, so that the next start's sweep (<see cref="ListRecordedAsync"/>) destroys it.
+    /// </summary>
     public async Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken)
     {
         await provider.DestroyAsync(sandbox, cancellationToken);

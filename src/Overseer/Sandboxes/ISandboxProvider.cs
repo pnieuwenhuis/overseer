@@ -9,13 +9,18 @@ namespace Overseer.Sandboxes;
 public interface ISandboxProvider
 {
     /// <summary>
-    /// Creates a Sandbox holding the Repositories in scope, tagged with its owner, on the given machine. Completes once
-    /// the Sandbox is ready for use.
+    /// Names a new Sandbox for <paramref name="owner"/>, creating nothing yet, so that it can be recorded before it exists:
+    /// pass it to <see cref="CreateAsync"/>.
+    /// </summary>
+    Sandbox Name(SandboxOwner owner);
+
+    /// <summary>
+    /// Creates the Sandbox <see cref="Name"/> named, holding the Repositories in scope, tagged with its owner, on the given
+    /// machine. Completes once the Sandbox is ready for use.
     /// </summary>
     /// <param name="repositoriesInScope">GitHub repositories as <c>owner/name</c>.</param>
     /// <exception cref="SandboxCreationFailedException">The Sandbox could not be created; the message says why.</exception>
-    Task<Sandbox> CreateAsync(
-        SandboxOwner owner, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken);
+    Task CreateAsync(Sandbox sandbox, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken);
 
     /// <summary>Runs a shell command in the Sandbox and waits for it to finish.</summary>
     Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken);
