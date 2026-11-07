@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Overseer.Intents;
 using Overseer.Sandboxes;
 using Overseer.Settings;
@@ -18,10 +19,12 @@ public static class IntentPortal
 
     /// <summary>A running Overseer, logged in, with these repositories configured.</summary>
     /// <param name="environment">Overrides the test defaults, as for <see cref="RunningOverseer.StartAsync"/>.</param>
+    /// <param name="logs">Also receives everything the server logs.</param>
     public static async Task<RunningOverseer> StartWithRepositoriesAsync(
-        string connectionString, string[] repositories, TimeProvider? time = null, IReadOnlyDictionary<string, string?>? environment = null)
+        string connectionString, string[] repositories, TimeProvider? time = null, IReadOnlyDictionary<string, string?>? environment = null,
+        ILoggerProvider? logs = null)
     {
-        var overseer = await RunningOverseer.StartAsync(connectionString, environment, time: time);
+        var overseer = await RunningOverseer.StartAsync(connectionString, environment, logs, time);
         // A started Intent's Analyst works until the test scripts it otherwise, such as to hand in a Round.
         AnalystKeepsWorking(overseer);
         await overseer.LogInAsync();

@@ -19,12 +19,6 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
     /// <summary>The roles a Task can have.</summary>
     private static readonly AgentRole[] TaskRoles = [AgentRole.Designer, AgentRole.Developer];
 
-    /// <summary>The prose sections it must have, by property.</summary>
-    private static readonly string[] RequiredSections = ["summary", "approach", "acceptanceCriteria", "dependencies"];
-
-    /// <summary>The prose sections it has only when they apply.</summary>
-    private static readonly string[] OptionalSections = ["apiEndpointChanges", "dataModelChanges", "uiChanges"];
-
     /// <summary>An example of the format, for the Analyst's instructions.</summary>
     public const string Example = """
         {
@@ -57,57 +51,57 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
         }
 
         var errors = new List<string>();
-        var sections = new Dictionary<string, string?>();
-        foreach (var section in RequiredSections)
-        {
-            sections[section] = TextOf(root, section);
-            if (sections[section] is null)
-            {
-                errors.Add($"The Spec has no \"{section}\": it must be Markdown text that isn't empty.");
-            }
-        }
-        foreach (var section in OptionalSections)
-        {
-            sections[section] = TextOf(root, section);
-            if (sections[section] is null && root.TryGetProperty(section, out var value) && value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
-            {
-                errors.Add($"The Spec's \"{section}\" must be Markdown text, or left out when there are none.");
-            }
-        }
+        var summary = RequiredSection(root, "summary", errors);
+        var approach = RequiredSection(root, "approach", errors);
+        var acceptanceCriteria = RequiredSection(root, "acceptanceCriteria", errors);
+        var dependencies = RequiredSection(root, "dependencies", errors);
+        var apiEndpointChanges = OptionalSection(root, "apiEndpointChanges", errors);
+        var dataModelChanges = OptionalSection(root, "dataModelChanges", errors);
+        var uiChanges = OptionalSection(root, "uiChanges", errors);
         var decisions = ReadDecisions(root, errors);
         var tasks = ReadTasks(root, errors);
 
         return errors.Count > 0
             ? new HandedIn<Spec>.Invalid(errors)
             : new HandedIn<Spec>.Valid(new Spec(
-                sections["summary"]!,
-                sections["approach"]!,
-                decisions,
-                sections["acceptanceCriteria"]!,
-                sections["dependencies"]!,
-                sections["apiEndpointChanges"],
-                sections["dataModelChanges"],
-                sections["uiChanges"],
-                tasks));
+                summary!, approach!, decisions, acceptanceCriteria!, dependencies!, apiEndpointChanges, dataModelChanges, uiChanges, tasks));
     });
 
+    /// <summary>The Markdown of a prose section every Spec has; <c>null</c>, with the error, when it has none.</summary>
+    private static string? RequiredSection(JsonElement root, string section, List<string> errors)
+    {
+        var text = TextOf(root, section);
+        if (text is null)
+        {
+            errors.Add($"The Spec has no \"{section}\": it must be Markdown text that isn't empty.");
+        }
+        return text;
+    }
+
+    /// <summary>
+    /// The Markdown of a prose section a Spec has only when it applies; <c>null</c> when it is left out, blank or <c>null</c>, and,
+    /// with the error, when it isn't text.
+    /// </summary>
+    private static string? OptionalSection(JsonElement root, string section, List<string> errors)
+    {
+        var text = TextOf(root, section);
+        if (text is null && root.TryGetProperty(section, out var value) && value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+        {
+            errors.Add($"The Spec's \"{section}\" must be Markdown text, or left out when there are none.");
+        }
+        return text;
+    }
+
+    /// <summary>The Spec's decisions in order, which may be none, without those that are wrong, each adding its errors.</summary>
     private static List<SpecDecision> ReadDecisions(JsonElement root, List<string> errors)
     {
-        var read = new List<SpecDecision>();
-        if (!root.TryGetProperty("decisions", out var decisions) || decisions.ValueKind != JsonValueKind.Array || decisions.GetArrayLength() == 0)
+        if (ListOf(root, "decisions") is not { } decisions)
         {
-            errors.Add("The Spec has no \"decisions\": it must be a list of at least one decision.");
-            return read;
+            errors.Add("The Spec has no \"decisions\": it must be a list of decisions, empty when there are none.");
+            return [];
         }
-        var number = 0;
-        foreach (var decision in decisions.EnumerateArray())
+        return ReadEach(decisions, "Decision", ["decision", "analystsChoice"], errors, (decision, number) =>
         {
-            number++;
-            if (decision.ValueKind != JsonValueKind.Object)
-            {
-                errors.Add($"Decision {number} must be an object with \"decision\" and \"analystsChoice\".");
-                continue;
-            }
             var text = TextOf(decision, "decision");
             if (text is null)
             {
@@ -120,31 +114,20 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
             {
                 errors.Add($"Decision {number} has no \"analystsChoice\": it must be true when the human left the decision to you, and false otherwise.");
             }
-            if (text is not null && analystsChoice is { } isAnalystsChoice)
-            {
-                read.Add(new SpecDecision(text, isAnalystsChoice));
-            }
-        }
-        return read;
+            return text is not null && analystsChoice is { } isAnalystsChoice ? new SpecDecision(text, isAnalystsChoice) : null;
+        });
     }
 
+    /// <summary>The Spec's Tasks in order, at least one, without those that are wrong, each adding its errors.</summary>
     private List<SpecTask> ReadTasks(JsonElement root, List<string> errors)
     {
-        var read = new List<SpecTask>();
-        if (!root.TryGetProperty("tasks", out var tasks) || tasks.ValueKind != JsonValueKind.Array || tasks.GetArrayLength() == 0)
+        if (ListOf(root, "tasks") is not { Count: > 0 } tasks)
         {
             errors.Add("The Spec has no Tasks: \"tasks\" must be a list of at least one Task.");
-            return read;
+            return [];
         }
-        var number = 0;
-        foreach (var task in tasks.EnumerateArray())
+        return ReadEach(tasks, "Task", ["title", "description", "role", "repositories"], errors, (task, number) =>
         {
-            number++;
-            if (task.ValueKind != JsonValueKind.Object)
-            {
-                errors.Add($"Task {number} must be an object with \"title\", \"description\", \"role\" and \"repositories\".");
-                continue;
-            }
             var before = errors.Count;
             var title = TextOf(task, "title");
             if (title is null)
@@ -158,14 +141,11 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
             }
             var role = ReadRole(task, number, errors);
             var repositories = ReadRepositories(task, number, errors);
-            if (errors.Count == before)
-            {
-                read.Add(new SpecTask(number, title!, description!, role!.Value, repositories));
-            }
-        }
-        return read;
+            return errors.Count == before ? new SpecTask(number, title!, description!, role!.Value, repositories) : null;
+        });
     }
 
+    /// <summary>The role of Task <paramref name="number"/>, Designer or Developer; <c>null</c>, with the error, when it has neither.</summary>
     private static AgentRole? ReadRole(JsonElement task, int number, List<string> errors)
     {
         var allowed = string.Join(" or ", TaskRoles.Select(role => $"\"{role}\""));
@@ -182,16 +162,20 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
         return null;
     }
 
+    /// <summary>
+    /// The Repositories in scope Task <paramref name="number"/> touches, at least one, each once and as the Intent has it in scope;
+    /// any other it names adds an error.
+    /// </summary>
     private List<RepositoryName> ReadRepositories(JsonElement task, int number, List<string> errors)
     {
         var inScope = string.Join(", ", repositoriesInScope);
-        if (!task.TryGetProperty("repositories", out var repositories) || repositories.ValueKind != JsonValueKind.Array || repositories.GetArrayLength() == 0)
+        if (ListOf(task, "repositories") is not { Count: > 0 } repositories)
         {
             errors.Add($"Task {number} touches no repository: \"repositories\" must list at least one of the Repositories in scope, {inScope}.");
             return [];
         }
         var read = new List<RepositoryName>();
-        foreach (var repository in repositories.EnumerateArray())
+        foreach (var repository in repositories)
         {
             var named = repository.ValueKind == JsonValueKind.String ? repository.GetString()!.Trim() : repository.GetRawText();
             if (repository.ValueKind == JsonValueKind.String && RepositoryName.TryParse(named, out var name)

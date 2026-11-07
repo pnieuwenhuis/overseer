@@ -186,6 +186,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
             {
                 { EndsNever: true } => _stopping.Task,
                 { Failure: { } failure } => Task.FromException<AgentOutcome>(new AgentSessionFailedException(failure)),
+                { EndsAfter: { } gate } => gate.ContinueWith(_ => turn.Outcome, TaskScheduler.Default),
                 _ => Task.FromResult(turn.Outcome),
             };
             return Task.FromResult(new AgentTurn(turn.Updates.ToAsyncEnumerable(), outcome));
@@ -229,6 +230,9 @@ public sealed record FakeAgentTurn(IReadOnlyList<string> Updates, AgentOutcome O
 
     /// <summary>Whether the turn goes on until the session is stopped, which breaks it off.</summary>
     public bool EndsNever { get; init; }
+
+    /// <summary>When set, the turn ends with its outcome only once this completes, so that a test can act while the agent works.</summary>
+    public Task? EndsAfter { get; init; }
 
     /// <summary>The files the agent writes in its Sandbox during the turn, by absolute path, such as what it hands in.</summary>
     public IReadOnlyDictionary<string, string> Writes { get; init; } = new Dictionary<string, string>();

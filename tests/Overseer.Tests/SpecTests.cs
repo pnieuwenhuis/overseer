@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Time.Testing;
+using Overseer.Intents;
 using Overseer.Sandboxes;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
@@ -189,6 +190,108 @@ public class SpecTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task A_Spec_may_record_no_decisions_and_the_detail_page_says_there_are_none()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        var spec = Spec();
+        spec["decisions"] = new JsonArray();
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(spec)));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+
+        using var started = await StartAsync(overseer, address);
+
+        var page = await AwaitingSpecApprovalAsync(overseer, address);
+        Assert.Equal(["Summary", "Approach", "Decisions", "Acceptance criteria", "Dependencies", "Tasks"], SpecSections(page));
+        Assert.Empty(Decisions(page));
+        Assert.Equal("None.", ElementText(page, "spec-no-decisions"));
+    }
+
+    [Fact]
+    public async Task Links_the_Analyst_writes_in_the_Spec_are_clickable_only_when_their_scheme_is_safe()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        var spec = Spec();
+        spec["summary"] = "[Run](javascript:alert(1)), [shout](JaVaScRiPt:alert(1)) and <javascript:alert(1)>.";
+        spec["approach"] = "See [the docs](https://example.com/docs), [plain](http://example.com), [mail](mailto:dev@example.com), "
+            + "[the code](src/orders.cs), [below](#tasks) and https://example.com/auto";
+        spec["decisions"]![0]!["decision"] = "[data](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==) and ![image](javascript:alert(1))";
+        spec["dependencies"] = "[tab](java&#9;script:alert(1)) and [encoded](&#106;avascript:alert(1))";
+        spec["tasks"]![0]!["description"] = "[vb](vbscript:msgbox(1)) and [ref][evil]\n\n[evil]: javascript:alert(1)";
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(spec)));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+
+        using var started = await StartAsync(overseer, address);
+
+        var page = await AwaitingSpecApprovalAsync(overseer, address);
+        Assert.Equal("<p>Run, shout and javascript:alert(1).</p>", SpecMarkdown(page, "Summary"));
+        Assert.Equal(
+            "<p>See <a href=\"https://example.com/docs\">the docs</a>, <a href=\"http://example.com\">plain</a>, "
+            + "<a href=\"mailto:dev@example.com\">mail</a>, <a href=\"src/orders.cs\">the code</a>, <a href=\"#tasks\">below</a> and "
+            + "<a href=\"https://example.com/auto\">https://example.com/auto</a></p>",
+            SpecMarkdown(page, "Approach"));
+        Assert.Equal("<p>data and image</p>", Decisions(page)[0].Html);
+        Assert.Equal("<p>tab and encoded</p>", SpecMarkdown(page, "Dependencies"));
+        Assert.Equal("<p>vb and ref</p>", Assert.Single(Tasks(page)).Description);
+        Assert.DoesNotMatch("(?i)(href|src)=\"\\s*(javascript|data|vbscript|java\\s)", page);
+    }
+
+    [Fact]
+    public async Task HTML_the_Analyst_writes_in_the_Spec_shows_as_text()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        var spec = Spec();
+        spec["summary"] = "Drop the <img src=x onerror=alert(1)> from the view.";
+        spec["approach"] = "<script>alert(1)</script>";
+        spec["decisions"]![0]!["decision"] = "<b onclick=\"alert(1)\">Bold</b>";
+        spec["tasks"]![0]!["description"] = "<a href=\"javascript:alert(1)\">Run</a>";
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(spec)));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+
+        using var started = await StartAsync(overseer, address);
+
+        var page = await AwaitingSpecApprovalAsync(overseer, address);
+        Assert.Equal("<p>Drop the &lt;img src=x onerror=alert(1)&gt; from the view.</p>", SpecMarkdown(page, "Summary"));
+        Assert.Equal("<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>", SpecMarkdown(page, "Approach"));
+        Assert.Equal("<p>&lt;b onclick=&quot;alert(1)&quot;&gt;Bold&lt;/b&gt;</p>", Decisions(page)[0].Html);
+        Assert.Equal("<p>&lt;a href=&quot;javascript:alert(1)&quot;&gt;Run&lt;/a&gt;</p>", Assert.Single(Tasks(page)).Description);
+    }
+
+    [Fact]
+    public async Task A_Spec_handed_in_for_an_Intent_no_longer_Refining_is_not_stored_and_the_refusal_is_logged()
+    {
+        var logs = new CapturedLogs();
+        await using var overseer = await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/web"], logs: logs);
+        var handingIn = new TaskCompletionSource();
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(Spec()) with { EndsAfter = handingIn.Task }));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        using var started = await StartAsync(overseer, address);
+        await EventuallyAsync(() => Task.FromResult(overseer.Sandboxes.MessagesSent.SingleOrDefault()), "the Analyst to start its turn");
+        // No route takes a Refining Intent elsewhere yet, so the test moves it while the Analyst works.
+        var intentId = Guid.Parse(address.Split('/')[^1]);
+        await using (var database = overseer.OpenDatabase())
+        {
+            await database.Intents.Where(intent => intent.Id == intentId)
+                .ExecuteUpdateAsync(intent => intent.SetProperty(i => i.State, IntentState.Cancelled), TestContext.Current.CancellationToken);
+        }
+
+        handingIn.SetResult();
+
+        var logged = await EventuallyAsync(
+            () => Task.FromResult(logs.Entries.FirstOrDefault(entry => entry.StartsWith("Warning Overseer.Refinement.Refinements:"))),
+            "the refusal to be logged");
+        Assert.Equal(
+            $"Warning Overseer.Refinement.Refinements: The Spec the Analyst handed in for the Intent {intentId} was not stored: "
+            + "This Intent is Cancelled, and only a Refining Intent gets a Spec from the Analyst.",
+            logged);
+        await using var stored = overseer.OpenDatabase();
+        Assert.False(await stored.SpecVersions.AnyAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task An_invalid_Spec_is_never_stored_the_Analyst_gets_the_validation_errors_and_the_Intent_stays_Refining()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
@@ -238,7 +341,8 @@ public class SpecTests(PostgresServer postgres)
     [Theory]
     [InlineData("no summary", "The Spec has no \"summary\": it must be Markdown text that isn't empty.")]
     [InlineData("blank approach", "The Spec has no \"approach\": it must be Markdown text that isn't empty.")]
-    [InlineData("no decisions", "The Spec has no \"decisions\": it must be a list of at least one decision.")]
+    [InlineData("no decisions", "The Spec has no \"decisions\": it must be a list of decisions, empty when there are none.")]
+    [InlineData("decisions not a list", "The Spec has no \"decisions\": it must be a list of decisions, empty when there are none.")]
     [InlineData("decision without analystsChoice", "Decision 2 has no \"analystsChoice\": it must be true when the human left the decision to you, and false otherwise.")]
     [InlineData("no acceptance criteria", "The Spec has no \"acceptanceCriteria\": it must be Markdown text that isn't empty.")]
     [InlineData("no dependencies", "The Spec has no \"dependencies\": it must be Markdown text that isn't empty.")]
@@ -266,6 +370,7 @@ public class SpecTests(PostgresServer postgres)
             case "no summary": spec.Remove("summary"); break;
             case "blank approach": spec["approach"] = " \n "; break;
             case "no decisions": spec.Remove("decisions"); break;
+            case "decisions not a list": spec["decisions"] = "None."; break;
             case "decision without analystsChoice": spec["decisions"]![1]!.AsObject().Remove("analystsChoice"); break;
             case "no acceptance criteria": spec.Remove("acceptanceCriteria"); break;
             case "no dependencies": spec["dependencies"] = ""; break;
@@ -315,6 +420,7 @@ public class SpecTests(PostgresServer postgres)
         Assert.Contains("You alone decide when you know enough to write it", instructions);
         Assert.Contains("Hand in either a Round or the Spec in a turn, never both.", instructions);
         Assert.Matches("\"analystsChoice\" true when it is an\\s+Analyst's Choice", instructions);
+        Assert.Matches("Leave the list empty when there\\s+are none: don't make one up.", instructions);
         // The example it is given, the second in the instructions after the Round's, is a valid Spec for an Intent with its repository in scope.
         var example = Regex.Matches(instructions, @"^\{\n.*?^\}$", RegexOptions.Singleline | RegexOptions.Multiline)[1].Value;
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(example)));

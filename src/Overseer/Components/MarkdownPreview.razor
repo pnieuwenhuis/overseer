@@ -1,6 +1,9 @@
-@* Markdown as the Portal renders what the user wrote: CommonMark with GitHub's tables, task lists, autolinks and strikethrough, and HTML as text. *@
+@* Markdown as the Portal renders what the user or an agent wrote: CommonMark with GitHub's tables, task lists, autolinks and strikethrough, HTML as text, and only links that can't run script. *@
+@using System.Text.RegularExpressions
 @using Markdig
 @using Markdig.Extensions.EmphasisExtras
+@using Markdig.Syntax
+@using Markdig.Syntax.Inlines
 
 <section class="markdown-preview" aria-label="@Label">
     @if (string.IsNullOrWhiteSpace(Text))
@@ -22,9 +25,50 @@
     public required string Text { get; set; }
 
     // GitHub's extensions to Markdown, without heading ids that could clash with the page's. HTML in the Markdown shows as
-    // text, so the preview can't run scripts or restyle the page.
-    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
-        .UsePipeTables().UseTaskLists().UseAutoLinks().UseEmphasisExtras(EmphasisExtraOptions.Strikethrough)
-        .DisableHtml()
-        .Build();
+    // text, and links and images with an unsafe address as their text, so the preview can't run scripts or restyle the page.
+    private static readonly MarkdownPipeline Pipeline = CreatePipeline();
+
+    private static MarkdownPipeline CreatePipeline()
+    {
+        var builder = new MarkdownPipelineBuilder()
+            .UsePipeTables().UseTaskLists().UseAutoLinks().UseEmphasisExtras(EmphasisExtraOptions.Strikethrough)
+            .DisableHtml();
+        builder.DocumentProcessed += UnlinkUnsafeAddresses;
+        return builder.Build();
+    }
+
+    /// <summary>
+    /// Replaces each link and image in <paramref name="document"/> whose address isn't <see cref="IsSafe"/> with its text, so that
+    /// it is shown but leads nowhere.
+    /// </summary>
+    private static void UnlinkUnsafeAddresses(MarkdownDocument document)
+    {
+        foreach (var link in document.Descendants<LinkInline>().Where(link => !IsSafe(link.Url)).ToList())
+        {
+            while (link.FirstChild is { } child)
+            {
+                child.Remove();
+                link.InsertBefore(child);
+            }
+            link.Remove();
+        }
+        foreach (var autolink in document.Descendants<AutolinkInline>().Where(autolink => !autolink.IsEmail && !IsSafe(autolink.Url)).ToList())
+        {
+            autolink.ReplaceBy(new LiteralInline(autolink.Url));
+        }
+    }
+
+    /// <summary>
+    /// Whether a link to <paramref name="address"/> is safe to follow: one with no scheme, relative to the page or an anchor on it,
+    /// or one with http, https or mailto. Others, such as javascript, data and vbscript, can run script. The scheme is read as a
+    /// browser reads it, ignoring tabs and line breaks anywhere, and control characters and spaces ahead of it.
+    /// </summary>
+    private static bool IsSafe(string? address) =>
+        Scheme.Match((address ?? "").Replace("\t", "").Replace("\n", "").Replace("\r", "")) is not { Success: true } scheme
+            || SafeSchemes.Contains(scheme.Groups[1].Value, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The scheme at the start of an address: before the first colon, with no slash, ? or # ahead of it.</summary>
+    private static readonly Regex Scheme = new("^[\\x00-\\x20]*([a-zA-Z][a-zA-Z0-9+.-]*):");
+
+    private static readonly string[] SafeSchemes = ["http", "https", "mailto"];
 }

@@ -5,6 +5,7 @@ using Overseer.Intents;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
 using Overseer.Specs;
+using HandedRound = Overseer.Sandboxes.HandedIn<System.Collections.Generic.IReadOnlyList<Overseer.Refinement.HandedInQuestion>>;
 
 namespace Overseer.Refinement;
 
@@ -280,22 +281,27 @@ public sealed class Refinements(
                 var spec = await specHandIn.TakeAsync(sandboxes, sandbox, cancellationToken);
                 switch (round, spec)
                 {
-                    case (HandedIn<IReadOnlyList<HandedInQuestion>>.Valid(var questions), HandedIn<Spec>.Nothing):
+                    case (HandedRound.Valid(var questions), HandedIn<Spec>.Nothing):
                         failedHandIns = 0;
                         message = AnalystInstructions.Answers(await AskAsync(intentId, questions, cancellationToken));
                         continue;
-                    case (HandedIn<IReadOnlyList<HandedInQuestion>>.Nothing, HandedIn<Spec>.Valid(var written)):
-                        // The Refinement ends here: the Intent is no longer Refining, and the session and Sandbox go.
-                        await lifecycle.AwaitSpecApprovalAsync(
-                            intentId, (database, stopping) => SpecStore.AddVersionAsync(database, intentId, written, time.GetUtcNow(), stopping), cancellationToken);
+                    case (HandedRound.Nothing, HandedIn<Spec>.Valid(var written)):
+                        // The Refinement ends here: the Intent is no longer Refining, and the session and Sandbox go. Should it have
+                        // left Refining meanwhile, the Spec is not stored, and the Refinement is no longer the Intent's to run.
+                        if (await lifecycle.AwaitSpecApprovalAsync(
+                                intentId, (database, stopping) => SpecStore.AddVersionAsync(database, intentId, written, time.GetUtcNow(), stopping), cancellationToken)
+                            is IntentChange.Refused refused)
+                        {
+                            logger.LogWarning("The Spec the Analyst handed in for the Intent {IntentId} was not stored: {Error}", intentId, refused.Error);
+                        }
                         return null;
                 }
                 // What went wrong, for the human should the Refinement fail of it, and what the Analyst is told to set it right.
                 var (wrong, retell) = (round, spec) switch
                 {
-                    (not HandedIn<IReadOnlyList<HandedInQuestion>>.Nothing, not HandedIn<Spec>.Nothing) =>
-                        ("it handed in both a Round and a Spec.", AnalystInstructions.RoundAndSpec),
-                    (HandedIn<IReadOnlyList<HandedInQuestion>>.Invalid(var errors), _) =>
+                    (not HandedRound.Nothing, not HandedIn<Spec>.Nothing) =>
+                        ("it handed in both a Round and a Spec.", AnalystInstructions.BothHandedIn),
+                    (HandedRound.Invalid(var errors), _) =>
                         ($"its Round was not valid: {string.Join(" ", errors)}", AnalystInstructions.InvalidRound(errors)),
                     (_, HandedIn<Spec>.Invalid(var errors)) =>
                         ($"its Spec was not valid: {string.Join(" ", errors)}", AnalystInstructions.InvalidSpec(errors)),

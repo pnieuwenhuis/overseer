@@ -13,18 +13,25 @@
     @Section("Approach", Spec.Approach)
     <section class="spec-section" data-section="Decisions">
         <h3>Decisions</h3>
-        <ol class="spec-decisions">
-            @foreach (var (decision, number) in Spec.Decisions.Select((decision, index) => (decision, index + 1)))
-            {
-                <li class="spec-decision" data-analysts-choice="@decision.IsAnalystsChoice">
-                    @if (decision.IsAnalystsChoice)
-                    {
-                        <p class="analysts-choice">Analyst's Choice</p>
-                    }
-                    <MarkdownPreview Label="@($"Decision {number}")" Text="@decision.Text" />
-                </li>
-            }
-        </ol>
+        @if (Spec.Decisions.Count == 0)
+        {
+            <p class="spec-no-decisions">None.</p>
+        }
+        else
+        {
+            <ol class="spec-decisions">
+                @foreach (var (decision, number) in Spec.Decisions.Select((decision, index) => (decision, index + 1)))
+                {
+                    <li class="spec-decision" data-analysts-choice="@decision.IsAnalystsChoice">
+                        @if (decision.IsAnalystsChoice)
+                        {
+                            <p class="analysts-choice">Analyst's Choice</p>
+                        }
+                        <MarkdownPreview Label="@($"Decision {number}")" Text="@decision.Text" />
+                    </li>
+                }
+            </ol>
+        }
     </section>
     @Section("Acceptance criteria", Spec.AcceptanceCriteria)
     @Section("Dependencies", Spec.Dependencies)
@@ -59,6 +66,7 @@
 </section>
 
 @code {
+    /// <summary>The version of the Spec to show.</summary>
     [Parameter, EditorRequired]
     public required SpecVersion Version { get; set; }
 

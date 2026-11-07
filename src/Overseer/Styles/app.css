@@ -1217,6 +1217,10 @@
         gap: 0.75rem;
     }
 
+    .spec-no-decisions {
+        color: var(--color-muted);
+    }
+
     .spec-decision {
         border-left: 2px solid var(--color-line);
         padding-left: 0.875rem;

@@ -40,8 +40,7 @@ public sealed class SpecStore(IDbContextFactory<OverseerDbContext> databases)
     /// Adds <paramref name="spec"/> as the Intent's next Spec version in <paramref name="database"/>, to be saved with its
     /// transaction. Its Tasks are numbered in their order.
     /// </summary>
-    /// <returns>The number of the version.</returns>
-    internal static async Task<int> AddVersionAsync(
+    internal static async Task AddVersionAsync(
         OverseerDbContext database, Guid intentId, Spec spec, DateTimeOffset writtenAt, CancellationToken cancellationToken)
     {
         // Under the lock on the Intent's row, which whoever adds a version holds, so that no other version is added meanwhile.
@@ -77,6 +76,5 @@ public sealed class SpecStore(IDbContextFactory<OverseerDbContext> databases)
                 Repositories = [.. task.Repositories.Select(repository => repository.ToString())],
             })],
         });
-        return number;
     }
 }
