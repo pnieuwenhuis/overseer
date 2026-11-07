@@ -1,0 +1,73 @@
+@* The Refinement transcript: every Round the Analyst put to the user, with the answers given, and the open Round as a form to answer it. *@
+@using Overseer.Refinement
+
+<section class="rounds" aria-label="Rounds">
+    @foreach (var round in Transcript)
+    {
+        var open = round.Number == OpenRound;
+        <article class="round" data-round="@round.Number" data-open="@open">
+            <h2>Round @round.Number</h2>
+            @if (open)
+            {
+                <p class="form-note">
+                    Write your own answer, or tick As suggested or leave it blank to accept the Analyst's suggestion as an Analyst's Choice.
+                </p>
+                @* A plain form, posted by the browser, so answers go the same with or without the live connection. The static page handles it, under this name. *@
+                <form method="post" action="intents/@IntentId" class="round-form">
+                    <input type="hidden" name="_handler" value="@Pages.IntentDetail.AnswerFormName" />
+                    <input type="hidden" name="@Pages.IntentDetail.RoundField" value="@round.Number" />
+                    <AntiforgeryToken />
+                    <ol class="round-questions">
+                        @foreach (var question in round.Questions)
+                        {
+                            <li class="round-question" data-question="@question.Number">
+                                <Question Number="question.Number" Text="@question.Text" SuggestedAnswer="@question.SuggestedAnswer" />
+                                <label class="question-own-answer">
+                                    <span>Your answer to question @question.Number</span>
+                                    <textarea name="@Pages.IntentDetail.AnswerField(question.Number)" rows="2"></textarea>
+                                </label>
+                                <label class="question-as-suggested">
+                                    <input type="checkbox" name="@Pages.IntentDetail.AsSuggestedField" value="@question.Number" />
+                                    As suggested
+                                </label>
+                            </li>
+                        }
+                    </ol>
+                    <button type="submit" class="btn-primary">Send answers</button>
+                </form>
+            }
+            else
+            {
+                <ol class="round-questions">
+                    @foreach (var question in round.Questions)
+                    {
+                        <li class="round-question" data-question="@question.Number">
+                            <Question Number="question.Number" Text="@question.Text" SuggestedAnswer="@question.SuggestedAnswer" />
+                            @if (question.Answer is { } answer)
+                            {
+                                <p class="question-answer-label">@(answer.IsAnalystsChoice ? "Analyst's Choice" : "Your answer")</p>
+                                <p class="question-answer" data-analysts-choice="@answer.IsAnalystsChoice">@answer.Text</p>
+                            }
+                            else
+                            {
+                                <p class="question-unanswered">Not answered</p>
+                            }
+                        </li>
+                    }
+                </ol>
+            }
+        </article>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public required Guid IntentId { get; set; }
+
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<Round> Transcript { get; set; }
+
+    /// <summary>The number of the Round that awaits the user's answers; <c>null</c> when none does.</summary>
+    [Parameter]
+    public int? OpenRound { get; set; }
+}

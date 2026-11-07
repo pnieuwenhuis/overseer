@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Time.Testing;
 using Microsoft.Playwright;
 using Overseer.Intents;
+using Overseer.Sandboxes;
 using static Microsoft.Playwright.Assertions;
 using static Overseer.Tests.IntentPortal;
 
@@ -307,6 +308,53 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         await Expect(refinement.GetByRole(AriaRole.Status)).ToHaveTextAsync("The Analyst is working on the Intent.");
         await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Green");
         await Expect(detail.Locator(".intent-state")).ToHaveTextAsync("Refining");
+    }
+
+    [Fact]
+    public async Task An_open_detail_page_shows_a_Round_as_it_comes_in_and_its_answers_once_sent_with_the_light_back_to_green()
+    {
+        var time = new FakeTimeProvider();
+        await using var overseer = await StartOverseerAsync(time);
+        overseer.Sandboxes.ProvisioningDelay = TimeSpan.FromMinutes(4);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
+            RoundsTests.HandsInRound(("Which format?", "CSV."), ("Which page offers it?", "The orders page."), ("Up to how many rows?", "All of them.")),
+            FakeAgentTurn.Endless()));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        await using var session = await chromium.LogInAsync(overseer);
+        var detail = await OpenAsync(session, address);
+        var backlog = await OpenAsync(session, "/");
+        await AwaitDetailConnectedAsync(overseer, address, "Export data", detail);
+        await AwaitBacklogConnectedAsync(overseer, backlog);
+
+        using var started = await overseer.SubmitFormAsync(address, "start-intent", []);
+
+        var refinement = detail.Locator(".refinement");
+        await AdvanceUntilAsync(time, refinement, "AwaitingAnswers");
+        await Expect(refinement.GetByRole(AriaRole.Status)).ToHaveTextAsync("The Analyst asks you the questions of Round 1 below.");
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Orange");
+        await Expect(detail.Locator(".intent-light")).ToHaveTextAsync("Needs Attention");
+        await Expect(BacklogIntent(backlog, "Export data").Locator(".intent-light")).ToHaveTextAsync("Needs Attention");
+        var round = detail.Locator("article.round");
+        await Expect(round.GetByRole(AriaRole.Heading)).ToHaveTextAsync("Round 1");
+        await Expect(round.Locator(".question-text")).ToHaveTextAsync(["Which format?", "Which page offers it?", "Up to how many rows?"]);
+        await Expect(round.Locator(".question-suggestion")).ToHaveTextAsync(["CSV.", "The orders page.", "All of them."]);
+        Assert.True(await WasNotReloadedAsync(detail));
+
+        await detail.GetByLabel("Your answer to question 1").FillAsync("Excel.");
+        await round.Locator("[data-question='2']").GetByLabel("As suggested").CheckAsync();
+        await detail.GetByRole(AriaRole.Button, new PageGetByRoleOptions { Name = "Send answers" }).ClickAsync();
+
+        await Expect(refinement).ToHaveAttributeAsync("data-phase", "AnalystWorking");
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Green");
+        await Expect(BacklogIntent(backlog, "Export data").Locator(".intent-light")).ToHaveTextAsync("Working");
+        await Expect(round.Locator(".question-answer")).ToHaveTextAsync(["Excel.", "The orders page.", "All of them."]);
+        await Expect(round.Locator(".question-answer-label")).ToHaveTextAsync(["Your answer", "Analyst's Choice", "Analyst's Choice"]);
+        await Expect(detail.GetByRole(AriaRole.Button, new PageGetByRoleOptions { Name = "Send answers" })).ToHaveCountAsync(0);
+        var sent = overseer.Sandboxes.MessagesSent[1].Message;
+        Assert.Contains("Question 1: Which format?\nThe human's answer: Excel.", sent);
+        Assert.Contains("Question 2: Which page offers it?\nAnalyst's Choice", sent);
+        Assert.Contains("Question 3: Up to how many rows?\nAnalyst's Choice", sent);
     }
 
     /// <summary>

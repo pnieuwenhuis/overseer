@@ -1,0 +1,16 @@
+@* A question of a Round: its number, its text and the Analyst's suggested answer. *@
+
+<p class="question-heading"><span class="question-number">@Number.</span> <span class="question-text">@Text</span></p>
+<p class="question-suggestion-label">Suggested answer</p>
+<p class="question-suggestion">@SuggestedAnswer</p>
+
+@code {
+    [Parameter, EditorRequired]
+    public required int Number { get; set; }
+
+    [Parameter, EditorRequired]
+    public required string Text { get; set; }
+
+    [Parameter, EditorRequired]
+    public required string SuggestedAnswer { get; set; }
+}

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Overseer.Intents;
@@ -8,18 +9,29 @@ namespace Overseer.Refinement;
 
 /// <summary>
 /// Refinement: when the Intent Lifecycle moves an Intent to Refining, the Analyst works on it in a fresh Sandbox the Intent
-/// owns, holding its Repositories in scope. Where each Refinement stands is kept in PostgreSQL. It never sets an Intent's
+/// owns, holding its Repositories in scope. Each of its turns ends with a Round, which the human answers in the same Analyst
+/// session. Where each Refinement stands, and its transcript of Rounds, is kept in PostgreSQL. It never sets an Intent's
 /// state: a Refinement that fails leaves the Intent Refining, in its slot, and red until a Retry.
 /// </summary>
 public sealed class Refinements(
-    IntentLifecycle lifecycle, SandboxRegistry sandboxes, IDbContextFactory<OverseerDbContext> databases, ILogger<Refinements> logger)
+    IntentLifecycle lifecycle, SandboxRegistry sandboxes, IDbContextFactory<OverseerDbContext> databases, TimeProvider time,
+    ILogger<Refinements> logger)
     : IHostedService
 {
+    /// <summary>
+    /// How many turns in a row the Analyst may end without a valid Round, each time told what was wrong, before the Refinement
+    /// fails: an Analyst that can't hand one in would otherwise go on at the human's expense.
+    /// </summary>
+    public const int HandInAttempts = 3;
+
     private readonly SandboxedWork _work = new(sandboxes, SandboxOwnerKind.Intent, logger);
 
+    /// <summary>The Refinements waiting for the human's answers to their open Round, each completed once they are recorded.</summary>
+    private readonly ConcurrentDictionary<Guid, TaskCompletionSource> _awaitingAnswers = new();
+
     /// <summary>
-    /// Raised whenever a Refinement changes phase, on the thread that changed it, once the change is committed. Handlers must
-    /// not throw; read the Refinement again with <see cref="ProgressOfAsync"/>.
+    /// Raised whenever a Refinement changes phase or its transcript changes, on the thread that changed it, once the change is
+    /// committed. Handlers must not throw; read the Refinement again with <see cref="ProgressOfAsync"/>.
     /// </summary>
     public event Action? Changed;
 
@@ -45,10 +57,13 @@ public sealed class Refinements(
                 .ToListAsync(cancellationToken);
             foreach (var intent in interrupted)
             {
-                await EnterPhaseAsync(database, intent.Id, RefinementPhase.Failed, intent.Phase == RefinementPhase.AnalystWorking
-                    ? "Overseer restarted while the Analyst was working. Retry to start the Analyst again."
-                    : "Overseer restarted while a Sandbox was being provisioned for the Analyst. Retry to start the Analyst again.",
-                    cancellationToken);
+                await EnterPhaseAsync(database, intent.Id, RefinementPhase.Failed, intent.Phase switch
+                {
+                    RefinementPhase.AnalystWorking => "Overseer restarted while the Analyst was working. Retry to start the Analyst again.",
+                    RefinementPhase.AwaitingAnswers =>
+                        "Overseer restarted while the Analyst waited for your answers, so it can no longer take them. Retry to start the Analyst again.",
+                    _ => "Overseer restarted while a Sandbox was being provisioned for the Analyst. Retry to start the Analyst again.",
+                }, cancellationToken);
             }
         }
 
@@ -76,9 +91,90 @@ public sealed class Refinements(
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         return await database.Refinements
             .Where(refinement => refinement.IntentId == intent.Id)
-            .Select(refinement => new RefinementProgress(refinement.Phase, refinement.Error))
+            .Select(refinement => new RefinementProgress(
+                refinement.Phase,
+                refinement.Error,
+                refinement.Phase == RefinementPhase.AwaitingAnswers
+                    ? database.Rounds.Where(round => round.IntentId == intent.Id).Max(round => (int?)round.Number)
+                    : null))
             .SingleOrDefaultAsync(cancellationToken)
-            ?? new RefinementProgress(RefinementPhase.ProvisioningSandbox, Error: null);
+            ?? new RefinementProgress(RefinementPhase.ProvisioningSandbox, Error: null, OpenRound: null);
+    }
+
+    /// <summary>
+    /// The transcript of the Intent's Refinement: every Round the Analyst put to the human, in order, with the answers given.
+    /// Empty when there is none.
+    /// </summary>
+    public async Task<IReadOnlyList<Round>> TranscriptOfAsync(Guid intentId, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        return await TranscriptAsync(database, intentId, roundNumber: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Records the human's answers to the Round the Analyst waits on, and sends them to the Analyst in the same session. Refused
+    /// unless <paramref name="roundNumber"/> is the Round that is open now, so answers are taken only once.
+    /// </summary>
+    /// <param name="answers">
+    /// One answer per question, in their order: the human's own, or <c>null</c> or blank to leave it to the Analyst, which
+    /// records its suggested answer as the Analyst's Choice.
+    /// </param>
+    /// <returns>Why the answers were refused; <c>null</c> when they are recorded and on their way to the Analyst.</returns>
+    public async Task<string?> AnswerAsync(Guid intentId, int roundNumber, IReadOnlyList<string?> answers, CancellationToken cancellationToken)
+    {
+        await using (var database = await databases.CreateDbContextAsync(cancellationToken))
+        {
+            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            // The Refinement's row is where answers queue: of two submitted at once, the second finds it no longer awaiting them.
+            var taken = await database.Refinements
+                .Where(refinement => refinement.IntentId == intentId && refinement.Phase == RefinementPhase.AwaitingAnswers
+                    && database.Intents.Any(intent => intent.Id == intentId && intent.State == IntentState.Refining)
+                    && database.Rounds.Any(round => round.IntentId == intentId && round.Number == roundNumber && round.AnsweredAt == null)
+                    && !database.Rounds.Any(round => round.IntentId == intentId && round.Number > roundNumber))
+                .ExecuteUpdateAsync(refinement => refinement.SetProperty(r => r.Phase, RefinementPhase.AnalystWorking), cancellationToken);
+            if (taken == 0)
+            {
+                return await WhyNotAnswerableAsync(database, intentId, roundNumber, cancellationToken);
+            }
+            var round = await database.Rounds
+                .Include(round => round.Questions)
+                .SingleAsync(round => round.IntentId == intentId && round.Number == roundNumber, cancellationToken);
+            if (round.Questions.Count != answers.Count)
+            {
+                return $"Round {roundNumber} has {round.Questions.Count} questions, but {answers.Count} answers came.";
+            }
+            round.AnsweredAt = time.GetUtcNow();
+            foreach (var question in round.Questions)
+            {
+                var answer = answers[question.Number - 1];
+                var own = string.IsNullOrWhiteSpace(answer) ? null : answer.Trim().ReplaceLineEndings("\n");
+                question.Answer = own ?? question.SuggestedAnswer;
+                question.IsAnalystsChoice = own is null;
+            }
+            await database.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        Changed?.Invoke();
+        if (_awaitingAnswers.TryGetValue(intentId, out var answered))
+        {
+            answered.TrySetResult();
+        }
+        return null;
+    }
+
+    /// <summary>Why answers to the Round can't be taken now, said for the human.</summary>
+    private static async Task<string> WhyNotAnswerableAsync(OverseerDbContext database, Guid intentId, int roundNumber, CancellationToken cancellationToken)
+    {
+        var round = await database.Rounds
+            .Where(round => round.IntentId == intentId && round.Number == roundNumber)
+            .Select(round => new { round.AnsweredAt })
+            .SingleOrDefaultAsync(cancellationToken);
+        return round switch
+        {
+            null => $"The Analyst asked no Round {roundNumber}.",
+            { AnsweredAt: not null } => $"Round {roundNumber} is already answered.",
+            _ => $"Round {roundNumber} no longer awaits answers.",
+        };
     }
 
     /// <summary>
@@ -123,7 +219,8 @@ public sealed class Refinements(
         error => error is null ? Task.CompletedTask : EnterPhaseAsync(intentId, RefinementPhase.Failed, error, CancellationToken.None));
 
     /// <summary>
-    /// Provisions the Intent's Sandbox and has the Analyst work in it, destroying the Sandbox once it is no longer used.
+    /// Provisions the Intent's Sandbox and has the Analyst work in it, Round after Round, destroying the Sandbox once it is no
+    /// longer used.
     /// </summary>
     /// <returns>Why the Refinement failed; <c>null</c> when it is no longer the Intent's to run.</returns>
     private async Task<string?> RefineAsync(Guid intentId, CancellationToken cancellationToken)
@@ -159,31 +256,136 @@ public sealed class Refinements(
                 return $"The Analyst's session failed: {exception.Message}";
             }
             await using var session = started;
-            var turn = await session.SendAsync(AnalystInstructions.FirstMessage(intent), cancellationToken);
-            await foreach (var _ in turn.Updates.WithCancellation(cancellationToken))
+            var message = AnalystInstructions.FirstMessage(intent);
+            var failedHandIns = 0;
+            while (true)
             {
+                AgentOutcome outcome;
+                try
+                {
+                    outcome = await TakeTurnAsync(session, message, cancellationToken);
+                }
+                catch (AgentSessionFailedException exception)
+                {
+                    return $"The Analyst's session failed: {exception.Message}";
+                }
+                switch (await RoundHandIn.Instance.TakeAsync(sandboxes, sandbox, cancellationToken))
+                {
+                    case HandedIn<IReadOnlyList<HandedInQuestion>>.Valid(var questions):
+                        failedHandIns = 0;
+                        message = AnalystInstructions.Answers(await AskAsync(intentId, questions, cancellationToken));
+                        break;
+                    case HandedIn<IReadOnlyList<HandedInQuestion>>.Invalid(var errors):
+                        if (++failedHandIns == HandInAttempts)
+                        {
+                            return FailedHandIns($"its Round was not valid: {string.Join(" ", errors)}");
+                        }
+                        message = AnalystInstructions.InvalidRound(errors);
+                        break;
+                    default:
+                        if (++failedHandIns == HandInAttempts)
+                        {
+                            return FailedHandIns(outcome is AgentOutcome.AskedQuestion asked
+                                ? $"it asked a question outside a Round: {asked.Question}"
+                                : "it ended its turn without handing in a Round.");
+                        }
+                        message = AnalystInstructions.NoRound(outcome);
+                        break;
+                }
             }
-            AgentOutcome outcome;
-            try
-            {
-                outcome = await turn.Outcome.WaitAsync(cancellationToken);
-            }
-            catch (AgentSessionFailedException exception)
-            {
-                return $"The Analyst's session failed: {exception.Message}";
-            }
-            // Until the Analyst can hand in a Round or a Spec, no outcome is one Overseer can act on.
-            return outcome switch
-            {
-                AgentOutcome.AskedQuestion asked =>
-                    $"The Analyst's session failed: it asked a question outside a Round, which Overseer can't act on: {asked.Question}",
-                _ => "The Analyst's session failed: it ended its turn without a Round or a Spec, which Overseer can't act on.",
-            };
         }
         finally
         {
             await sandboxes.DestroyOrLeaveAsync(sandbox);
         }
+
+        static string FailedHandIns(string last) =>
+            $"The Analyst's session failed: it handed in no valid Round in {HandInAttempts} turns in a row. The last time, {last}";
+    }
+
+    /// <summary>Sends the Analyst a message and waits for the turn it starts to end.</summary>
+    /// <exception cref="AgentSessionFailedException">The turn broke off.</exception>
+    private static async Task<AgentOutcome> TakeTurnAsync(IAgentSession session, string message, CancellationToken cancellationToken)
+    {
+        var turn = await session.SendAsync(message, cancellationToken);
+        await foreach (var _ in turn.Updates.WithCancellation(cancellationToken))
+        {
+        }
+        return await turn.Outcome.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Records a Round of these questions as the Intent's next, puts it to the human and waits for their answers.
+    /// </summary>
+    /// <returns>The Round, answered.</returns>
+    private async Task<Round> AskAsync(Guid intentId, IReadOnlyList<HandedInQuestion> questions, CancellationToken cancellationToken)
+    {
+        var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Ahead of the Round, so that no answer comes before there is something to tell.
+        _awaitingAnswers[intentId] = answered;
+        try
+        {
+            int number;
+            await using (var database = await databases.CreateDbContextAsync(cancellationToken))
+            {
+                await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+                // One Refinement runs per Intent at a time, so no other Round is added meanwhile.
+                number = 1 + (await database.Rounds.Where(round => round.IntentId == intentId).MaxAsync(round => (int?)round.Number, cancellationToken) ?? 0);
+                database.Rounds.Add(new RoundRecord
+                {
+                    IntentId = intentId,
+                    Number = number,
+                    AskedAt = time.GetUtcNow(),
+                    Questions = [.. questions.Select((question, index) => new RoundQuestionRecord
+                    {
+                        IntentId = intentId,
+                        RoundNumber = number,
+                        Number = index + 1,
+                        Text = question.Text,
+                        SuggestedAnswer = question.SuggestedAnswer,
+                    })],
+                });
+                await database.SaveChangesAsync(cancellationToken);
+                await EnterPhaseAsync(database, intentId, RefinementPhase.AwaitingAnswers, error: null, cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+            }
+            Changed?.Invoke();
+
+            await answered.Task.WaitAsync(cancellationToken);
+            await using (var database = await databases.CreateDbContextAsync(cancellationToken))
+            {
+                return (await TranscriptAsync(database, intentId, number, cancellationToken)).Single();
+            }
+        }
+        finally
+        {
+            _awaitingAnswers.TryRemove(KeyValuePair.Create(intentId, answered));
+        }
+    }
+
+    /// <summary>The Intent's Rounds in order, or only the one numbered <paramref name="roundNumber"/>.</summary>
+    private static async Task<IReadOnlyList<Round>> TranscriptAsync(
+        OverseerDbContext database, Guid intentId, int? roundNumber, CancellationToken cancellationToken)
+    {
+        var rounds = await database.Rounds
+            .Where(round => round.IntentId == intentId && (roundNumber == null || round.Number == roundNumber))
+            .OrderBy(round => round.Number)
+            .Select(round => new
+            {
+                round.Number,
+                IsAnswered = round.AnsweredAt != null,
+                Questions = round.Questions.OrderBy(question => question.Number).ToList(),
+            })
+            .AsSplitQuery()
+            .ToListAsync(cancellationToken);
+        return [.. rounds.Select(round => new Round(
+            round.Number,
+            [.. round.Questions.Select(question => new RoundQuestion(
+                question.Number,
+                question.Text,
+                question.SuggestedAnswer,
+                question.Answer is { } answer ? new RoundAnswer(answer, question.IsAnalystsChoice) : null))],
+            round.IsAnswered))];
     }
 
     private async Task EnterPhaseAsync(Guid intentId, RefinementPhase phase, string? error, CancellationToken cancellationToken)
@@ -235,6 +437,19 @@ public sealed class RefinementFailures : IIntentFailures
             .Select(refinement => refinement.IntentId);
 }
 
+/// <summary>
+/// Turns the light of an Intent whose Analyst waits for the human's answers to a Round orange, for the Intent Lifecycle, which
+/// derives the light.
+/// </summary>
+public sealed class RefinementAttention : IIntentAttention
+{
+    public IQueryable<Guid> NeedingAttentionIn(OverseerDbContext database) =>
+        database.Refinements
+            .Where(refinement => refinement.Phase == RefinementPhase.AwaitingAnswers
+                && database.Intents.Any(intent => intent.Id == refinement.IntentId && intent.State == IntentState.Refining))
+            .Select(refinement => refinement.IntentId);
+}
+
 /// <summary>Where an Intent's Refinement stands.</summary>
 public enum RefinementPhase
 {
@@ -244,13 +459,34 @@ public enum RefinementPhase
     /// <summary>The Analyst is working on the Intent.</summary>
     AnalystWorking,
 
+    /// <summary>The Analyst waits for the human's answers to its latest Round.</summary>
+    AwaitingAnswers,
+
     /// <summary>The Refinement failed; it can be retried.</summary>
     Failed,
 }
 
 /// <summary>Where an Intent's Refinement stands, and why it failed when it did.</summary>
 /// <param name="Error"><c>null</c> unless <paramref name="Phase"/> is <see cref="RefinementPhase.Failed"/>.</param>
-public sealed record RefinementProgress(RefinementPhase Phase, string? Error);
+/// <param name="OpenRound">
+/// The number of the Round that awaits the human's answers; <c>null</c> unless <paramref name="Phase"/> is
+/// <see cref="RefinementPhase.AwaitingAnswers"/>.
+/// </param>
+public sealed record RefinementProgress(RefinementPhase Phase, string? Error, int? OpenRound);
+
+/// <summary>A Round of the Refinement transcript: the Analyst's numbered questions, with the human's answers once given.</summary>
+/// <param name="Number">Its number within the Intent's Refinement, from 1.</param>
+public sealed record Round(int Number, IReadOnlyList<RoundQuestion> Questions, bool IsAnswered);
+
+/// <summary>A question of a Round, numbered within it from 1, with the Analyst's suggested answer.</summary>
+/// <param name="Answer"><c>null</c> until the Round is answered.</param>
+public sealed record RoundQuestion(int Number, string Text, string SuggestedAnswer, RoundAnswer? Answer);
+
+/// <summary>
+/// The answer recorded for a question: the human's own, or, when they left it to the Analyst, its suggested answer as the
+/// Analyst's Choice.
+/// </summary>
+public sealed record RoundAnswer(string Text, bool IsAnalystsChoice);
 
 /// <summary>An Intent's Refinement, as PostgreSQL holds it: one per Intent, for the Refinement it has now.</summary>
 public sealed class RefinementRecord
@@ -260,4 +496,32 @@ public sealed class RefinementRecord
 
     /// <summary>Why the Refinement failed, when it did.</summary>
     public string? Error { get; set; }
+}
+
+/// <summary>A Round of an Intent's Refinement transcript, as PostgreSQL holds it.</summary>
+public sealed class RoundRecord
+{
+    public required Guid IntentId { get; init; }
+    public required int Number { get; init; }
+    public required DateTimeOffset AskedAt { get; init; }
+
+    /// <summary>When the human's answers were recorded; <c>null</c> while it has none.</summary>
+    public DateTimeOffset? AnsweredAt { get; set; }
+
+    public List<RoundQuestionRecord> Questions { get; init; } = [];
+}
+
+/// <summary>A question of a Round, as PostgreSQL holds it, with its answer once the Round is answered.</summary>
+public sealed class RoundQuestionRecord
+{
+    public required Guid IntentId { get; init; }
+    public required int RoundNumber { get; init; }
+    public required int Number { get; init; }
+    public required string Text { get; init; }
+    public required string SuggestedAnswer { get; init; }
+
+    /// <summary>The human's answer, or the suggested answer when it is the Analyst's Choice; <c>null</c> until answered.</summary>
+    public string? Answer { get; set; }
+
+    public bool IsAnalystsChoice { get; set; }
 }

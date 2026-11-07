@@ -104,6 +104,55 @@ namespace Overseer.Persistence.Migrations
                     b.ToTable("Refinements", (string)null);
                 });
 
+            modelBuilder.Entity("Overseer.Refinement.RoundQuestionRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("RoundNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Answer")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsAnalystsChoice")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("SuggestedAnswer")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("IntentId", "RoundNumber", "Number");
+
+                    b.ToTable("RoundQuestions", (string)null);
+                });
+
+            modelBuilder.Entity("Overseer.Refinement.RoundRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("AnsweredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("AskedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("IntentId", "Number");
+
+                    b.ToTable("Rounds", (string)null);
+                });
+
             modelBuilder.Entity("Overseer.Repositories.ConfiguredRepositoryRecord", b =>
                 {
                     b.Property<string>("FullName")
@@ -220,11 +269,34 @@ namespace Overseer.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Overseer.Refinement.RoundQuestionRecord", b =>
+                {
+                    b.HasOne("Overseer.Refinement.RoundRecord", null)
+                        .WithMany("Questions")
+                        .HasForeignKey("IntentId", "RoundNumber")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Overseer.Refinement.RoundRecord", b =>
+                {
+                    b.HasOne("Overseer.Intents.IntentRecord", null)
+                        .WithMany()
+                        .HasForeignKey("IntentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Overseer.Intents.IntentRecord", b =>
                 {
                     b.Navigation("RepositoriesInScope");
 
                     b.Navigation("Transitions");
+                });
+
+            modelBuilder.Entity("Overseer.Refinement.RoundRecord", b =>
+                {
+                    b.Navigation("Questions");
                 });
 #pragma warning restore 612, 618
         }

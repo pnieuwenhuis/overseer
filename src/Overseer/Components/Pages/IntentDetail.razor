@@ -1,7 +1,10 @@
 @page "/intents/{Id:guid}"
 @attribute [ExcludeFromInteractiveRouting]
+@using System.Globalization
 @using Overseer.Intents
+@using Overseer.Refinement
 @inject IntentLifecycle Lifecycle
+@inject Refinements Refinements
 @inject NavigationManager Navigation
 
 <PageTitle>@(_intent?.FirstLine ?? "Intent") · Overseer</PageTitle>
@@ -12,17 +15,30 @@
 @* A form submitted from a page opened earlier is handled whatever became of the Intent. *@
 @if (_intent is not null || IsSubmitted)
 {
-    <LiveIntent Id="Id" StartRefused="_startRefused" @rendermode="InteractiveServer" />
+    <LiveIntent Id="Id" StartRefused="_startRefused" AnswersRefused="@_answersRefused" @rendermode="InteractiveServer" />
 }
-@* Blazor handles a submitted form only when the page has a form of its name. The Start form the user sees is LiveIntent's, which goes as soon as the Intent is no longer a Draft. *@
+@* Blazor handles a submitted form only when the page has a form of its name. The Start and answer forms the user sees are LiveIntent's, which come and go as the Intent changes. *@
 @if (IsSubmitted)
 {
     <form method="post" @formname="@StartFormName" @onsubmit="StartAsync"></form>
+    <form method="post" @formname="@AnswerFormName" @onsubmit="AnswerAsync"></form>
 }
 
 @code {
     /// <summary>The name that a form submitted to this page starts the Intent under.</summary>
     public const string StartFormName = "start-intent";
+
+    /// <summary>The name that a form submitted to this page answers a Round under.</summary>
+    public const string AnswerFormName = "answer-round";
+
+    /// <summary>The field of the answer form that holds the number of the Round answered.</summary>
+    public const string RoundField = "Round";
+
+    /// <summary>The field of the answer form whose values are the numbers of the questions answered as suggested.</summary>
+    public const string AsSuggestedField = "AsSuggested";
+
+    /// <summary>The field of the answer form that holds the user's own answer to the question with this number.</summary>
+    public static string AnswerField(int question) => $"Answer.{question}";
 
     [CascadingParameter]
     private HttpContext HttpContext { get; set; } = default!;
@@ -32,6 +48,7 @@
 
     private Intent? _intent;
     private bool _startRefused;
+    private string? _answersRefused;
 
     private bool IsSubmitted => HttpMethods.IsPost(HttpContext.Request.Method);
 
@@ -55,6 +72,29 @@
                 // LiveIntent then reads the Intent again, and says why as it is now.
                 _startRefused = true;
                 break;
+        }
+    }
+
+    private async Task AnswerAsync()
+    {
+        var form = HttpContext.Request.Form;
+        if (!int.TryParse(form[RoundField], out var number))
+        {
+            _answersRefused = "They didn't say which Round they answer.";
+            return;
+        }
+        // One answer per question the Round has; a question the form doesn't answer is left to the Analyst.
+        var round = (await Refinements.TranscriptOfAsync(Id, HttpContext.RequestAborted)).SingleOrDefault(round => round.Number == number);
+        var asSuggested = form[AsSuggestedField].ToHashSet();
+        IReadOnlyList<string?> answers = round is null
+            ? []
+            : [.. round.Questions.Select(question => asSuggested.Contains(question.Number.ToString(CultureInfo.InvariantCulture))
+                ? null
+                : (string?)form[AnswerField(question.Number)])];
+        _answersRefused = await Refinements.AnswerAsync(Id, number, answers, HttpContext.RequestAborted);
+        if (_answersRefused is null)
+        {
+            Navigation.NavigateTo($"/intents/{Id}");
         }
     }
 }

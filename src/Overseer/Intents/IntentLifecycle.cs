@@ -10,7 +10,7 @@ namespace Overseer.Intents;
 
 /// <summary>Owns the Intents' state: everything else asks it to capture or change an Intent and never sets state directly.</summary>
 public sealed class IntentLifecycle(
-    IDbContextFactory<OverseerDbContext> databases, SettingsStore settings, TimeProvider time, IIntentFailures failures)
+    IDbContextFactory<OverseerDbContext> databases, SettingsStore settings, TimeProvider time, IIntentFailures failures, IIntentAttention attention)
 {
     /// <summary>The states of an Active Intent, each occupying a slot; what counts towards the maximum is defined here and nowhere else.</summary>
     private static readonly IntentState[] ActiveStates = [IntentState.Refining, IntentState.Implementing, IntentState.InReview];
@@ -152,12 +152,15 @@ public sealed class IntentLifecycle(
     /// condition add it here, reading whatever <see cref="Intent"/> then carries, each with its member of <see cref="IntentLight"/>, its
     /// colour and its label in <see cref="IntentWords"/>, so that the light doesn't come to rely on the colour. Checked in this order:
     /// first red, labelled Failed, when <see cref="Intent.HasFailed"/> (so far a failed Refinement, as when its Sandbox couldn't be
-    /// created; later a Failed Task or a failed merge, each through <see cref="IIntentFailures"/>), as a failure outweighs a question; then orange, labelled Needs Attention (an unanswered Round, a Spec awaiting approval, an
-    /// agent's question, Review Comments awaiting triage). Implementing and InReview aren't settled by the green below: the tickets that
-    /// make them reachable decide their light, as an Intent In Review can be up to the user rather than to agents.
+    /// created; later a Failed Task or a failed merge, each through <see cref="IIntentFailures"/>), as a failure outweighs a question; then
+    /// orange, labelled Needs Attention, when <see cref="Intent.NeedsAttention"/> (so far an unanswered Round; later a Spec awaiting
+    /// approval, an agent's question, Review Comments awaiting triage, the agents' through <see cref="IIntentAttention"/>). Implementing and
+    /// InReview aren't settled by the green below: the tickets that make them reachable decide their light, as an Intent In Review can be up
+    /// to the user rather than to agents.
     /// </summary>
     public static IntentLight? LightOf(Intent intent) =>
         intent.HasFailed ? IntentLight.Red
+        : intent.NeedsAttention ? IntentLight.Orange
         // What is left is an Active Intent or a state in which nothing runs. AwaitingSpecApproval isn't Active, so it has no light until
         // its orange condition is added above.
         : ActiveStates.Contains(intent.State) ? IntentLight.Green
@@ -340,6 +343,7 @@ public sealed class IntentLifecycle(
     private async Task<IReadOnlyList<Intent>> ReadAsync(OverseerDbContext database, IQueryable<IntentRecord> intents, CancellationToken cancellationToken)
     {
         var failed = failures.FailedIn(database);
+        var needingAttention = attention.NeedingAttentionIn(database);
         var stored = await intents
             // One query for the Repositories in scope and one for the transitions, rather than a row for each combination of them.
             .AsSplitQuery()
@@ -353,6 +357,7 @@ public sealed class IntentLifecycle(
                 // In the order they were made, as two can be made at the same moment.
                 Transitions = intent.Transitions.OrderBy(transition => transition.Id).Select(transition => new Transition(transition.To, transition.At)).ToList(),
                 HasFailed = failed.Contains(intent.Id),
+                NeedsAttention = needingAttention.Contains(intent.Id),
             })
             .ToListAsync(cancellationToken);
         return [.. stored.Select(intent => new Intent(
@@ -361,7 +366,8 @@ public sealed class IntentLifecycle(
             intent.State,
             ConfiguredRepositories.ParseSortedByName(intent.Repositories),
             WorkingTimeOf(intent.State, intent.Transitions),
-            intent.HasFailed))];
+            intent.HasFailed,
+            intent.NeedsAttention))];
     }
 
     /// <summary>A transition as Working Time needs it: the state the Intent moved to, and when.</summary>
@@ -414,6 +420,9 @@ public enum IntentLight
     /// <summary>Agents are working.</summary>
     Green,
 
+    /// <summary>The Intent Needs Attention: it can't go on until the user acts, such as by answering the Analyst.</summary>
+    Orange,
+
     /// <summary>The Intent has failed, and can't go on until the user acts, such as with Retry.</summary>
     Red,
 }
@@ -440,8 +449,12 @@ public abstract record IntentChange
 /// <param name="HasFailed">
 /// Whether work on it has failed, as a module that works on it says (<see cref="IIntentFailures"/>), which turns its light red.
 /// </param>
+/// <param name="NeedsAttention">
+/// Whether it waits for the user, as a module that works on it says (<see cref="IIntentAttention"/>), which turns its light orange.
+/// </param>
 public sealed partial record Intent(
-    Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope, WorkingTime? WorkingTime, bool HasFailed)
+    Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope, WorkingTime? WorkingTime, bool HasFailed,
+    bool NeedsAttention)
 {
     /// <summary>
     /// An Intent's text as Overseer keeps it, from what the user wrote: LF line breaks whatever the browser sent, and empty when

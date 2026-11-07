@@ -211,26 +211,6 @@ public class RefinementTests(PostgresServer postgres)
         await NoSandboxLeftAsync(overseer);
     }
 
-    // Until the Analyst can hand in a Round or a Spec, nothing its turn ends with is something Overseer can act on.
-    [Theory]
-    [InlineData(false, "The Analyst's session failed: it ended its turn without a Round or a Spec, which Overseer can't act on.")]
-    [InlineData(true, "The Analyst's session failed: it asked a question outside a Round, which Overseer can't act on: Which format?")]
-    public async Task A_turn_ending_with_an_outcome_Overseer_cant_act_on_is_a_failed_session(bool askedQuestion, string error)
-    {
-        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
-            new FakeAgentTurn([], askedQuestion ? new AgentOutcome.AskedQuestion("Which format?") : new AgentOutcome.Done())));
-        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
-        var address = await AddressAsync(overseer, "Export data");
-
-        using var started = await StartAsync(overseer, address);
-
-        var failed = await FailedAsync(overseer, address);
-        Assert.Equal((error, ("Red", "Failed")), (failed.Status, failed.Light));
-        Assert.NotNull(failed.RetryAction);
-        await NoSandboxLeftAsync(overseer);
-    }
-
     [Fact]
     public async Task Stopping_serve_destroys_the_Sandbox_and_after_a_restart_the_Refinement_is_shown_failed_and_can_be_retried()
     {
@@ -379,7 +359,8 @@ public class RefinementTests(PostgresServer postgres)
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"]))
         {
-            first.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done())));
+            first.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
+                new FakeAgentTurn([], new AgentOutcome.Done()) { Failure = "opencode exited with code 1." }));
             first.Sandboxes.FailNextDestruction("Azure could not be reached.");
             using var saved = await SaveAsync(first, "Export data", "acme/web");
             var address = await AddressAsync(first, "Export data");

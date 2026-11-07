@@ -22,7 +22,7 @@ public static class IntentPortal
         string connectionString, string[] repositories, TimeProvider? time = null, IReadOnlyDictionary<string, string?>? environment = null)
     {
         var overseer = await RunningOverseer.StartAsync(connectionString, environment, time: time);
-        // A started Intent's Analyst works until the test scripts it otherwise: any outcome it ends a turn with fails it yet.
+        // A started Intent's Analyst works until the test scripts it otherwise, such as to hand in a Round.
         AnalystKeepsWorking(overseer);
         await overseer.LogInAsync();
         overseer.GitHub.AcceptToken(Token, "octocat");

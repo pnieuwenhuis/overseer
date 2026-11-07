@@ -4,7 +4,7 @@
 <section class="refinement" data-phase="@Refinement.Phase" aria-label="Refinement">
     <ol class="steps">
         <li class="@StepClass(RefinementPhase.ProvisioningSandbox)">Provision a Sandbox holding the Repositories in scope</li>
-        <li class="@StepClass(RefinementPhase.AnalystWorking)">The Analyst works on the Intent</li>
+        <li class="@StepClass(RefinementPhase.AnalystWorking)">The Analyst refines the Intent with you, in Rounds of questions</li>
     </ol>
     @if (Refinement.Phase == RefinementPhase.Failed)
     {
@@ -32,8 +32,11 @@
     {
         RefinementPhase.ProvisioningSandbox => "Provisioning a Sandbox for the Analyst. A new Sandbox takes a few minutes.",
         RefinementPhase.AnalystWorking => "The Analyst is working on the Intent.",
+        RefinementPhase.AwaitingAnswers => $"The Analyst asks you the questions of Round {Refinement.OpenRound} below.",
         _ => "",
     };
 
-    private string StepClass(RefinementPhase step) => Steps.ClassOf(Refinement.Phase, step, failed: RefinementPhase.Failed);
+    // Waiting for answers is part of the Analyst's step: its next turn comes once they are in.
+    private string StepClass(RefinementPhase step) => Steps.ClassOf(
+        Refinement.Phase == RefinementPhase.AwaitingAnswers ? RefinementPhase.AnalystWorking : Refinement.Phase, step, failed: RefinementPhase.Failed);
 }

@@ -7,6 +7,10 @@
 {
     <p role="alert" class="callout-warning mb-4">@why</p>
 }
+@if (AnswersRefused is { } refused)
+{
+    <p role="alert" class="callout-warning mb-4">Your answers were not sent: @refused</p>
+}
 @if (Shown?.Intent is { } intent)
 {
     <article class="panel overflow-hidden">
@@ -36,6 +40,12 @@
                 <RefinementSteps IntentId="Id" Refinement="refinement" />
             </div>
         }
+        @if (Shown.Transcript.Count > 0)
+        {
+            <div class="border-b border-line px-5 py-4 sm:px-6">
+                <RefinementRounds IntentId="Id" Transcript="Shown.Transcript" OpenRound="Shown.Refinement?.OpenRound" />
+            </div>
+        }
         <MarkdownPreview Label="Intent text" Text="@intent.Text" />
     </article>
 }
@@ -48,17 +58,23 @@
     [Parameter]
     public bool StartRefused { get; set; }
 
+    /// <summary>Why answers to a Round were just refused; <c>null</c> unless they were.</summary>
+    [Parameter]
+    public string? AnswersRefused { get; set; }
+
     protected override async Task<Detail> ReadAsync(CancellationToken cancellationToken)
     {
         var intent = await Lifecycle.FindAsync(Id, cancellationToken);
         return new(
             intent,
             await Lifecycle.WhyNotStartableAsync(Id, cancellationToken),
-            intent is null ? null : await Refinements.ProgressOfAsync(intent, cancellationToken));
+            intent is null ? null : await Refinements.ProgressOfAsync(intent, cancellationToken),
+            intent is null ? [] : await Refinements.TranscriptOfAsync(intent.Id, cancellationToken));
     }
 
     /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
     /// <param name="WhyNotStartable">Why it can't be started at the moment, as a Draft's page explains and a refused Start says.</param>
     /// <param name="Refinement">Where its Refinement stands; <c>null</c> unless it is Refining.</param>
-    public sealed record Detail(Intent? Intent, string? WhyNotStartable, RefinementProgress? Refinement);
+    /// <param name="Transcript">The Rounds of its Refinement, in order; empty when it has none.</param>
+    public sealed record Detail(Intent? Intent, string? WhyNotStartable, RefinementProgress? Refinement, IReadOnlyList<Round> Transcript);
 }

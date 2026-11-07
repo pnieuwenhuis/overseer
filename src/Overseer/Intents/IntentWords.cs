@@ -15,6 +15,7 @@ internal static class IntentWords
     public static string InWords(this IntentLight light) => light switch
     {
         IntentLight.Green => "Working",
+        IntentLight.Orange => "Needs Attention",
         IntentLight.Red => "Failed",
         _ => throw new ArgumentOutOfRangeException(nameof(light), light, null),
     };

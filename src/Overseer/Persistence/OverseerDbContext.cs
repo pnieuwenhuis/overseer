@@ -16,6 +16,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<RepositorySetupRecord> RepositorySetups => Set<RepositorySetupRecord>();
     public DbSet<IntentRecord> Intents => Set<IntentRecord>();
     public DbSet<RefinementRecord> Refinements => Set<RefinementRecord>();
+    public DbSet<RoundRecord> Rounds => Set<RoundRecord>();
 
     private const string CaseInsensitive = "case_insensitive";
 
@@ -49,6 +50,18 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             refinement.HasKey(record => record.IntentId);
             refinement.Property(record => record.Phase).HasConversion<string>();
             refinement.HasOne<IntentRecord>().WithOne().HasForeignKey<RefinementRecord>(record => record.IntentId);
+        });
+        modelBuilder.Entity<RoundRecord>(round =>
+        {
+            round.ToTable("Rounds");
+            round.HasKey(record => new { record.IntentId, record.Number });
+            round.HasOne<IntentRecord>().WithMany().HasForeignKey(record => record.IntentId);
+            round.HasMany(record => record.Questions).WithOne().HasForeignKey(question => new { question.IntentId, question.RoundNumber });
+        });
+        modelBuilder.Entity<RoundQuestionRecord>(question =>
+        {
+            question.ToTable("RoundQuestions");
+            question.HasKey(record => new { record.IntentId, record.RoundNumber, record.Number });
         });
         modelBuilder.Entity<IntentTransitionRecord>(transition =>
         {
