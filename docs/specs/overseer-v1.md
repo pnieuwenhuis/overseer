@@ -16,7 +16,7 @@ I want to build and evolve software by directing AI agents rather than writing e
 - set up databases and test dependencies by hand
 - review whatever the agent produced without a clear contract of what it was supposed to do
 
-There is no single place where I capture what I want, agree with an agent on *how* it will be built, let agents do the work in isolated environments, see at a glance which work needs me, and review and merge the result. Running all of this on my laptop also ties the work to my laptop being on.
+There is no single place where I capture what I want, agree with an agent on _how_ it will be built, let agents do the work in isolated environments, see at a glance which work needs me, and review and merge the result. Running all of this on my laptop also ties the work to my laptop being on.
 
 ## Solution
 
@@ -95,7 +95,7 @@ A traffic light per Intent shows whether agents are working, need me, or have fa
 43. As the user, I want starting an Intent to launch Refinement in a fresh Sandbox containing the Repositories in scope, so that the Analyst can ground its questions in the real code.
 44. As the user, I want the Analyst to ask me questions in numbered Rounds, each with its suggested answer, so that I can answer quickly and only elaborate where I disagree.
 45. As the user, I want to answer a question with "as suggested" or leave it blank, so that the Analyst's suggestion is recorded as an Analyst's Choice.
-46. As the user, I want the Analyst to be able to search the web, read code, and build and run tests in its Sandbox, so that its questions and Spec are well informed.
+46. As the user, I want the Analyst to be able to search the web using the default HTTP client, read code, and build and run tests in its Sandbox, so that its questions and Spec are well informed.
 47. As the user, I want the Analyst to be unable to push anything during Refinement, so that Refinement never changes my repositories.
 48. As the user, I want the Analyst to decide when it has enough information to write the Spec, so that Specs aren't written on insufficient information.
 49. As the user, I want the Analyst to ask me whether external dependencies (such as a database) are needed for testing, and to add a Task to create a Docker Compose setup when they are needed and missing, so that the Squad can run integration tests.
@@ -164,7 +164,7 @@ A traffic light per Intent shows whether agents are working, need me, or have fa
 97. As the user, I want Overseer to regularly delete Sandboxes that don't belong to an Active Intent or Repository Setup, so that crashes don't leave expensive VMs running.
 98. As the user, I want every Sandbox deleted once it reaches the maximum lifetime, so that there's a hard ceiling on runaway cost.
 99. As the user, I want Overseer to continue where it left off after a restart, so that a redeploy or crash doesn't lose orchestration state.
-100. As the user, I want each Intent to show the tokens used and VM hours as information, so that I understand what it costs.
+100.  As the user, I want each Intent to show the tokens used and VM hours as information, so that I understand what it costs.
 
 ## Implementation Decisions
 
@@ -187,6 +187,7 @@ A traffic light per Intent shows whether agents are working, need me, or have fa
   - Fake: offline work and tests
 
   Its interface covers: create a Sandbox for an owner (Intent or Repository Setup) with the Repositories in scope; run a command and get its exit code and output; start an agent session for a role; destroy; list existing Sandboxes with their owner tags.
+
 - **Agent Session**: an ACP client. It runs one `opencode acp` process per session over SSH, using a fresh key pair per Sandbox. It streams session updates to the Portal, relays user messages and agent questions, and returns the session's structured outcome (for example "done", or a question for the user).
 - **GitHub Gateway**: the only component that calls the GitHub API. It opens pull requests, reads review comments and threads, resolves threads with a reply, closes pull requests, squash-merges, deletes branches and creates repositories.
 - **Repository Manifest**: reads and validates `.overseer.yml` with the commands `setup`, `build` and `test`, and an optional Compose file path (ADR 0003).
@@ -196,22 +197,22 @@ A traffic light per Intent shows whether agents are working, need me, or have fa
 
 ### Intent states and transitions
 
-| From | To | Trigger |
-|---|---|---|
-| Draft | Refining | User starts (requires a free slot) |
-| Draft | *(deleted)* | User deletes |
-| Refining | AwaitingSpecApproval | Analyst writes the Spec |
-| AwaitingSpecApproval | Refining | User sends the Spec back with comments |
-| AwaitingSpecApproval | Approved | User approves |
-| AwaitingSpecApproval | Implementing | User chooses "Approve & start" (requires a free slot) |
-| Approved | Implementing | User starts (requires a free slot) |
-| Implementing | InReview | All Tasks done, final verification passes, pull requests opened |
-| InReview | Implementing | User processes accepted comments |
-| InReview | Done | User approves and every pull request is merged |
-| Refining / Implementing / InReview | Paused | User pauses, or Refinement idle timeout |
-| Paused | the state it was paused from | User resumes (requires a free slot) |
-| Paused | Refining | User starts a Revision (requires a free slot) |
-| Any state except Draft, Done and Cancelled | Cancelled | User cancels |
+| From                                       | To                           | Trigger                                                         |
+| ------------------------------------------ | ---------------------------- | --------------------------------------------------------------- |
+| Draft                                      | Refining                     | User starts (requires a free slot)                              |
+| Draft                                      | _(deleted)_                  | User deletes                                                    |
+| Refining                                   | AwaitingSpecApproval         | Analyst writes the Spec                                         |
+| AwaitingSpecApproval                       | Refining                     | User sends the Spec back with comments                          |
+| AwaitingSpecApproval                       | Approved                     | User approves                                                   |
+| AwaitingSpecApproval                       | Implementing                 | User chooses "Approve & start" (requires a free slot)           |
+| Approved                                   | Implementing                 | User starts (requires a free slot)                              |
+| Implementing                               | InReview                     | All Tasks done, final verification passes, pull requests opened |
+| InReview                                   | Implementing                 | User processes accepted comments                                |
+| InReview                                   | Done                         | User approves and every pull request is merged                  |
+| Refining / Implementing / InReview         | Paused                       | User pauses, or Refinement idle timeout                         |
+| Paused                                     | the state it was paused from | User resumes (requires a free slot)                             |
+| Paused                                     | Refining                     | User starts a Revision (requires a free slot)                   |
+| Any state except Draft, Done and Cancelled | Cancelled                    | User cancels                                                    |
 
 - Active states (which occupy a slot) are Refining, Implementing and InReview.
 - Needs Attention (orange) means one of these: the Analyst is waiting for answers, a Spec awaits approval, an agent asked a question, or Review Comments await triage.
