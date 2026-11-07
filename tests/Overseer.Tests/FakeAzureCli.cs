@@ -27,6 +27,11 @@ public sealed class FakeAzureCli : IDisposable
             call=$(printf '%s\x1f' "$@")
             printf '%s\x1e' "$call" >> "$dir/calls"
             printf '%s\x1e' "${AZURE_CONFIG_DIR:-}" >> "$dir/config-dirs"
+            previous=
+            for argument in "$@"; do
+              if [ "$previous" = --custom-data ]; then cat "$argument" >> "$dir/custom-data"; printf '\x1e' >> "$dir/custom-data"; fi
+              previous=$argument
+            done
             match=
             for response in "$dir"/responses/*.args; do
               [ -e "$response" ] || continue
@@ -116,6 +121,19 @@ public sealed class FakeAzureCli : IDisposable
             return File.Exists(file)
                 ? File.ReadAllText(file).Split(CallSeparator)[..^1].Select(directory => directory.Length > 0 ? directory : null).ToList()
                 : [];
+        }
+    }
+
+    /// <summary>
+    /// The contents of every <c>--custom-data</c> file so far, in order, as <c>az</c> read them: the caller may delete the
+    /// file once the call is done.
+    /// </summary>
+    public IReadOnlyList<string> CustomData
+    {
+        get
+        {
+            var file = Path.Combine(_directory, "custom-data");
+            return File.Exists(file) ? File.ReadAllText(file).Split(CallSeparator)[..^1] : [];
         }
     }
 

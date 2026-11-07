@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Time.Testing;
 using Overseer.Sandboxes;
 using Overseer.Secrets;
@@ -190,6 +191,22 @@ public sealed class AzureSandboxProviderTests : IDisposable
         Assert.Equal(22, target.Port);
         Assert.Equal("overseer", target.Username);
         Assert.Contains($"overseer-host-key={target.HostKeyFingerprint}", FakeAzureCli.Values(_az.CallTo("vm", "create"), "--tags"));
+    }
+
+    [Fact]
+    public async Task Every_Sandbox_installs_one_exact_OpenCode_version()
+    {
+        await CreateAsync(Provider());
+
+        // The setup script travels base64-encoded in the cloud-init the VM is created with.
+        var cloudInit = Assert.Single(_az.CustomData);
+        var encoded = Regex.Match(cloudInit, @"path: /opt/overseer/setup-sandbox\.sh\n(?:\s+\w+: .*\n)*?\s+content: (\S+)").Groups[1].Value;
+        var setup = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+        // An exact release, not a range or a tag such as latest, so every Sandbox runs the OpenCode the default opencode.json is for.
+        var version = Regex.Match(setup, @"^opencode_version=(.*)$", RegexOptions.Multiline).Groups[1].Value;
+        Assert.Matches(@"^\d+\.\d+\.\d+$", version);
+        var installs = Regex.Matches(setup, @"^npm install .*$", RegexOptions.Multiline).Select(install => install.Value).ToList();
+        Assert.Equal(["npm install -g playwright \"opencode-ai@$opencode_version\""], installs);
     }
 
     [Fact]

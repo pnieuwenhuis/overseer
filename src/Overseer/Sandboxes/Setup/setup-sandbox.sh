@@ -4,6 +4,11 @@
 set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# The OpenCode release every Sandbox runs, exact, so the default opencode.json (AgentHarnessConfiguration.Default) is
+# written for the OpenCode that reads it. Change it only together with that configuration, after checking it against
+# that release's documentation.
+opencode_version=1.19.4
+
 # gh and a current Node come from their own repositories: Ubuntu's are too old.
 install -d -m 0755 /etc/apt/keyrings
 curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
@@ -22,7 +27,7 @@ usermod -aG docker overseer
 # The browsers go where every user finds them, rather than in root's home.
 echo 'PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright' >> /etc/environment
 export PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
-npm install -g playwright opencode-ai
+npm install -g playwright "opencode-ai@$opencode_version"
 playwright install --with-deps
 
 gh_version=$(gh --version | head -n 1 | cut -d ' ' -f 3)
@@ -34,4 +39,8 @@ docker --version
 docker compose version
 git --version
 node --version
-opencode --version
+opencode_installed=$(opencode --version)
+if [ "$opencode_installed" != "$opencode_version" ]; then
+  echo "OpenCode $opencode_installed is installed, but Sandboxes need $opencode_version." >&2
+  exit 1
+fi
