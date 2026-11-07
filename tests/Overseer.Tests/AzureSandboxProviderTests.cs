@@ -359,6 +359,54 @@ public sealed class AzureSandboxProviderTests : IDisposable
         Assert.Equal(VirtualMachine(sandbox), FakeAzureCli.Value(_az.CallTo("vm", "show"), "--name"));
     }
 
+    [Fact]
+    public async Task Taking_a_file_reads_it_over_SSH_and_removes_it_whatever_its_path_holds_for_the_shell()
+    {
+        var provider = Provider();
+        var sandbox = await CreateAsync(provider);
+        // The Sandbox's shell, played by this machine's.
+        _ssh.Answer = (_, command) => RunInShell(command);
+        var path = Path.Combine(_directory, "it's a \"$HOME\" `file`; rm -rf .json");
+        await File.WriteAllTextAsync(path, "{ \"questions\": [] }\n", TestContext.Current.CancellationToken);
+        var neighbour = Path.Combine(_directory, "round.json");
+        await File.WriteAllTextAsync(neighbour, "kept", TestContext.Current.CancellationToken);
+
+        var taken = await provider.TakeFileAsync(sandbox, path, TestContext.Current.CancellationToken);
+        var again = await provider.TakeFileAsync(sandbox, path, TestContext.Current.CancellationToken);
+
+        Assert.Equal("{ \"questions\": [] }\n", taken);
+        Assert.Null(again);
+        Assert.False(File.Exists(path));
+        Assert.Equal("kept", await File.ReadAllTextAsync(neighbour, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Taking_a_file_that_is_there_but_cant_be_read_or_removed_fails_with_what_the_Sandbox_said()
+    {
+        var provider = Provider();
+        var sandbox = await CreateAsync(provider);
+        _ssh.Answer = (_, _) => new CommandResult(1, "rm: cannot remove '/home/overseer/.overseer/round.json': Permission denied\n");
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.TakeFileAsync(sandbox, "/home/overseer/.overseer/round.json", TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            "The file /home/overseer/.overseer/round.json in the Sandbox could not be taken: rm: cannot remove '/home/overseer/.overseer/round.json': Permission denied\n",
+            failure.Message);
+    }
+
+    /// <summary>Runs a command in a local shell as SSH runs it in a Sandbox, with standard error merged into standard output.</summary>
+    private static CommandResult RunInShell(string command)
+    {
+        using var shell = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh", ["-c", "exec 2>&1\n" + command])
+        {
+            RedirectStandardOutput = true,
+        })!;
+        var output = shell.StandardOutput.ReadToEnd();
+        shell.WaitForExit();
+        return new CommandResult(shell.ExitCode, output);
+    }
+
     /// <summary>The Sandbox VNet as install leaves it, and the private IP Azure gives a Sandbox's network interface on it.</summary>
     private void InstalledSandboxNetwork() =>
         _az.Respond(["network", "vnet", "list"], "sandboxes\n")

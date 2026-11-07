@@ -357,6 +357,52 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         Assert.Contains("Question 3: Up to how many rows?\nAnalyst's Choice", sent);
     }
 
+    [Fact]
+    public async Task Answers_refused_for_a_question_given_both_an_own_answer_and_as_suggested_stay_in_the_live_form_as_typed()
+    {
+        var time = new FakeTimeProvider();
+        await using var overseer = await StartOverseerAsync(time);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
+            RoundsTests.HandsInRound(("Which format?", "CSV."), ("Which page offers it?", "The orders page.")), FakeAgentTurn.Endless()));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        using var started = await overseer.SubmitFormAsync(address, "start-intent", []);
+        await RoundsTests.AwaitingAnswersAsync(overseer, address);
+        await using var session = await chromium.LogInAsync(overseer);
+        var detail = await OpenAsync(session, address);
+        var round = detail.Locator("article.round");
+        await AwaitWorkingTimeLiveAsync(time, detail);
+
+        await detail.GetByLabel("Your answer to question 1").FillAsync("Excel.");
+        await round.Locator("[data-question='1']").GetByLabel("As suggested").CheckAsync();
+        await detail.GetByLabel("Your answer to question 2").FillAsync("The reports page.");
+        await detail.GetByRole(AriaRole.Button, new PageGetByRoleOptions { Name = "Send answers" }).ClickAsync();
+
+        await Expect(detail.GetByRole(AriaRole.Alert)).ToContainTextAsync("Question 1 has an answer of your own and As suggested ticked.");
+        // The page that came back goes live, and the form it then renders still holds the answers.
+        await AwaitWorkingTimeLiveAsync(time, detail);
+        await Expect(detail.GetByLabel("Your answer to question 1")).ToHaveValueAsync("Excel.");
+        await Expect(round.Locator("[data-question='1']").GetByLabel("As suggested")).ToBeCheckedAsync();
+        await Expect(detail.GetByLabel("Your answer to question 2")).ToHaveValueAsync("The reports page.");
+        await Expect(round.Locator("[data-question='2']").GetByLabel("As suggested")).Not.ToBeCheckedAsync();
+        Assert.Single(overseer.Sandboxes.MessagesSent);
+    }
+
+    /// <summary>
+    /// Waits until the detail page of an Active Intent is live, which its Working Time going on as the clock advances shows. Until then
+    /// its live rendering may still replace what is typed into it.
+    /// </summary>
+    private static async Task AwaitWorkingTimeLiveAsync(FakeTimeProvider time, IPage detail)
+    {
+        var workingTime = detail.Locator(".intent-working-time");
+        var shown = await workingTime.TextContentAsync();
+        await RepositorySetupPortal.EventuallyAsync(async () =>
+        {
+            time.Advance(TimeSpan.FromMinutes(1));
+            return await workingTime.TextContentAsync() != shown ? "" : null;
+        }, "the detail page to go live");
+    }
+
     /// <summary>
     /// Advances the clock until the Refinement shows this phase: until the fake Sandbox Provider has started waiting, advancing it doesn't
     /// end its wait, so it is advanced on each look.

@@ -425,12 +425,11 @@ public class RefinementTests(PostgresServer postgres)
         {
             return null;
         }
-        var light = Regex.Match(page, "<[^>]*class=\"intent-light\"[^>]*data-light=\"([^\"]*)\"[^>]*>(.*?)</", RegexOptions.Singleline);
         var retry = Regex.Match(refinement.Groups[2].Value, "<form[^>]*action=\"([^\"]*retry)\"", RegexOptions.Singleline);
         return new ShownRefinement(
             refinement.Groups[1].Value,
             ElementText(refinement.Groups[2].Value, "refinement-status"),
-            light.Success ? (light.Groups[1].Value, light.Groups[2].Value.Trim()) : null,
+            LightOn(page),
             retry.Success ? WebUtility.HtmlDecode(retry.Groups[1].Value) : null);
     }
 

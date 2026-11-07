@@ -1,5 +1,4 @@
 using Overseer.Intents;
-using Overseer.Sandboxes;
 
 namespace Overseer.Refinement;
 
@@ -80,10 +79,13 @@ internal static class AnalystInstructions
         Write the whole Round again at {RoundHandIn.Instance.Path}, in the format of your instructions, then end your turn.
         """;
 
+    /// <summary>What the Analyst is told when it ended its turn asking a question of its own, instead of handing in a Round.</summary>
+    public static string AskedOutsideRound(string question) =>
+        $"You asked \"{question}\" outside a Round, so the human hasn't seen it. {HandInRound}";
+
     /// <summary>What the Analyst is told when it ended its turn without handing in a Round.</summary>
-    public static string NoRound(AgentOutcome outcome) =>
-        (outcome is AgentOutcome.AskedQuestion asked
-            ? $"You asked \"{asked.Question}\" outside a Round, so the human hasn't seen it."
-            : "You ended your turn without handing in a Round, so the human sees nothing of it.")
-        + $" Put your questions in a Round: write it to {RoundHandIn.Instance.Path} in the format of your instructions, then end your turn.";
+    public static string NoRound => $"You ended your turn without handing in a Round, so the human sees nothing of it. {HandInRound}";
+
+    private static string HandInRound =>
+        $"Put your questions in a Round: write it to {RoundHandIn.Instance.Path} in the format of your instructions, then end your turn.";
 }

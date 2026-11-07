@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Overseer.Intents;
 using static Overseer.Tests.IntentPortal;
 
@@ -12,14 +11,14 @@ public class IntentLightTests(PostgresServer postgres)
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         using var saved = await SaveAsync(overseer, "Export data", "acme/web");
         var address = await AddressAsync(overseer, "Export data");
-        Assert.Null(ShownLight(await GetAsync(overseer, "/")));
-        Assert.Null(ShownLight(await GetAsync(overseer, address)));
+        Assert.Null(LightOn(await GetAsync(overseer, "/")));
+        Assert.Null(LightOn(await GetAsync(overseer, address)));
 
         using var started = await overseer.SubmitFormAsync(address, "start-intent", []);
 
         // The label says it without the colour.
-        Assert.Equal(("Green", "Working"), ShownLight(await GetAsync(overseer, "/")));
-        Assert.Equal(("Green", "Working"), ShownLight(await GetAsync(overseer, address)));
+        Assert.Equal(("Green", "Working"), LightOn(await GetAsync(overseer, "/")));
+        Assert.Equal(("Green", "Working"), LightOn(await GetAsync(overseer, address)));
     }
 
     // Only the states in which nothing runs. The tickets that make the others reachable decide their light, and test it.
@@ -38,13 +37,7 @@ public class IntentLightTests(PostgresServer postgres)
         var backlog = await GetAsync(overseer, state is IntentState.Done or IntentState.Cancelled ? "/?filter=closed" : "/");
 
         Assert.Equal("Export data", Assert.Single(Backlog(backlog)).FirstLine);
-        Assert.Null(ShownLight(backlog));
-        Assert.Null(ShownLight(await GetAsync(overseer, address)));
+        Assert.Null(LightOn(backlog));
+        Assert.Null(LightOn(await GetAsync(overseer, address)));
     }
-
-    /// <summary>The colour and label of the light on the page; <c>null</c> when it shows none.</summary>
-    private static (string Colour, string Label)? ShownLight(string page) =>
-        Regex.Match(page, "<[^>]*class=\"intent-light\"[^>]*data-light=\"([^\"]*)\"[^>]*>(.*?)</", RegexOptions.Singleline) is { Success: true } light
-            ? (light.Groups[1].Value, light.Groups[2].Value.Trim())
-            : null;
 }

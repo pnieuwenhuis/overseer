@@ -93,6 +93,34 @@ public class RoundsTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task A_question_given_both_an_own_answer_and_as_suggested_refuses_the_answers_and_keeps_what_was_typed()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
+            HandsInRound(("Which format?", "CSV."), ("Which page offers it?", "The orders page."))));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        using var started = await StartAsync(overseer, address);
+        await AwaitingAnswersAsync(overseer, address);
+
+        using var answered = await AnswerAsync(overseer, address, 1, ("1", "Excel & <PDF>."), ("1", AsSuggested), ("2", "The reports page."));
+
+        var page = await answered.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(
+            "Your answers were not sent: Question 1 has an answer of your own and As suggested ticked. "
+            + "Untick As suggested to send your answer, or clear your answer to accept the suggestion.",
+            Alert(page));
+        Assert.Equal([("1", "Excel & <PDF>.", true), ("2", "The reports page.", false)], AnswerFormOn(page));
+        Assert.Equal([new ShownRound(1, Open: true,
+            [
+                new ShownQuestion(1, "Which format?", "CSV.", Answer: null, AnalystsChoice: false),
+                new ShownQuestion(2, "Which page offers it?", "The orders page.", Answer: null, AnalystsChoice: false),
+            ])], Rounds(await GetAsync(overseer, address)));
+        Assert.Equal(("Orange", "Needs Attention"), LightOn(page));
+        Assert.Single(overseer.Sandboxes.MessagesSent);
+    }
+
+    [Fact]
     public async Task Answers_to_a_Round_that_is_already_answered_or_isnt_the_open_one_are_refused_and_reach_no_Analyst()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
@@ -154,6 +182,8 @@ public class RoundsTests(PostgresServer postgres)
                 new ShownRound(2, Open: false, [new ShownQuestion(1, "Up to how many rows?", "All of them.", Answer: null, AnalystsChoice: false)]),
             ],
             Rounds(page));
+        // Not as though it were over: once the Refinement continues from its transcript (ticket 05), the Round can still be answered.
+        Assert.Equal("Awaiting your answer; the Analyst stopped before you gave it.", ElementText(page, "question-unanswered"));
         Assert.Equal(("Red", "Failed"), LightOn(page));
         Assert.Equal(
             "Overseer restarted while the Analyst waited for your answers, so it can no longer take them. Retry to start the Analyst again.",
@@ -306,11 +336,17 @@ public class RoundsTests(PostgresServer postgres)
         EventuallyAsync(async () => await GetAsync(overseer, address) is var page && page.Contains("data-phase=\"AwaitingAnswers\"") ? page : null,
             "the Refinement to await answers");
 
-    /// <summary>The colour and label of the Intent's light on its detail page; <c>null</c> when it shows none.</summary>
-    internal static (string Colour, string Label)? LightOn(string page) =>
-        Regex.Match(page, "<[^>]*class=\"intent-light\"[^>]*data-light=\"([^\"]*)\"[^>]*>(.*?)</", RegexOptions.Singleline) is { Success: true } light
-            ? (light.Groups[1].Value, light.Groups[2].Value.Trim())
-            : null;
+    /// <summary>
+    /// The answer form of the open Round as the page fills it in: per question, by number, the answer in its text box and whether
+    /// As suggested is ticked.
+    /// </summary>
+    internal static IReadOnlyList<(string Question, string Answer, bool AsSuggested)> AnswerFormOn(string page) =>
+        [.. Regex.Matches(Regex.Match(page, "<form[^>]*class=\"round-form\".*?</form>", RegexOptions.Singleline).Value,
+            "<textarea[^>]*name=\"Answer\\.(\\d+)\"[^>]*>(.*?)</textarea>.*?(<input[^>]*name=\"AsSuggested\"[^>]*>)", RegexOptions.Singleline)
+            .Select(question => (
+                question.Groups[1].Value,
+                WebUtility.HtmlDecode(question.Groups[2].Value),
+                Regex.IsMatch(question.Groups[3].Value, @"\schecked\b")))];
 
     /// <summary>The Rounds the detail page shows, in order.</summary>
     internal static IReadOnlyList<ShownRound> Rounds(string page) =>

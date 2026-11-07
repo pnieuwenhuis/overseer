@@ -76,4 +76,4 @@ internal sealed class RoundHandIn : HandIn<IReadOnlyList<HandedInQuestion>>
 }
 
 /// <summary>A question of a Round, with the Analyst's suggested answer to it.</summary>
-public sealed record HandedInQuestion(string Text, string SuggestedAnswer);
+internal sealed record HandedInQuestion(string Text, string SuggestedAnswer);

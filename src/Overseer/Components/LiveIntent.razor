@@ -43,7 +43,7 @@
         @if (Shown.Transcript.Count > 0)
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
-                <RefinementRounds IntentId="Id" Transcript="Shown.Transcript" OpenRound="Shown.Refinement?.OpenRound" />
+                <RefinementRounds IntentId="Id" Transcript="Shown.Transcript" OpenRound="Shown.Refinement?.OpenRound" RefusedAnswers="RefusedAnswers" />
             </div>
         }
         <MarkdownPreview Label="Intent text" Text="@intent.Text" />
@@ -61,6 +61,10 @@
     /// <summary>Why answers to a Round were just refused; <c>null</c> unless they were.</summary>
     [Parameter]
     public string? AnswersRefused { get; set; }
+
+    /// <summary>The answers that were just refused, as the user gave them, to fill in again; <c>null</c> unless they were.</summary>
+    [Parameter]
+    public RefinementRounds.Draft? RefusedAnswers { get; set; }
 
     protected override async Task<Detail> ReadAsync(CancellationToken cancellationToken)
     {

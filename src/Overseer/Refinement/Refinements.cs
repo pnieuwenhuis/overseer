@@ -115,12 +115,13 @@ public sealed class Refinements(
     /// Records the human's answers to the Round the Analyst waits on, and sends them to the Analyst in the same session. Refused
     /// unless <paramref name="roundNumber"/> is the Round that is open now, so answers are taken only once.
     /// </summary>
-    /// <param name="answers">
-    /// One answer per question, in their order: the human's own, or <c>null</c> or blank to leave it to the Analyst, which
-    /// records its suggested answer as the Analyst's Choice.
+    /// <param name="ownAnswers">
+    /// The human's own answers, by question number. A question without one, or with a blank one, is left to the Analyst: its
+    /// suggested answer is recorded as the Analyst's Choice.
     /// </param>
     /// <returns>Why the answers were refused; <c>null</c> when they are recorded and on their way to the Analyst.</returns>
-    public async Task<string?> AnswerAsync(Guid intentId, int roundNumber, IReadOnlyList<string?> answers, CancellationToken cancellationToken)
+    public async Task<string?> AnswerAsync(
+        Guid intentId, int roundNumber, IReadOnlyDictionary<int, string> ownAnswers, CancellationToken cancellationToken)
     {
         await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
@@ -139,15 +140,16 @@ public sealed class Refinements(
             var round = await database.Rounds
                 .Include(round => round.Questions)
                 .SingleAsync(round => round.IntentId == intentId && round.Number == roundNumber, cancellationToken);
-            if (round.Questions.Count != answers.Count)
+            if (ownAnswers.Keys.Where(number => round.Questions.All(question => question.Number != number)).Order().Cast<int?>().FirstOrDefault() is { } unknown)
             {
-                return $"Round {roundNumber} has {round.Questions.Count} questions, but {answers.Count} answers came.";
+                return $"Round {roundNumber} has no question {unknown}.";
             }
             round.AnsweredAt = time.GetUtcNow();
             foreach (var question in round.Questions)
             {
-                var answer = answers[question.Number - 1];
-                var own = string.IsNullOrWhiteSpace(answer) ? null : answer.Trim().ReplaceLineEndings("\n");
+                var own = ownAnswers.GetValueOrDefault(question.Number) is { } answer && !string.IsNullOrWhiteSpace(answer)
+                    ? answer.Trim().ReplaceLineEndings("\n")
+                    : null;
                 question.Answer = own ?? question.SuggestedAnswer;
                 question.IsAnalystsChoice = own is null;
             }
@@ -269,38 +271,33 @@ public sealed class Refinements(
                 {
                     return $"The Analyst's session failed: {exception.Message}";
                 }
-                switch (await RoundHandIn.Instance.TakeAsync(sandboxes, sandbox, cancellationToken))
+                var handedIn = await RoundHandIn.Instance.TakeAsync(sandboxes, sandbox, cancellationToken);
+                if (handedIn is HandedIn<IReadOnlyList<HandedInQuestion>>.Valid(var questions))
                 {
-                    case HandedIn<IReadOnlyList<HandedInQuestion>>.Valid(var questions):
-                        failedHandIns = 0;
-                        message = AnalystInstructions.Answers(await AskAsync(intentId, questions, cancellationToken));
-                        break;
-                    case HandedIn<IReadOnlyList<HandedInQuestion>>.Invalid(var errors):
-                        if (++failedHandIns == HandInAttempts)
-                        {
-                            return FailedHandIns($"its Round was not valid: {string.Join(" ", errors)}");
-                        }
-                        message = AnalystInstructions.InvalidRound(errors);
-                        break;
-                    default:
-                        if (++failedHandIns == HandInAttempts)
-                        {
-                            return FailedHandIns(outcome is AgentOutcome.AskedQuestion asked
-                                ? $"it asked a question outside a Round: {asked.Question}"
-                                : "it ended its turn without handing in a Round.");
-                        }
-                        message = AnalystInstructions.NoRound(outcome);
-                        break;
+                    failedHandIns = 0;
+                    message = AnalystInstructions.Answers(await AskAsync(intentId, questions, cancellationToken));
+                    continue;
                 }
+                // What went wrong, for the human should the Refinement fail of it, and what the Analyst is told to set it right.
+                var (wrong, retell) = handedIn switch
+                {
+                    HandedIn<IReadOnlyList<HandedInQuestion>>.Invalid(var errors) =>
+                        ($"its Round was not valid: {string.Join(" ", errors)}", AnalystInstructions.InvalidRound(errors)),
+                    _ when outcome is AgentOutcome.AskedQuestion asked =>
+                        ($"it asked a question outside a Round: {asked.Question}", AnalystInstructions.AskedOutsideRound(asked.Question)),
+                    _ => ("it ended its turn without handing in a Round.", AnalystInstructions.NoRound),
+                };
+                if (++failedHandIns == HandInAttempts)
+                {
+                    return $"The Analyst's session failed: it handed in no valid Round in {HandInAttempts} turns in a row. The last time, {wrong}";
+                }
+                message = retell;
             }
         }
         finally
         {
             await sandboxes.DestroyOrLeaveAsync(sandbox);
         }
-
-        static string FailedHandIns(string last) =>
-            $"The Analyst's session failed: it handed in no valid Round in {HandInAttempts} turns in a row. The last time, {last}";
     }
 
     /// <summary>Sends the Analyst a message and waits for the turn it starts to end.</summary>
@@ -474,20 +471,6 @@ public enum RefinementPhase
 /// </param>
 public sealed record RefinementProgress(RefinementPhase Phase, string? Error, int? OpenRound);
 
-/// <summary>A Round of the Refinement transcript: the Analyst's numbered questions, with the human's answers once given.</summary>
-/// <param name="Number">Its number within the Intent's Refinement, from 1.</param>
-public sealed record Round(int Number, IReadOnlyList<RoundQuestion> Questions, bool IsAnswered);
-
-/// <summary>A question of a Round, numbered within it from 1, with the Analyst's suggested answer.</summary>
-/// <param name="Answer"><c>null</c> until the Round is answered.</param>
-public sealed record RoundQuestion(int Number, string Text, string SuggestedAnswer, RoundAnswer? Answer);
-
-/// <summary>
-/// The answer recorded for a question: the human's own, or, when they left it to the Analyst, its suggested answer as the
-/// Analyst's Choice.
-/// </summary>
-public sealed record RoundAnswer(string Text, bool IsAnalystsChoice);
-
 /// <summary>An Intent's Refinement, as PostgreSQL holds it: one per Intent, for the Refinement it has now.</summary>
 public sealed class RefinementRecord
 {
@@ -496,32 +479,4 @@ public sealed class RefinementRecord
 
     /// <summary>Why the Refinement failed, when it did.</summary>
     public string? Error { get; set; }
-}
-
-/// <summary>A Round of an Intent's Refinement transcript, as PostgreSQL holds it.</summary>
-public sealed class RoundRecord
-{
-    public required Guid IntentId { get; init; }
-    public required int Number { get; init; }
-    public required DateTimeOffset AskedAt { get; init; }
-
-    /// <summary>When the human's answers were recorded; <c>null</c> while it has none.</summary>
-    public DateTimeOffset? AnsweredAt { get; set; }
-
-    public List<RoundQuestionRecord> Questions { get; init; } = [];
-}
-
-/// <summary>A question of a Round, as PostgreSQL holds it, with its answer once the Round is answered.</summary>
-public sealed class RoundQuestionRecord
-{
-    public required Guid IntentId { get; init; }
-    public required int RoundNumber { get; init; }
-    public required int Number { get; init; }
-    public required string Text { get; init; }
-    public required string SuggestedAnswer { get; init; }
-
-    /// <summary>The human's answer, or the suggested answer when it is the Analyst's Choice; <c>null</c> until answered.</summary>
-    public string? Answer { get; set; }
-
-    public bool IsAnalystsChoice { get; set; }
 }

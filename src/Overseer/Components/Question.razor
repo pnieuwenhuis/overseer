@@ -1,8 +1,11 @@
-@* A question of a Round: its number, its text and the Analyst's suggested answer. *@
+@* A question of a Round: its number, its text and the Analyst's suggested answer, followed by its answer or the fields to give one. *@
 
-<p class="question-heading"><span class="question-number">@Number.</span> <span class="question-text">@Text</span></p>
-<p class="question-suggestion-label">Suggested answer</p>
-<p class="question-suggestion">@SuggestedAnswer</p>
+<li class="round-question" data-question="@Number">
+    <p class="question-heading"><span class="question-number">@Number.</span> <span class="question-text">@Text</span></p>
+    <p class="question-suggestion-label">Suggested answer</p>
+    <p class="question-suggestion">@SuggestedAnswer</p>
+    @ChildContent
+</li>
 
 @code {
     [Parameter, EditorRequired]
@@ -13,4 +16,8 @@
 
     [Parameter, EditorRequired]
     public required string SuggestedAnswer { get; set; }
+
+    /// <summary>What follows the suggestion: the answer recorded, or the fields to answer.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
 }

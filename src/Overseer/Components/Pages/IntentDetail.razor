@@ -15,7 +15,7 @@
 @* A form submitted from a page opened earlier is handled whatever became of the Intent. *@
 @if (_intent is not null || IsSubmitted)
 {
-    <LiveIntent Id="Id" StartRefused="_startRefused" AnswersRefused="@_answersRefused" @rendermode="InteractiveServer" />
+    <LiveIntent Id="Id" StartRefused="_startRefused" AnswersRefused="@_answersRefused" RefusedAnswers="_refusedAnswers" @rendermode="InteractiveServer" />
 }
 @* Blazor handles a submitted form only when the page has a form of its name. The Start and answer forms the user sees are LiveIntent's, which come and go as the Intent changes. *@
 @if (IsSubmitted)
@@ -38,7 +38,9 @@
     public const string AsSuggestedField = "AsSuggested";
 
     /// <summary>The field of the answer form that holds the user's own answer to the question with this number.</summary>
-    public static string AnswerField(int question) => $"Answer.{question}";
+    public static string AnswerField(int question) => $"{AnswerFieldPrefix}{question}";
+
+    private const string AnswerFieldPrefix = "Answer.";
 
     [CascadingParameter]
     private HttpContext HttpContext { get; set; } = default!;
@@ -49,6 +51,7 @@
     private Intent? _intent;
     private bool _startRefused;
     private string? _answersRefused;
+    private RefinementRounds.Draft? _refusedAnswers;
 
     private bool IsSubmitted => HttpMethods.IsPost(HttpContext.Request.Method);
 
@@ -83,18 +86,29 @@
             _answersRefused = "They didn't say which Round they answer.";
             return;
         }
-        // One answer per question the Round has; a question the form doesn't answer is left to the Analyst.
-        var round = (await Refinements.TranscriptOfAsync(Id, HttpContext.RequestAborted)).SingleOrDefault(round => round.Number == number);
-        var asSuggested = form[AsSuggestedField].ToHashSet();
-        IReadOnlyList<string?> answers = round is null
-            ? []
-            : [.. round.Questions.Select(question => asSuggested.Contains(question.Number.ToString(CultureInfo.InvariantCulture))
-                ? null
-                : (string?)form[AnswerField(question.Number)])];
-        _answersRefused = await Refinements.AnswerAsync(Id, number, answers, HttpContext.RequestAborted);
+        Dictionary<int, string> own = [];
+        foreach (var (field, value) in form)
+        {
+            if (field.StartsWith(AnswerFieldPrefix, StringComparison.Ordinal)
+                && int.TryParse(field.AsSpan(AnswerFieldPrefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var question))
+            {
+                own[question] = value.ToString();
+            }
+        }
+        List<int> asSuggested = [.. form[AsSuggestedField]
+            .Select(question => int.TryParse(question, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ? parsed : (int?)null)
+            .OfType<int>()
+            .Distinct()
+            .Order()];
+        // A question can't be both: rather than drop either, the user chooses, with what they typed still in the form.
+        _answersRefused = asSuggested.Where(question => !string.IsNullOrWhiteSpace(own.GetValueOrDefault(question))).Cast<int?>().FirstOrDefault() is { } both
+            ? $"Question {both} has an answer of your own and As suggested ticked. Untick As suggested to send your answer, or clear your answer to accept the suggestion."
+            : await Refinements.AnswerAsync(Id, number, own, HttpContext.RequestAborted);
         if (_answersRefused is null)
         {
             Navigation.NavigateTo($"/intents/{Id}");
+            return;
         }
+        _refusedAnswers = new RefinementRounds.Draft(number, own, asSuggested);
     }
 }

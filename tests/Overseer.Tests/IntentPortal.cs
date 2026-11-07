@@ -111,6 +111,12 @@ public static class IntentPortal
             ? WebUtility.HtmlDecode(element.Groups[1].Value).Trim()
             : throw new InvalidOperationException($"No element of class {cssClass} in: {html}");
 
+    /// <summary>The colour and label of the Intent's light on the page, as a browser would show it; <c>null</c> when it shows none.</summary>
+    public static (string Colour, string Label)? LightOn(string page) =>
+        Regex.Match(page, "<[^>]*class=\"intent-light\"[^>]*data-light=\"([^\"]*)\"[^>]*>(.*?)</", RegexOptions.Singleline) is { Success: true } light
+            ? (light.Groups[1].Value, WebUtility.HtmlDecode(light.Groups[2].Value).Trim())
+            : null;
+
     public static Task<string> GetAsync(RunningOverseer overseer, string address) =>
         overseer.Http.GetStringAsync(address, TestContext.Current.CancellationToken);
 

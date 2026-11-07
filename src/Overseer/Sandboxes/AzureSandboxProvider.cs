@@ -149,8 +149,11 @@ public sealed class AzureSandboxProvider(
         CancellationToken cancellationToken) =>
         throw new NotSupportedException("Agent sessions in Azure Sandboxes are not built yet: they come with the Agent Session module.");
 
-    /// <inheritdoc cref="RunCommandAsync"/>
-    /// <exception cref="InvalidOperationException">The file is there, but couldn't be read or removed.</exception>
+    /// <inheritdoc cref="ISandboxProvider.TakeFileAsync"/>
+    /// <exception cref="InvalidOperationException">
+    /// The Sandbox does not exist, or its key is gone; or the file is there, but couldn't be read or removed.
+    /// </exception>
+    /// <exception cref="SandboxUnreachableException">The Sandbox does not accept SSH, for instance from a new public IP of the developer's.</exception>
     public async Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken)
     {
         const int NoSuchFile = 3;
