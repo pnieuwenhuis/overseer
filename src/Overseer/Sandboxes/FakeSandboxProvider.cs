@@ -14,6 +14,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     private readonly ConcurrentQueue<string> _destructionFailures = new();
     private readonly ConcurrentQueue<AgentSessionStart> _agentSessionsStarted = new();
     private readonly ConcurrentQueue<AgentMessage> _messagesSent = new();
+    private readonly ConcurrentDictionary<(string ResourceId, string Path), string> _files = new();
 
     /// <summary>Makes the next creation fail with <paramref name="error"/>. Call it again to fail the one after as well.</summary>
     public void FailNextCreation(string error) => _creationFailures.Enqueue(error);
@@ -81,6 +82,20 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         return Task.FromResult(_commands.TryGetValue(command, out var results) ? results.Next() : new CommandResult(0, ""));
     }
 
+    /// <summary>Writes a file in the Sandbox, replacing any at that path, as an agent or a command would.</summary>
+    /// <exception cref="InvalidOperationException">The Sandbox doesn't exist.</exception>
+    public void WriteFile(Sandbox sandbox, string path, string content)
+    {
+        EnsureExists(sandbox);
+        _files[(sandbox.ResourceId, path)] = content;
+    }
+
+    public Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken)
+    {
+        EnsureExists(sandbox);
+        return Task.FromResult(_files.TryRemove((sandbox.ResourceId, path), out var content) ? content : null);
+    }
+
     public Task<IAgentSession> StartAgentSessionAsync(
         Sandbox sandbox, AgentRole role, AgentHarnessConfiguration harness, IReadOnlyDictionary<string, string> environment,
         CancellationToken cancellationToken)
@@ -92,7 +107,8 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
             throw new InvalidOperationException(failure);
         }
         _agentSessionsStarted.Enqueue(new AgentSessionStart(sandbox, role, harness.Json, harness.ModelOf(role), new Dictionary<string, string>(environment)));
-        return Task.FromResult<IAgentSession>(new ScriptedAgentSession(script, message => _messagesSent.Enqueue(new AgentMessage(sandbox, role, message))));
+        return Task.FromResult<IAgentSession>(new ScriptedAgentSession(
+            script, message => _messagesSent.Enqueue(new AgentMessage(sandbox, role, message)), (path, content) => WriteFile(sandbox, path, content)));
     }
 
     public Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken)
@@ -102,6 +118,10 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
             throw new InvalidOperationException(error);
         }
         _sandboxes.TryRemove(sandbox.ResourceId, out _);
+        foreach (var file in _files.Keys.Where(file => file.ResourceId == sandbox.ResourceId))
+        {
+            _files.TryRemove(file, out _);
+        }
         return Task.CompletedTask;
     }
 
@@ -138,7 +158,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     }
 
     /// <summary>Plays one turn per message, whatever the message says.</summary>
-    private sealed class ScriptedAgentSession(FakeAgentSession script, Action<string> received) : IAgentSession
+    private sealed class ScriptedAgentSession(FakeAgentSession script, Action<string> received, Action<string, string> write) : IAgentSession
     {
         private readonly Sequence<FakeAgentTurn> _turns = new(script.Turns);
         private bool _stopped;
@@ -151,6 +171,10 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
             ObjectDisposedException.ThrowIf(_stopped, this);
             received(message);
             var turn = _turns.Next();
+            foreach (var (path, content) in turn.Writes)
+            {
+                write(path, content);
+            }
             var outcome = turn switch
             {
                 { EndsNever: true } => _stopping.Task,
@@ -194,6 +218,9 @@ public sealed record FakeAgentTurn(IReadOnlyList<string> Updates, AgentOutcome O
 
     /// <summary>Whether the turn goes on until the session is stopped, which breaks it off.</summary>
     public bool EndsNever { get; init; }
+
+    /// <summary>The files the agent writes in its Sandbox during the turn, by absolute path, such as what it hands in.</summary>
+    public IReadOnlyDictionary<string, string> Writes { get; init; } = new Dictionary<string, string>();
 
     /// <summary>A turn that streams <paramref name="updates"/>, then goes on until the session is stopped.</summary>
     public static FakeAgentTurn Endless(params string[] updates) => new(updates, new AgentOutcome.Done()) { EndsNever = true };

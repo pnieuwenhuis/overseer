@@ -83,6 +83,27 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_file_taken_from_a_Sandbox_gives_its_content_and_is_gone_afterwards()
+    {
+        var sandbox = await CreateAsync(NewIntent());
+        await GivenFileAsync(sandbox, "/home/overseer/.overseer/round.json", "{ \"questions\": [] }\n");
+
+        var taken = await Provider.TakeFileAsync(sandbox, "/home/overseer/.overseer/round.json", TestContext.Current.CancellationToken);
+        var again = await Provider.TakeFileAsync(sandbox, "/home/overseer/.overseer/round.json", TestContext.Current.CancellationToken);
+
+        Assert.Equal("{ \"questions\": [] }\n", taken);
+        Assert.Null(again);
+    }
+
+    [Fact]
+    public async Task Taking_a_file_that_isnt_there_gives_nothing()
+    {
+        var sandbox = await CreateAsync(NewIntent());
+
+        Assert.Null(await Provider.TakeFileAsync(sandbox, "/home/overseer/.overseer/spec.json", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task An_agent_turn_streams_updates_and_ends_with_its_outcome()
     {
         Assert.SkipWhen(AgentSessionsSkipReason is not null, AgentSessionsSkipReason ?? "");
@@ -147,6 +168,9 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     {
     }
 
+    /// <summary>Puts a file with this content in the Sandbox, as an agent would write it there.</summary>
+    protected abstract Task GivenFileAsync(Sandbox sandbox, string path, string content);
+
     private static SandboxOwner NewIntent() => new(SandboxOwnerKind.Intent, Guid.NewGuid());
 
     private async Task DestroyAsync(Sandbox sandbox)
@@ -183,6 +207,12 @@ public sealed class FakeSandboxProviderContract : SandboxProviderContract
     protected override ISandboxProvider Provider => _fake;
 
     protected override void GivenCommand(string command, CommandResult result) => _fake.ScriptCommand(command, result);
+
+    protected override Task GivenFileAsync(Sandbox sandbox, string path, string content)
+    {
+        _fake.WriteFile(sandbox, path, content);
+        return Task.CompletedTask;
+    }
 
     protected override void GivenAgentSession(AgentRole role, params (string[] Updates, AgentOutcome Outcome)[] turns) =>
         _fake.ScriptAgentSessions(role, new FakeAgentSession([.. turns.Select(turn => new FakeAgentTurn(turn.Updates, turn.Outcome))]));
@@ -221,6 +251,13 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
     protected override ISandboxProvider Provider => _azure;
 
     protected override string? AgentSessionsSkipReason => "Agent sessions in Azure Sandboxes come with the Agent Session module.";
+
+    protected override async Task GivenFileAsync(Sandbox sandbox, string path, string content)
+    {
+        var written = await _azure.RunCommandAsync(
+            sandbox, $"mkdir -p \"$(dirname '{path}')\" && printf '%s' '{content.Replace("'", "'\\''")}' > '{path}'", TestContext.Current.CancellationToken);
+        Assert.Equal(0, written.ExitCode);
+    }
 
     protected override ValueTask DisposeProviderAsync()
     {

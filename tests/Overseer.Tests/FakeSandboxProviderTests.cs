@@ -57,6 +57,22 @@ public class FakeSandboxProviderTests
     }
 
     [Fact]
+    public async Task A_turn_writes_its_files_in_the_Sandbox_of_its_session()
+    {
+        var sandbox = await CreateAsync();
+        var other = await CreateAsync();
+        _provider.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
+            new FakeAgentTurn([], new AgentOutcome.Done()) { Writes = new Dictionary<string, string> { ["/home/overseer/.overseer/round.json"] = "{}" } }));
+        await using var session = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Analyst, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken);
+
+        var turn = await session.SendAsync("Refine the Intent", TestContext.Current.CancellationToken);
+        await turn.Outcome;
+
+        Assert.Null(await _provider.TakeFileAsync(other, "/home/overseer/.overseer/round.json", TestContext.Current.CancellationToken));
+        Assert.Equal("{}", await _provider.TakeFileAsync(sandbox, "/home/overseer/.overseer/round.json", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Each_new_session_of_a_role_plays_the_next_script()
     {
         var sandbox = await CreateAsync();

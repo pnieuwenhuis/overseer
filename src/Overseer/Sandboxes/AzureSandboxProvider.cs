@@ -149,6 +149,24 @@ public sealed class AzureSandboxProvider(
         CancellationToken cancellationToken) =>
         throw new NotSupportedException("Agent sessions in Azure Sandboxes are not built yet: they come with the Agent Session module.");
 
+    /// <inheritdoc cref="RunCommandAsync"/>
+    /// <exception cref="InvalidOperationException">The file is there, but couldn't be read or removed.</exception>
+    public async Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken)
+    {
+        const int NoSuchFile = 3;
+        var quoted = $"'{path.Replace("'", "'\\''")}'";
+        var result = await RunCommandAsync(sandbox, $"""
+            [ -f {quoted} ] || exit {NoSuchFile}
+            cat -- {quoted} && rm -f -- {quoted}
+            """, cancellationToken);
+        return result.ExitCode switch
+        {
+            0 => result.Output,
+            NoSuchFile => null,
+            _ => throw new InvalidOperationException($"The file {path} in the Sandbox could not be taken: {result.Output}"),
+        };
+    }
+
     public Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken) => RemoveAsync(VirtualMachine(sandbox), cancellationToken);
 
     public async Task<IReadOnlyList<Sandbox>> ListAsync(CancellationToken cancellationToken)

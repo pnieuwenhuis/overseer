@@ -75,6 +75,10 @@ public sealed class SandboxRegistry(
         return await provider.StartAgentSessionAsync(sandbox, role, harness, environment, cancellationToken);
     }
 
+    /// <inheritdoc cref="ISandboxProvider.TakeFileAsync"/>
+    public Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken) =>
+        provider.TakeFileAsync(sandbox, path, cancellationToken);
+
     /// <summary>The Sandboxes of an owner of <paramref name="ownerKind"/> that are recorded and not recorded destroyed.</summary>
     public async Task<IReadOnlyList<Sandbox>> ListRecordedAsync(SandboxOwnerKind ownerKind, CancellationToken cancellationToken)
     {

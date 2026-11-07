@@ -26,6 +26,14 @@ public interface ISandboxProvider
     Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Reads the file at <paramref name="path"/> in the Sandbox and removes it, so that it is taken only once, as when an
+    /// agent hands in what it wrote there.
+    /// </summary>
+    /// <param name="path">An absolute path in the Sandbox.</param>
+    /// <returns>The file's content as UTF-8 text; <c>null</c> when there is no such file.</returns>
+    Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Starts an agent in the given role, configured by <paramref name="harness"/> and running its role's agent with that
     /// agent's model, ready for its first message. Dispose the session to stop the agent.
     /// </summary>
