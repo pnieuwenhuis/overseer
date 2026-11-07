@@ -163,11 +163,11 @@ public sealed class Refinements : IHostedService
     /// <returns>Why the Refinement failed; <c>null</c> when it is no longer the Intent's to run.</returns>
     private async Task<string?> RefineAsync(Guid intentId, CancellationToken cancellationToken)
     {
-        await EnterPhaseAsync(intentId, RefinementPhase.ProvisioningSandbox, error: null, cancellationToken);
         if (await _lifecycle.FindAsync(intentId, cancellationToken) is not { State: IntentState.Refining } intent)
         {
             return null;
         }
+        await EnterPhaseAsync(intentId, RefinementPhase.ProvisioningSandbox, error: null, cancellationToken);
 
         Sandbox sandbox;
         try
@@ -183,7 +183,17 @@ public sealed class Refinements : IHostedService
         try
         {
             await EnterPhaseAsync(intentId, RefinementPhase.AnalystWorking, error: null, cancellationToken);
-            await using var session = await _sandboxes.StartAgentSessionAsync(sandbox, AgentRole.Analyst, cancellationToken);
+            IAgentSession started;
+            try
+            {
+                started = await _sandboxes.StartAgentSessionAsync(sandbox, AgentRole.Analyst, cancellationToken);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogError(exception, "The Analyst's session for the Intent {IntentId} could not be started.", intentId);
+                return $"The Analyst's session failed: {exception.Message}";
+            }
+            await using var session = started;
             var turn = await session.SendAsync(AnalystInstructions.FirstMessage(intent), cancellationToken);
             await foreach (var _ in turn.Updates.WithCancellation(cancellationToken))
             {

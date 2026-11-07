@@ -86,8 +86,12 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         CancellationToken cancellationToken)
     {
         EnsureExists(sandbox);
-        _agentSessionsStarted.Enqueue(new AgentSessionStart(sandbox, role, harness.Json, harness.ModelOf(role), new Dictionary<string, string>(environment)));
         var script = _agentSessions.TryGetValue(role, out var sessions) ? sessions.Next() : new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()));
+        if (script.StartFailure is { } failure)
+        {
+            throw new InvalidOperationException(failure);
+        }
+        _agentSessionsStarted.Enqueue(new AgentSessionStart(sandbox, role, harness.Json, harness.ModelOf(role), new Dictionary<string, string>(environment)));
         return Task.FromResult<IAgentSession>(new ScriptedAgentSession(script, message => _messagesSent.Enqueue(new AgentMessage(sandbox, role, message))));
     }
 
@@ -176,7 +180,11 @@ public sealed record AgentSessionStart(
 public sealed record AgentMessage(Sandbox Sandbox, AgentRole Role, string Message);
 
 /// <summary>A scripted agent session: its turns in order, the last one repeating.</summary>
-public sealed record FakeAgentSession(params FakeAgentTurn[] Turns);
+public sealed record FakeAgentSession(params FakeAgentTurn[] Turns)
+{
+    /// <summary>When set, the session doesn't start: starting it fails with this error, and it plays no turns.</summary>
+    public string? StartFailure { get; init; }
+}
 
 /// <summary>A scripted turn: the updates the agent streams and how the turn ends.</summary>
 public sealed record FakeAgentTurn(IReadOnlyList<string> Updates, AgentOutcome Outcome)

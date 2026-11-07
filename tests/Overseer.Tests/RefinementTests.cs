@@ -186,6 +186,22 @@ public class RefinementTests(PostgresServer postgres)
         Assert.Contains("Export data", overseer.Sandboxes.MessagesSent[1].Message);
     }
 
+    [Fact]
+    public async Task When_the_Analysts_session_cant_be_started_the_Intent_turns_red_with_the_error_as_a_failed_session()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession() { StartFailure = "opencode is not installed." });
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+
+        using var started = await StartAsync(overseer, address);
+
+        var failed = await FailedAsync(overseer, address);
+        Assert.Equal(("The Analyst's session failed: opencode is not installed.", ("Red", "Failed")), (failed.Status, failed.Light));
+        Assert.NotNull(failed.RetryAction);
+        await NoSandboxLeftAsync(overseer);
+    }
+
     // Until the Analyst can hand in a Round or a Spec, nothing its turn ends with is something Overseer can act on.
     [Theory]
     [InlineData(false, "The Analyst's session failed: it ended its turn without a Round or a Spec, which Overseer can't act on.")]
