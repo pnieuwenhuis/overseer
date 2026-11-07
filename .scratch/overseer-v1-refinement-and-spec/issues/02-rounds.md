@@ -8,13 +8,13 @@ The Analyst decides how many Rounds it needs (story 48). Overseer never ends Ref
 
 **Blocked by:** 01 (Refinement launches the Analyst in a fresh Sandbox)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A turn that ends with a valid Round shows its questions numbered within the Round, each with its suggested answer, and the Round itself numbered (Round 1, Round 2, ...)
-- [ ] While a Round awaits answers the Intent's light is orange (Needs Attention), in the Backlog and on the detail page
-- [ ] Each question can be answered with free text, "as suggested", or left blank; "as suggested" and blank are recorded as Analyst's Choices with the suggested answer
-- [ ] Submitting the answers sends them to the same Analyst session, with each Analyst's Choice marked as such, and turns the light green
-- [ ] An invalid Round is never shown; the Analyst gets the validation errors and its next turn is handled as usual
-- [ ] The transcript (every Round with its questions, suggestions and answers) is saved in PostgreSQL and shown on the detail page, also after leaving the page and after a restart of `serve`
-- [ ] Answers can't be submitted twice for the same Round, and not for a Round that isn't the current one
-- [ ] Covered by tests through the application with the fake Sandbox Provider
+- [x] A turn that ends with a valid Round shows its questions numbered within the Round, each with its suggested answer, and the Round itself numbered (Round 1, Round 2, ...)
+- [x] While a Round awaits answers the Intent's light is orange (Needs Attention), in the Backlog and on the detail page
+- [x] Each question can be answered with free text, "as suggested", or left blank; "as suggested" and blank are recorded as Analyst's Choices with the suggested answer
+- [x] Submitting the answers sends them to the same Analyst session, with each Analyst's Choice marked as such, and turns the light green
+- [x] An invalid Round is never shown; the Analyst gets the validation errors and its next turn is handled as usual
+- [x] The transcript (every Round with its questions, suggestions and answers) is saved in PostgreSQL and shown on the detail page, also after leaving the page and after a restart of `serve`
+- [x] Answers can't be submitted twice for the same Round, and not for a Round that isn't the current one
+- [x] Covered by tests through the application with the fake Sandbox Provider
