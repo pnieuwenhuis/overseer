@@ -24,7 +24,8 @@ internal static class AnalystInstructions
 
         What you may do in this Sandbox:
 
-        - Search the web, for documentation, libraries and prior art.
+        - Fetch web pages over HTTP, for documentation, libraries and prior art, with your web fetch tool or `curl` in the
+          shell. You need the page's address, or one you can work out: there is no web search service.
         - Read the code of the Repositories in scope.
         - Build them and run their tests, to see how the code behaves now.
 

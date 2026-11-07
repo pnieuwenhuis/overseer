@@ -39,8 +39,12 @@ public class ModelProviderTokensTests(PostgresServer postgres)
         var analyst = await overseer.StartAgentSessionAsync(AgentRole.Analyst);
         var reviewer = await overseer.StartAgentSessionAsync(AgentRole.Reviewer);
 
-        var expected = WithWebSearch(("AZURE_FOUNDRY_API_KEY", FoundryToken), ("GATEWAY_API_KEY", GatewayToken));
-        Assert.Equal(WithWebSearch(), before.Environment);
+        var expected = new Dictionary<string, string>
+        {
+            ["AZURE_FOUNDRY_API_KEY"] = FoundryToken,
+            ["GATEWAY_API_KEY"] = GatewayToken,
+        };
+        Assert.Empty(before.Environment);
         Assert.Equal(expected, analyst.Environment);
         Assert.Equal(expected, reviewer.Environment);
     }
@@ -58,7 +62,7 @@ public class ModelProviderTokensTests(PostgresServer postgres)
         Assert.Contains("The provider token gateway is replaced.", page);
         Assert.Equal([("gateway", "GATEWAY_API_KEY")], Listed(page));
         var session = await overseer.StartAgentSessionAsync(AgentRole.Developer);
-        Assert.Equal(WithWebSearch(("GATEWAY_API_KEY", GatewayToken)), session.Environment);
+        Assert.Equal(new Dictionary<string, string> { ["GATEWAY_API_KEY"] = GatewayToken }, session.Environment);
     }
 
     [Fact]
@@ -75,7 +79,7 @@ public class ModelProviderTokensTests(PostgresServer postgres)
         Assert.Contains("The provider token azure-foundry is removed.", page);
         Assert.Equal([("gateway", "GATEWAY_API_KEY")], Listed(page));
         var session = await overseer.StartAgentSessionAsync(AgentRole.Analyst);
-        Assert.Equal(WithWebSearch(("GATEWAY_API_KEY", GatewayToken)), session.Environment);
+        Assert.Equal(new Dictionary<string, string> { ["GATEWAY_API_KEY"] = GatewayToken }, session.Environment);
     }
 
     [Fact]
@@ -90,7 +94,7 @@ public class ModelProviderTokensTests(PostgresServer postgres)
         var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Contains("No provider tokens are stored.", page);
         Assert.Empty(Listed(page));
-        Assert.Equal(WithWebSearch(), (await overseer.StartAgentSessionAsync(AgentRole.Analyst)).Environment);
+        Assert.Empty((await overseer.StartAgentSessionAsync(AgentRole.Analyst)).Environment);
     }
 
     [Theory]
@@ -113,7 +117,7 @@ public class ModelProviderTokensTests(PostgresServer postgres)
         Assert.DoesNotContain("The provider token", page);
         Assert.Contains("No provider tokens are stored.", page);
         Assert.Contains($"name=\"ProviderTokenName\" value=\"{WebUtility.HtmlEncode(name)}\"", page);
-        Assert.Equal(WithWebSearch(), (await overseer.StartAgentSessionAsync(AgentRole.Analyst)).Environment);
+        Assert.Empty((await overseer.StartAgentSessionAsync(AgentRole.Analyst)).Environment);
     }
 
     [Fact]
@@ -218,8 +222,4 @@ public class ModelProviderTokensTests(PostgresServer postgres)
                 .Select(row => (WebUtility.HtmlDecode(row.Groups[1].Value.Trim()), WebUtility.HtmlDecode(row.Groups[2].Value)))]
             : [];
     }
-
-    /// <summary>An agent session's environment with these tokens: they come with the switch that gives agents web search.</summary>
-    private static Dictionary<string, string> WithWebSearch(params (string Variable, string Token)[] tokens) =>
-        new([new("OPENCODE_ENABLE_EXA", "1"), .. tokens.Select(token => new KeyValuePair<string, string>(token.Variable, token.Token))]);
 }

@@ -49,7 +49,9 @@ public class RefinementTests(PostgresServer postgres)
         Assert.Equal(new SandboxOwner(SandboxOwnerKind.Intent, IdOf(address)), sent.Sandbox.Owner);
         Assert.Contains("# Export data\n\nAs CSV, from the *orders* page.", sent.Message);
         Assert.Contains("- acme/api (https://github.com/acme/api)\n- acme/web (https://github.com/acme/web)", sent.Message);
-        Assert.Contains("Search the web", sent.Message);
+        // The web over HTTP only: no search service comes with the Sandbox.
+        Assert.Contains("Fetch web pages over HTTP", sent.Message);
+        Assert.DoesNotContain("search the web", sent.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Read the code", sent.Message);
         Assert.Contains("Build them and run their tests", sent.Message);
         Assert.Contains("What you must never do: push.", sent.Message);
@@ -95,10 +97,8 @@ public class RefinementTests(PostgresServer postgres)
 
         var session = await EventuallyAsync(() => Task.FromResult(overseer.Sandboxes.AgentSessionsStarted.SingleOrDefault()), "the Analyst's session");
         var configuration = JsonNode.Parse(session.HarnessJson)!;
-        // Every tool, the web and the shell among them, is allowed without asking: no one is there to answer.
+        // Every tool, fetching web pages and the shell among them, is allowed without asking: no one is there to answer.
         Assert.Equal("allow", configuration["permission"]!.GetValue<string>());
-        // OpenCode offers websearch only with this set, unless the model comes through its own provider; webfetch needs nothing.
-        Assert.Equal("1", session.Environment["OPENCODE_ENABLE_EXA"]);
         // OpenCode applies the last rule that matches a command, and an agent's rules over the global ones, so these override
         // the "*" before them and the global "allow".
         var bash = configuration["agent"]!["analyst"]!["permission"]!["bash"]!.AsObject();
