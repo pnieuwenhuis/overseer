@@ -1166,6 +1166,121 @@
         gap: 0.5rem;
         font-size: 0.875rem;
     }
+
+    /* The Spec: its prose sections, then its Tasks in order. */
+    .spec {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+    }
+
+    .spec-header {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    .spec-version {
+        color: var(--color-muted);
+        font-weight: 500;
+        margin-left: 0.25rem;
+    }
+
+    .spec-status {
+        color: var(--color-warning);
+        font-size: 0.875rem;
+        font-weight: 500;
+    }
+
+    .spec-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .spec-section + .spec-section {
+        border-top: 1px solid var(--color-line);
+        padding-top: 1.25rem;
+    }
+
+    .spec .markdown-preview {
+        background: transparent;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 0;
+    }
+
+    .spec-decisions,
+    .spec-tasks {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .spec-decision {
+        border-left: 2px solid var(--color-line);
+        padding-left: 0.875rem;
+    }
+
+    .spec-decision[data-analysts-choice] {
+        border-color: var(--color-accent);
+    }
+
+    .analysts-choice {
+        color: var(--color-accent);
+        font-size: 0.6875rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        margin-bottom: 0.125rem;
+        text-transform: uppercase;
+    }
+
+    .spec-task {
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+        border: 1px solid var(--color-line);
+        border-radius: 0.625rem;
+        padding: 0.875rem 1rem;
+    }
+
+    .spec-task-heading {
+        display: flex;
+        gap: 0.5rem;
+        font-size: 0.9375rem;
+        font-weight: 600;
+    }
+
+    .spec-task-number {
+        color: var(--color-muted);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .spec-task-title {
+        overflow-wrap: anywhere;
+    }
+
+    .spec-task-facts {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.8125rem;
+    }
+
+    .spec-task-role {
+        background: var(--color-accent-soft);
+        border-radius: 999px;
+        color: var(--color-accent);
+        font-weight: 600;
+        padding: 0.0625rem 0.5rem;
+    }
+
+    .spec-task-repositories {
+        color: var(--color-muted);
+        font-family: var(--font-mono);
+        overflow-wrap: anywhere;
+    }
 }
 
 @keyframes light-glow {

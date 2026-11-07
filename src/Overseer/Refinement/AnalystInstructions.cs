@@ -1,4 +1,5 @@
 using Overseer.Intents;
+using Overseer.Specs;
 
 namespace Overseer.Refinement;
 
@@ -37,7 +38,8 @@ internal static class AnalystInstructions
         with the answer you suggest. Make the suggestion the answer you would choose yourself, grounded in the code
         and what you found, so that the human can accept it and only write their own answer where they disagree. You
         decide how many Rounds you need and how many questions go in each. Ask what matters for the Spec, and don't
-        ask what the code already tells you. End each of your turns by handing in a Round.
+        ask what the code already tells you. End each of your turns by handing in a Round, or, once you decide you have
+        enough to write it, the Spec.
 
         To hand in a Round, write it as JSON to {RoundHandIn.Instance.Path}, outside the repositories, creating the
         directory if needed, then end your turn. Overseer numbers the Rounds and their questions itself. The format:
@@ -51,6 +53,29 @@ internal static class AnalystInstructions
         what is wrong, and write the whole Round again. Otherwise the human's answers come in your next message. For
         each question you get either the human's own answer, or, when they accepted your suggestion or left the
         question blank, your suggested answer as an Analyst's Choice: a decision the human left to you.
+
+        How you end the Refinement: with the Spec. You alone decide when you know enough to write it, and that ends your
+        work: the human then reviews the Spec, and you get no further turns. The Spec says how the Intent will be
+        implemented. Its prose, in Markdown, is what a Reviewer will check the work against; its Tasks, in order, are what
+        Designers and Developers will carry out one at a time, each in a fresh session that gets the Spec and its Task.
+
+        To hand in the Spec, write it as JSON to {SpecHandIn.FilePath}, outside the repositories, creating the directory if
+        needed, then end your turn. Hand in either a Round or the Spec in a turn, never both. The format:
+
+        {SpecHandIn.Example}
+
+        - "summary", "approach", "acceptanceCriteria" and "dependencies" are Markdown text, none of them empty. Write
+          "None." for dependencies when there are none.
+        - "decisions" lists at least one decision, each a "decision" in Markdown, with "analystsChoice" true when it is an
+          Analyst's Choice, a decision the human left to you, and false when the human made it.
+        - "apiEndpointChanges", "dataModelChanges" and "uiChanges" are Markdown text, each only when the Intent makes such
+          changes: leave out those that don't apply.
+        - "tasks" lists at least one Task, in the order they are to be carried out. Each has a "title" and a "description"
+          in Markdown, its "role", "Designer" or "Developer", and in "repositories" the Repositories in scope it touches, at
+          least one, each as owner/name.
+
+        Overseer takes the file away once your turn ends. When it isn't valid, it isn't stored and the human doesn't see it:
+        you are told what is wrong, and write the whole Spec again.
         """;
 
     /// <summary>The human's answers to a Round, each Analyst's Choice marked as such, to send to the Analyst that asked it.</summary>
@@ -66,7 +91,8 @@ internal static class AnalystInstructions
             null => throw new ArgumentException($"Question {question.Number} of Round {round.Number} has no answer.", nameof(round)),
         }))}
 
-        Go on with the Refinement from here, and end your turn with your next Round, handed in at {RoundHandIn.Instance.Path} as before.
+        Go on with the Refinement from here, and end your turn with your next Round, handed in at {RoundHandIn.Instance.Path} as before,
+        or with the Spec at {SpecHandIn.FilePath}, once you have enough to write it.
         """;
 
     /// <summary>What the Analyst is told when the Round it handed in isn't valid, so that it hands it in again.</summary>
@@ -79,13 +105,29 @@ internal static class AnalystInstructions
         Write the whole Round again at {RoundHandIn.Instance.Path}, in the format of your instructions, then end your turn.
         """;
 
+    /// <summary>What the Analyst is told when the Spec it handed in isn't valid, so that it hands it in again.</summary>
+    public static string InvalidSpec(IReadOnlyList<string> errors) =>
+        $"""
+        The Spec you wrote to {SpecHandIn.FilePath} is not valid, so it isn't stored and the human hasn't seen it:
+
+        {string.Join("\n", errors.Select(error => $"- {error}"))}
+
+        Write the whole Spec again at {SpecHandIn.FilePath}, in the format of your instructions, then end your turn.
+        """;
+
+    /// <summary>What the Analyst is told when it handed in both a Round and a Spec in the same turn.</summary>
+    public static string RoundAndSpec =>
+        $"You handed in both a Round and a Spec, so the human sees neither. {HandInOne}";
+
     /// <summary>What the Analyst is told when it ended its turn asking a question of its own, instead of handing in a Round.</summary>
     public static string AskedOutsideRound(string question) =>
-        $"You asked \"{question}\" outside a Round, so the human hasn't seen it. {HandInRound}";
+        $"You asked \"{question}\" outside a Round, so the human hasn't seen it. {HandInOne}";
 
-    /// <summary>What the Analyst is told when it ended its turn without handing in a Round.</summary>
-    public static string NoRound => $"You ended your turn without handing in a Round, so the human sees nothing of it. {HandInRound}";
+    /// <summary>What the Analyst is told when it ended its turn without handing in a Round or a Spec.</summary>
+    public static string NothingHandedIn =>
+        $"You ended your turn without handing in a Round or a Spec, so the human sees nothing of it. {HandInOne}";
 
-    private static string HandInRound =>
-        $"Put your questions in a Round: write it to {RoundHandIn.Instance.Path} in the format of your instructions, then end your turn.";
+    private static string HandInOne =>
+        $"Put your questions in a Round, written to {RoundHandIn.Instance.Path}, or, once you have enough to write it, hand in the Spec at "
+        + $"{SpecHandIn.FilePath}, in the format of your instructions, then end your turn.";
 }

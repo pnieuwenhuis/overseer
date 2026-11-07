@@ -15,6 +15,9 @@ public sealed class IntentLifecycle(
     /// <summary>The states of an Active Intent, each occupying a slot; what counts towards the maximum is defined here and nowhere else.</summary>
     private static readonly IntentState[] ActiveStates = [IntentState.Refining, IntentState.Implementing, IntentState.InReview];
 
+    /// <summary>The states in which an Intent waits for the human to approve something, which Needs Attention whatever the modules say.</summary>
+    private static readonly IntentState[] AwaitingApprovalStates = [IntentState.AwaitingSpecApproval];
+
     /// <summary>The states of an Intent that is closed: what isn't one of these is open.</summary>
     private static readonly IntentState[] ClosedStates = [IntentState.Done, IntentState.Cancelled];
 
@@ -138,6 +141,31 @@ public sealed class IntentLifecycle(
         return made;
     }
 
+    /// <summary>
+    /// Moves a Refining Intent to AwaitingSpecApproval, as the Analyst has written its Spec, which <paramref name="storeSpec"/> stores
+    /// in the same transaction: the Spec is there exactly when the Intent awaits its approval. It leaves its Active Intent slot, and its
+    /// Working Time stops. Refused unless the Intent is Refining at this moment, and then nothing is stored.
+    /// </summary>
+    /// <param name="storeSpec">Adds the Spec to the database it is given, under the lock on the Intent's row, without saving.</param>
+    public async Task<IntentChange> AwaitSpecApprovalAsync(
+        Guid id, Func<OverseerDbContext, CancellationToken, Task> storeSpec, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        if (await LockStateAsync(database, id, cancellationToken) is var state and not IntentState.Refining)
+        {
+            return new IntentChange.Refused(state is null
+                ? "There is no such Intent: it may have been deleted."
+                : $"This Intent is {state.Value.InWords()}, and only a Refining Intent gets a Spec from the Analyst.");
+        }
+
+        await storeSpec(database, cancellationToken);
+        await TransitionAsync(database, id, IntentState.AwaitingSpecApproval, cancellationToken);
+        var made = await CommitAndAnnounceAsync(transaction, cancellationToken);
+        Transitioned?.Invoke(id, IntentState.AwaitingSpecApproval);
+        return made;
+    }
+
     /// <summary>Why the Intent with this id can't be started at the moment, with what a refused Start says, or <c>null</c> when it can.</summary>
     public async Task<string?> WhyNotStartableAsync(Guid id, CancellationToken cancellationToken)
     {
@@ -153,16 +181,16 @@ public sealed class IntentLifecycle(
     /// colour and its label in <see cref="IntentWords"/>, so that the light doesn't come to rely on the colour. Checked in this order:
     /// first red, labelled Failed, when <see cref="Intent.HasFailed"/> (so far a failed Refinement, as when its Sandbox couldn't be
     /// created; later a Failed Task or a failed merge, each through <see cref="IIntentFailures"/>), as a failure outweighs a question; then
-    /// orange, labelled Needs Attention, when <see cref="Intent.NeedsAttention"/> (so far an unanswered Round; later a Spec awaiting
-    /// approval, an agent's question, Review Comments awaiting triage, the agents' through <see cref="IIntentAttention"/>). Implementing and
+    /// orange, labelled Needs Attention, when <see cref="Intent.NeedsAttention"/> (so far an unanswered Round, through
+    /// <see cref="IIntentAttention"/>, and a Spec awaiting approval, which its state says; later an agent's question and Review Comments
+    /// awaiting triage, through <see cref="IIntentAttention"/>). Implementing and
     /// InReview aren't settled by the green below: the tickets that make them reachable decide their light, as an Intent In Review can be up
     /// to the user rather than to agents.
     /// </summary>
     public static IntentLight? LightOf(Intent intent) =>
         intent.HasFailed ? IntentLight.Red
         : intent.NeedsAttention ? IntentLight.Orange
-        // What is left is an Active Intent or a state in which nothing runs. AwaitingSpecApproval isn't Active, so it has no light until
-        // its orange condition is added above.
+        // What is left is an Active Intent or a state in which nothing runs.
         : ActiveStates.Contains(intent.State) ? IntentLight.Green
         : null;
 
@@ -357,7 +385,7 @@ public sealed class IntentLifecycle(
                 // In the order they were made, as two can be made at the same moment.
                 Transitions = intent.Transitions.OrderBy(transition => transition.Id).Select(transition => new Transition(transition.To, transition.At)).ToList(),
                 HasFailed = failed.Contains(intent.Id),
-                NeedsAttention = needingAttention.Contains(intent.Id),
+                NeedsAttention = AwaitingApprovalStates.Contains(intent.State) || needingAttention.Contains(intent.Id),
             })
             .ToListAsync(cancellationToken);
         return [.. stored.Select(intent => new Intent(
@@ -450,7 +478,8 @@ public abstract record IntentChange
 /// Whether work on it has failed, as a module that works on it says (<see cref="IIntentFailures"/>), which turns its light red.
 /// </param>
 /// <param name="NeedsAttention">
-/// Whether it waits for the user, as a module that works on it says (<see cref="IIntentAttention"/>), which turns its light orange.
+/// Whether it waits for the user, as its state says, such as awaiting Spec approval, or a module that works on it says
+/// (<see cref="IIntentAttention"/>); it turns its light orange.
 /// </param>
 public sealed partial record Intent(
     Guid Id, string Text, IntentState State, IReadOnlyList<RepositoryName> RepositoriesInScope, WorkingTime? WorkingTime, bool HasFailed,
@@ -502,8 +531,10 @@ public enum IntentState
     Draft,
     Refining,
 
-    // Nothing reaches these yet, except by an update of the database in tests. The transitions to and from them come with their triggers.
+    /// <summary>The Analyst has written the Spec, which awaits the human's approval.</summary>
     AwaitingSpecApproval,
+
+    // Nothing reaches these yet, except by an update of the database in tests. The transitions to and from them come with their triggers.
     Approved,
     Implementing,
     InReview,

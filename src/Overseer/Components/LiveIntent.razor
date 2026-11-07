@@ -1,7 +1,9 @@
 @* An Intent's state, text and what can be done with it, updated live as Intents change. *@
 @using Overseer.Intents
 @using Overseer.Refinement
+@using Overseer.Specs
 @inherits LiveIntentsView<LiveIntent.Detail>
+@inject SpecStore Specs
 
 @if (Shown is { WhyNotStartable: { } why } && (Shown.Intent?.State is null or IntentState.Draft || StartRefused))
 {
@@ -40,6 +42,12 @@
                 <RefinementSteps IntentId="Id" Refinement="refinement" />
             </div>
         }
+        @if (Shown.Spec is { } spec)
+        {
+            <div class="border-b border-line px-5 py-4 sm:px-6">
+                <SpecView Version="spec" AwaitsApproval="@(intent.State == IntentState.AwaitingSpecApproval)" />
+            </div>
+        }
         @if (Shown.Transcript.Count > 0)
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
@@ -73,12 +81,14 @@
             intent,
             await Lifecycle.WhyNotStartableAsync(Id, cancellationToken),
             intent is null ? null : await Refinements.ProgressOfAsync(intent, cancellationToken),
-            intent is null ? [] : await Refinements.TranscriptOfAsync(intent.Id, cancellationToken));
+            intent is null ? [] : await Refinements.TranscriptOfAsync(intent.Id, cancellationToken),
+            intent is null ? null : await Specs.LatestOfAsync(intent.Id, cancellationToken));
     }
 
     /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
     /// <param name="WhyNotStartable">Why it can't be started at the moment, as a Draft's page explains and a refused Start says.</param>
     /// <param name="Refinement">Where its Refinement stands; <c>null</c> unless it is Refining.</param>
     /// <param name="Transcript">The Rounds of its Refinement, in order; empty when it has none.</param>
-    public sealed record Detail(Intent? Intent, string? WhyNotStartable, RefinementProgress? Refinement, IReadOnlyList<Round> Transcript);
+    /// <param name="Spec">The latest version of its Spec; <c>null</c> when it has none.</param>
+    public sealed record Detail(Intent? Intent, string? WhyNotStartable, RefinementProgress? Refinement, IReadOnlyList<Round> Transcript, SpecVersion? Spec);
 }

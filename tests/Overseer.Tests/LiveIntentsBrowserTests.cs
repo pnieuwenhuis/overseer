@@ -388,6 +388,33 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         Assert.Single(overseer.Sandboxes.MessagesSent);
     }
 
+    [Fact]
+    public async Task An_open_detail_page_shows_the_Spec_as_it_comes_in_awaiting_approval_with_the_transcript_still_below()
+    {
+        var time = new FakeTimeProvider();
+        await using var overseer = await StartOverseerAsync(time);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
+            RoundsTests.HandsInRound(("Which format?", "CSV.")), SpecTests.HandsInSpec(SpecTests.Spec())));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        using var started = await overseer.SubmitFormAsync(address, "start-intent", []);
+        await RoundsTests.AwaitingAnswersAsync(overseer, address);
+        await using var session = await chromium.LogInAsync(overseer);
+        var detail = await OpenAsync(session, address);
+        await AwaitWorkingTimeLiveAsync(time, detail);
+
+        using var answered = await RoundsTests.AnswerAsync(overseer, address, 1, ("1", RoundsTests.AsSuggested));
+
+        var spec = detail.GetByRole(AriaRole.Region, new PageGetByRoleOptions { Name = "Spec", Exact = true });
+        await Expect(spec.GetByRole(AriaRole.Heading, new LocatorGetByRoleOptions { Level = 2 })).ToHaveTextAsync("Spec version 1");
+        await Expect(detail.Locator(".intent-state")).ToHaveTextAsync("Awaiting Spec Approval");
+        await Expect(detail.Locator(".intent-light")).ToHaveTextAsync("Needs Attention");
+        await Expect(spec.Locator(".spec-task-title")).ToHaveTextAsync(["Add the export endpoint"]);
+        await Expect(spec.Locator(".analysts-choice")).ToHaveTextAsync(["Analyst's Choice"]);
+        await Expect(detail.Locator("article.round .question-answer")).ToHaveTextAsync(["CSV."]);
+        Assert.True(await WasNotReloadedAsync(detail));
+    }
+
     /// <summary>
     /// Waits until the detail page of an Active Intent is live, which its Working Time going on as the clock advances shows. Until then
     /// its live rendering may still replace what is typed into it.

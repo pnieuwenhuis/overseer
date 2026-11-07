@@ -1,0 +1,77 @@
+@* An Intent's Spec: its prose sections as Markdown, each Analyst's Choice marked and the optional sections only when they apply, followed by its Tasks in order. *@
+@using Overseer.Specs
+
+<section class="spec" data-version="@Version.Number" aria-label="Spec">
+    <header class="spec-header">
+        <h2>Spec <span class="spec-version">version @Version.Number</span></h2>
+        @if (AwaitsApproval)
+        {
+            <p class="spec-status">The Analyst wrote this Spec from the Refinement below. It awaits your approval.</p>
+        }
+    </header>
+    @Section("Summary", Spec.Summary)
+    @Section("Approach", Spec.Approach)
+    <section class="spec-section" data-section="Decisions">
+        <h3>Decisions</h3>
+        <ol class="spec-decisions">
+            @foreach (var (decision, number) in Spec.Decisions.Select((decision, index) => (decision, index + 1)))
+            {
+                <li class="spec-decision" data-analysts-choice="@decision.IsAnalystsChoice">
+                    @if (decision.IsAnalystsChoice)
+                    {
+                        <p class="analysts-choice">Analyst's Choice</p>
+                    }
+                    <MarkdownPreview Label="@($"Decision {number}")" Text="@decision.Text" />
+                </li>
+            }
+        </ol>
+    </section>
+    @Section("Acceptance criteria", Spec.AcceptanceCriteria)
+    @Section("Dependencies", Spec.Dependencies)
+    @if (Spec.ApiEndpointChanges is { } apiEndpointChanges)
+    {
+        @Section("API endpoint changes", apiEndpointChanges)
+    }
+    @if (Spec.DataModelChanges is { } dataModelChanges)
+    {
+        @Section("Data model changes", dataModelChanges)
+    }
+    @if (Spec.UiChanges is { } uiChanges)
+    {
+        @Section("UI changes", uiChanges)
+    }
+    <section class="spec-section" data-section="Tasks">
+        <h3>Tasks</h3>
+        <ol class="spec-tasks">
+            @foreach (var task in Spec.Tasks)
+            {
+                <li class="spec-task" data-task="@task.Number">
+                    <h4 class="spec-task-heading"><span class="spec-task-number">@task.Number.</span> <span class="spec-task-title">@task.Title</span></h4>
+                    <p class="spec-task-facts">
+                        <span class="spec-task-role">@task.Role</span>
+                        <span class="spec-task-repositories">@string.Join(", ", task.Repositories)</span>
+                    </p>
+                    <MarkdownPreview Label="@($"Task {task.Number}")" Text="@task.Description" />
+                </li>
+            }
+        </ol>
+    </section>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public required SpecVersion Version { get; set; }
+
+    /// <summary>Whether the Intent awaits the user's approval of this Spec.</summary>
+    [Parameter]
+    public bool AwaitsApproval { get; set; }
+
+    private Spec Spec => Version.Spec;
+
+    /// <summary>A prose section of the Spec: its heading, and its Markdown rendered.</summary>
+    private static RenderFragment Section(string heading, string markdown) =>
+        @<section class="spec-section" data-section="@heading">
+            <h3>@heading</h3>
+            <MarkdownPreview Label="@heading" Text="@markdown" />
+        </section>;
+}

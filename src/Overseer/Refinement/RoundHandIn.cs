@@ -48,8 +48,8 @@ internal sealed class RoundHandIn : HandIn<IReadOnlyList<HandedInQuestion>>
                 errors.Add($"Question {number} must be an object with \"question\" and \"suggestedAnswer\".");
                 continue;
             }
-            var text = Text(question, "question");
-            var suggestion = Text(question, "suggestedAnswer");
+            var text = TextOf(question, "question");
+            var suggestion = TextOf(question, "suggestedAnswer");
             if (text is null)
             {
                 errors.Add($"Question {number} has no \"question\": it must be text that isn't empty.");
@@ -67,12 +67,6 @@ internal sealed class RoundHandIn : HandIn<IReadOnlyList<HandedInQuestion>>
             ? new HandedIn<IReadOnlyList<HandedInQuestion>>.Valid(read)
             : new HandedIn<IReadOnlyList<HandedInQuestion>>.Invalid(errors);
     });
-
-    /// <summary>The property's text, without surrounding whitespace; <c>null</c> when it isn't text, or is blank.</summary>
-    private static string? Text(JsonElement question, string property) =>
-        question.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String && value.GetString()!.Trim() is { Length: > 0 } text
-            ? text.ReplaceLineEndings("\n")
-            : null;
 }
 
 /// <summary>A question of a Round, with the Analyst's suggested answer to it.</summary>

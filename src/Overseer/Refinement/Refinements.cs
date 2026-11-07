@@ -4,14 +4,17 @@ using Npgsql;
 using Overseer.Intents;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
+using Overseer.Specs;
 
 namespace Overseer.Refinement;
 
 /// <summary>
 /// Refinement: when the Intent Lifecycle moves an Intent to Refining, the Analyst works on it in a fresh Sandbox the Intent
 /// owns, holding its Repositories in scope. Each of its turns ends with a Round, which the human answers in the same Analyst
-/// session. Where each Refinement stands, and its transcript of Rounds, is kept in PostgreSQL. It never sets an Intent's
-/// state: a Refinement that fails leaves the Intent Refining, in its slot, and red until a Retry.
+/// session, until the Analyst decides it has enough and hands in the Spec instead, which ends the Refinement: the Intent Lifecycle
+/// stores it and moves the Intent to AwaitingSpecApproval, and the session and Sandbox go. Where each Refinement stands, and its
+/// transcript of Rounds, is kept in PostgreSQL. It sets an Intent's state only through the Intent Lifecycle: a Refinement that
+/// fails leaves the Intent Refining, in its slot, and red until a Retry.
 /// </summary>
 public sealed class Refinements(
     IntentLifecycle lifecycle, SandboxRegistry sandboxes, IDbContextFactory<OverseerDbContext> databases, TimeProvider time,
@@ -19,7 +22,7 @@ public sealed class Refinements(
     : IHostedService
 {
     /// <summary>
-    /// How many turns in a row the Analyst may end without a valid Round, each time told what was wrong, before the Refinement
+    /// How many turns in a row the Analyst may end without a valid Round or Spec, each time told what was wrong, before the Refinement
     /// fails: an Analyst that can't hand one in would otherwise go on at the human's expense.
     /// </summary>
     public const int HandInAttempts = 3;
@@ -221,8 +224,8 @@ public sealed class Refinements(
         error => error is null ? Task.CompletedTask : EnterPhaseAsync(intentId, RefinementPhase.Failed, error, CancellationToken.None));
 
     /// <summary>
-    /// Provisions the Intent's Sandbox and has the Analyst work in it, Round after Round, destroying the Sandbox once it is no
-    /// longer used.
+    /// Provisions the Intent's Sandbox and has the Analyst work in it, Round after Round until it hands in the Spec, destroying the
+    /// Sandbox once it is no longer used.
     /// </summary>
     /// <returns>Why the Refinement failed; <c>null</c> when it is no longer the Intent's to run.</returns>
     private async Task<string?> RefineAsync(Guid intentId, CancellationToken cancellationToken)
@@ -259,6 +262,7 @@ public sealed class Refinements(
             }
             await using var session = started;
             var message = AnalystInstructions.FirstMessage(intent);
+            var specHandIn = new SpecHandIn(intent.RepositoriesInScope);
             var failedHandIns = 0;
             while (true)
             {
@@ -271,25 +275,37 @@ public sealed class Refinements(
                 {
                     return $"The Analyst's session failed: {exception.Message}";
                 }
-                var handedIn = await RoundHandIn.Instance.TakeAsync(sandboxes, sandbox, cancellationToken);
-                if (handedIn is HandedIn<IReadOnlyList<HandedInQuestion>>.Valid(var questions))
+                // Both, whichever it handed in, so that neither is left for a later turn.
+                var round = await RoundHandIn.Instance.TakeAsync(sandboxes, sandbox, cancellationToken);
+                var spec = await specHandIn.TakeAsync(sandboxes, sandbox, cancellationToken);
+                switch (round, spec)
                 {
-                    failedHandIns = 0;
-                    message = AnalystInstructions.Answers(await AskAsync(intentId, questions, cancellationToken));
-                    continue;
+                    case (HandedIn<IReadOnlyList<HandedInQuestion>>.Valid(var questions), HandedIn<Spec>.Nothing):
+                        failedHandIns = 0;
+                        message = AnalystInstructions.Answers(await AskAsync(intentId, questions, cancellationToken));
+                        continue;
+                    case (HandedIn<IReadOnlyList<HandedInQuestion>>.Nothing, HandedIn<Spec>.Valid(var written)):
+                        // The Refinement ends here: the Intent is no longer Refining, and the session and Sandbox go.
+                        await lifecycle.AwaitSpecApprovalAsync(
+                            intentId, (database, stopping) => SpecStore.AddVersionAsync(database, intentId, written, time.GetUtcNow(), stopping), cancellationToken);
+                        return null;
                 }
                 // What went wrong, for the human should the Refinement fail of it, and what the Analyst is told to set it right.
-                var (wrong, retell) = handedIn switch
+                var (wrong, retell) = (round, spec) switch
                 {
-                    HandedIn<IReadOnlyList<HandedInQuestion>>.Invalid(var errors) =>
+                    (not HandedIn<IReadOnlyList<HandedInQuestion>>.Nothing, not HandedIn<Spec>.Nothing) =>
+                        ("it handed in both a Round and a Spec.", AnalystInstructions.RoundAndSpec),
+                    (HandedIn<IReadOnlyList<HandedInQuestion>>.Invalid(var errors), _) =>
                         ($"its Round was not valid: {string.Join(" ", errors)}", AnalystInstructions.InvalidRound(errors)),
+                    (_, HandedIn<Spec>.Invalid(var errors)) =>
+                        ($"its Spec was not valid: {string.Join(" ", errors)}", AnalystInstructions.InvalidSpec(errors)),
                     _ when outcome is AgentOutcome.AskedQuestion asked =>
                         ($"it asked a question outside a Round: {asked.Question}", AnalystInstructions.AskedOutsideRound(asked.Question)),
-                    _ => ("it ended its turn without handing in a Round.", AnalystInstructions.NoRound),
+                    _ => ("it ended its turn without handing in a Round or a Spec.", AnalystInstructions.NothingHandedIn),
                 };
                 if (++failedHandIns == HandInAttempts)
                 {
-                    return $"The Analyst's session failed: it handed in no valid Round in {HandInAttempts} turns in a row. The last time, {wrong}";
+                    return $"The Analyst's session failed: it handed in no valid Round or Spec in {HandInAttempts} turns in a row. The last time, {wrong}";
                 }
                 message = retell;
             }

@@ -13,6 +13,7 @@ using Overseer.Repositories;
 using Overseer.Sandboxes;
 using Overseer.Secrets;
 using Overseer.Settings;
+using Overseer.Specs;
 
 namespace Overseer.Server;
 
@@ -61,6 +62,7 @@ public static class OverseerServer
         builder.Services.AddSingleton<IIntentFailures, RefinementFailures>();
         builder.Services.AddSingleton<IIntentAttention, RefinementAttention>();
         builder.Services.AddSingleton<IntentLifecycle>();
+        builder.Services.AddSingleton<SpecStore>();
         builder.Services.AddSingleton<Refinements>();
         builder.Services.AddHostedService(services => services.GetRequiredService<Refinements>());
 

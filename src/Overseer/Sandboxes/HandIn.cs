@@ -40,6 +40,16 @@ public abstract class HandIn<T>
             return new HandedIn<T>.Invalid([$"The file is not valid JSON: {exception.Message}"]);
         }
     }
+
+    /// <summary>
+    /// The text of <paramref name="element"/>'s <paramref name="property"/>, without surrounding whitespace and with LF line breaks;
+    /// <c>null</c> when it isn't text, or is blank.
+    /// </summary>
+    protected static string? TextOf(JsonElement element, string property) =>
+        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
+            && value.GetString()!.Trim() is { Length: > 0 } text
+            ? text.ReplaceLineEndings("\n")
+            : null;
 }
 
 /// <summary>What an agent handed in at the end of its turn.</summary>

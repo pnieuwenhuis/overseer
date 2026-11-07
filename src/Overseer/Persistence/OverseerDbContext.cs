@@ -4,6 +4,7 @@ using Overseer.Refinement;
 using Overseer.Repositories;
 using Overseer.Sandboxes;
 using Overseer.Settings;
+using Overseer.Specs;
 
 namespace Overseer.Persistence;
 
@@ -17,6 +18,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<IntentRecord> Intents => Set<IntentRecord>();
     public DbSet<RefinementRecord> Refinements => Set<RefinementRecord>();
     public DbSet<RoundRecord> Rounds => Set<RoundRecord>();
+    public DbSet<SpecVersionRecord> SpecVersions => Set<SpecVersionRecord>();
 
     private const string CaseInsensitive = "case_insensitive";
 
@@ -62,6 +64,25 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
         {
             question.ToTable("RoundQuestions");
             question.HasKey(record => new { record.IntentId, record.RoundNumber, record.Number });
+        });
+        modelBuilder.Entity<SpecVersionRecord>(version =>
+        {
+            version.ToTable("SpecVersions");
+            version.HasKey(record => new { record.IntentId, record.Number });
+            version.HasOne<IntentRecord>().WithMany().HasForeignKey(record => record.IntentId);
+            version.HasMany(record => record.Decisions).WithOne().HasForeignKey(decision => new { decision.IntentId, decision.SpecVersion });
+            version.HasMany(record => record.Tasks).WithOne().HasForeignKey(task => new { task.IntentId, task.SpecVersion });
+        });
+        modelBuilder.Entity<SpecDecisionRecord>(decision =>
+        {
+            decision.ToTable("SpecDecisions");
+            decision.HasKey(record => new { record.IntentId, record.SpecVersion, record.Number });
+        });
+        modelBuilder.Entity<SpecTaskRecord>(task =>
+        {
+            task.ToTable("SpecTasks");
+            task.HasKey(record => new { record.IntentId, record.SpecVersion, record.Number });
+            task.Property(record => record.Role).HasConversion<string>();
         });
         modelBuilder.Entity<IntentTransitionRecord>(transition =>
         {

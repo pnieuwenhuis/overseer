@@ -14,6 +14,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     private readonly ConcurrentQueue<string> _destructionFailures = new();
     private readonly ConcurrentQueue<AgentSessionStart> _agentSessionsStarted = new();
     private readonly ConcurrentQueue<AgentMessage> _messagesSent = new();
+    private readonly ConcurrentQueue<AgentSessionStart> _agentSessionsStopped = new();
     private readonly ConcurrentDictionary<(string ResourceId, string Path), string> _files = new();
 
     /// <summary>Makes the next creation fail with <paramref name="error"/>. Call it again to fail the one after as well.</summary>
@@ -45,6 +46,9 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
 
     /// <summary>Every message sent to an agent session, in the order they were sent.</summary>
     public IReadOnlyList<AgentMessage> MessagesSent => [.. _messagesSent];
+
+    /// <summary>The agent sessions stopped so far, in the order they were stopped, each as it was started.</summary>
+    public IReadOnlyList<AgentSessionStart> AgentSessionsStopped => [.. _agentSessionsStopped];
 
     /// <summary>The machine the Sandbox was created on, also after it has been destroyed.</summary>
     /// <exception cref="InvalidOperationException">This provider never created the Sandbox.</exception>
@@ -106,9 +110,11 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         {
             throw new InvalidOperationException(failure);
         }
-        _agentSessionsStarted.Enqueue(new AgentSessionStart(sandbox, role, harness.Json, harness.ModelOf(role), new Dictionary<string, string>(environment)));
+        var start = new AgentSessionStart(sandbox, role, harness.Json, harness.ModelOf(role), new Dictionary<string, string>(environment));
+        _agentSessionsStarted.Enqueue(start);
         return Task.FromResult<IAgentSession>(new ScriptedAgentSession(
-            script, message => _messagesSent.Enqueue(new AgentMessage(sandbox, role, message)), (path, content) => WriteFile(sandbox, path, content)));
+            script, message => _messagesSent.Enqueue(new AgentMessage(sandbox, role, message)), (path, content) => WriteFile(sandbox, path, content),
+            () => _agentSessionsStopped.Enqueue(start)));
     }
 
     public Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken)
@@ -158,7 +164,8 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     }
 
     /// <summary>Plays one turn per message, whatever the message says.</summary>
-    private sealed class ScriptedAgentSession(FakeAgentSession script, Action<string> received, Action<string, string> write) : IAgentSession
+    private sealed class ScriptedAgentSession(
+        FakeAgentSession script, Action<string> received, Action<string, string> write, Action stopped) : IAgentSession
     {
         private readonly Sequence<FakeAgentTurn> _turns = new(script.Turns);
         private bool _stopped;
@@ -186,6 +193,10 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
 
         public ValueTask DisposeAsync()
         {
+            if (!_stopped)
+            {
+                stopped();
+            }
             _stopped = true;
             _stopping.TrySetException(new AgentSessionFailedException("The agent session was stopped."));
             return ValueTask.CompletedTask;

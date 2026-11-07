@@ -257,7 +257,7 @@ public class RoundsTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task A_turn_ending_without_a_Round_tells_the_Analyst_to_hand_one_in()
+    public async Task A_turn_ending_without_a_Round_tells_the_Analyst_to_hand_one_in_or_the_Spec()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
@@ -270,21 +270,24 @@ public class RoundsTests(PostgresServer postgres)
 
         await AwaitingAnswersAsync(overseer, address);
         Assert.Equal(
-            $"You asked \"Which format?\" outside a Round, so the human hasn't seen it. Put your questions in a Round: write it to {RoundPath} in the format of your instructions, then end your turn.",
+            $"You asked \"Which format?\" outside a Round, so the human hasn't seen it. Put your questions in a Round, written to {RoundPath}, "
+            + $"or, once you have enough to write it, hand in the Spec at {SpecTests.SpecPath}, in the format of your instructions, then end your turn.",
             overseer.Sandboxes.MessagesSent[1].Message);
     }
 
     // Each attempt costs a turn of the Analyst's model; an Analyst that never gets it right would go on for good.
     [Theory]
-    [InlineData("done", "The Analyst's session failed: it handed in no valid Round in 3 turns in a row. The last time, it ended its turn without handing in a Round.")]
-    [InlineData("asked", "The Analyst's session failed: it handed in no valid Round in 3 turns in a row. The last time, it asked a question outside a Round: Which format?")]
-    [InlineData("invalid", "The Analyst's session failed: it handed in no valid Round in 3 turns in a row. The last time, its Round was not valid: A Round needs at least one question.")]
-    public async Task Three_turns_in_a_row_without_a_valid_Round_fail_the_Refinement_which_can_be_retried(string turn, string error)
+    [InlineData("done", "The Analyst's session failed: it handed in no valid Round or Spec in 3 turns in a row. The last time, it ended its turn without handing in a Round or a Spec.")]
+    [InlineData("asked", "The Analyst's session failed: it handed in no valid Round or Spec in 3 turns in a row. The last time, it asked a question outside a Round: Which format?")]
+    [InlineData("invalid", "The Analyst's session failed: it handed in no valid Round or Spec in 3 turns in a row. The last time, its Round was not valid: A Round needs at least one question.")]
+    [InlineData("invalid Spec", "The Analyst's session failed: it handed in no valid Round or Spec in 3 turns in a row. The last time, its Spec was not valid: The Spec has no Tasks: \"tasks\" must be a list of at least one Task.")]
+    public async Task Three_turns_in_a_row_without_a_valid_Round_or_Spec_fail_the_Refinement_which_can_be_retried(string turn, string error)
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(turn switch
         {
             "invalid" => HandsIn("""{ "questions": [] }"""),
+            "invalid Spec" => SpecTests.HandsInSpec(SpecTests.SpecWithout("tasks")),
             "asked" => new FakeAgentTurn([], new AgentOutcome.AskedQuestion("Which format?")),
             _ => new FakeAgentTurn([], new AgentOutcome.Done()),
         }));

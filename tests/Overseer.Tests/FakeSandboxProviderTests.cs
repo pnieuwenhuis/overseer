@@ -167,6 +167,21 @@ public class FakeSandboxProviderTests
     }
 
     [Fact]
+    public async Task The_sessions_stopped_are_recorded_once_each_as_they_were_started()
+    {
+        var sandbox = await CreateAsync();
+        var first = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken);
+        var second = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Analyst, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken);
+
+        await second.DisposeAsync();
+        await second.DisposeAsync();
+
+        Assert.Equal([_provider.AgentSessionsStarted[1]], _provider.AgentSessionsStopped);
+        await first.DisposeAsync();
+        Assert.Equal([_provider.AgentSessionsStarted[1], _provider.AgentSessionsStarted[0]], _provider.AgentSessionsStopped);
+    }
+
+    [Fact]
     public async Task The_messages_sent_to_agents_and_the_repositories_Sandboxes_hold_are_recorded()
     {
         var owner = new SandboxOwner(SandboxOwnerKind.RepositorySetup, Guid.NewGuid());
