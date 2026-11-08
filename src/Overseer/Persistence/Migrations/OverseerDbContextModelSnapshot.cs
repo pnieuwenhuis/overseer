@@ -334,6 +334,10 @@ namespace Overseer.Persistence.Migrations
                     b.Property<DateTimeOffset>("WrittenAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("WrittenBy")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.HasKey("IntentId", "Number");
 
                     b.ToTable("SpecVersions", (string)null);

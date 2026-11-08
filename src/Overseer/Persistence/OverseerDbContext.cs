@@ -69,6 +69,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
         {
             version.ToTable("SpecVersions");
             version.HasKey(record => new { record.IntentId, record.Number });
+            version.Property(record => record.WrittenBy).HasConversion<string>();
             version.HasOne<IntentRecord>().WithMany().HasForeignKey(record => record.IntentId);
             version.HasMany(record => record.Decisions).WithOne().HasForeignKey(decision => new { decision.IntentId, decision.SpecVersion });
             version.HasMany(record => record.Tasks).WithOne().HasForeignKey(task => new { task.IntentId, task.SpecVersion });

@@ -1,12 +1,40 @@
-@* An Intent's Spec: its prose sections as Markdown, each Analyst's Choice marked and the optional sections only when they apply, followed by its Tasks in order. *@
+@* A version of an Intent's Spec: who wrote it, its prose sections as Markdown, each Analyst's Choice marked and the optional sections only when they apply, followed by its Tasks in order. *@
 @using Overseer.Specs
 
 <section class="spec" data-version="@Version.Number" aria-label="Spec">
     <header class="spec-header">
-        <h2>Spec <span class="spec-version">version @Version.Number</span></h2>
+        <div class="spec-title">
+            <h2>Spec <span class="spec-version">version @Version.Number</span></h2>
+            @if (Editable)
+            {
+                <a href="intents/@IntentId/spec/edit" class="btn">Edit</a>
+            }
+        </div>
+        <p class="spec-written-by">@(Version.WrittenBy == SpecAuthor.Analyst ? "Written by the Analyst" : "Edited by you")</p>
         @if (AwaitsApproval)
         {
-            <p class="spec-status">The Analyst wrote this Spec from the Refinement below. It awaits your approval.</p>
+            <p class="spec-status">It awaits your approval.</p>
+        }
+        @if (Versions.Count > 1)
+        {
+            <nav aria-label="Spec versions">
+                <ol class="spec-versions">
+                    @foreach (var version in Versions)
+                    {
+                        <li class="spec-versions-entry" data-version="@version.Number">
+                            @if (version.Number == Version.Number)
+                            {
+                                <span aria-current="page">Version @version.Number</span>
+                            }
+                            else
+                            {
+                                <a href="intents/@IntentId/spec/versions/@version.Number">Version @version.Number</a>
+                            }
+                            <span class="spec-versions-author">@(version.WrittenBy == SpecAuthor.Analyst ? "written by the Analyst" : "edited by you")</span>
+                        </li>
+                    }
+                </ol>
+            </nav>
         }
     </header>
     @Section("Summary", Spec.Summary)
@@ -70,9 +98,21 @@
     [Parameter, EditorRequired]
     public required SpecVersion Version { get; set; }
 
+    /// <summary>The Intent whose Spec it is.</summary>
+    [Parameter, EditorRequired]
+    public required Guid IntentId { get; set; }
+
+    /// <summary>Every version of the Spec, in order, which it lists with links to the others when there is more than one.</summary>
+    [Parameter]
+    public IReadOnlyList<SpecVersionHeading> Versions { get; set; } = [];
+
     /// <summary>Whether the Intent awaits the user's approval of this Spec.</summary>
     [Parameter]
     public bool AwaitsApproval { get; set; }
+
+    /// <summary>Whether it offers to edit the Spec, starting from this version.</summary>
+    [Parameter]
+    public bool Editable { get; set; }
 
     private Spec Spec => Version.Spec;
 

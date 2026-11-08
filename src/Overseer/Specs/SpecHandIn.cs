@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Overseer.GitHub;
 using Overseer.Sandboxes;
 
@@ -19,6 +20,34 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
     public const string FilePath = "/home/overseer/.overseer/spec.json";
 
     public override string Path => FilePath;
+
+    /// <summary>
+    /// Checks the user's edit of a Spec exactly as a Spec the Analyst hands in is checked, by writing it in the Analyst's format:
+    /// the Spec it makes, or every reason it isn't valid.
+    /// </summary>
+    /// <param name="decisions">The decisions of the version edited, which the edit keeps.</param>
+    public HandedIn<Spec> Check(SpecDraft draft, IReadOnlyList<SpecDecision> decisions) => Validate(new JsonObject
+    {
+        ["summary"] = draft.Summary,
+        ["approach"] = draft.Approach,
+        ["decisions"] = new JsonArray([.. decisions.Select(decision => new JsonObject
+        {
+            ["decision"] = decision.Text,
+            ["analystsChoice"] = decision.IsAnalystsChoice,
+        })]),
+        ["acceptanceCriteria"] = draft.AcceptanceCriteria,
+        ["dependencies"] = draft.Dependencies,
+        ["apiEndpointChanges"] = draft.ApiEndpointChanges,
+        ["dataModelChanges"] = draft.DataModelChanges,
+        ["uiChanges"] = draft.UiChanges,
+        ["tasks"] = new JsonArray([.. draft.Tasks.Select(task => new JsonObject
+        {
+            ["title"] = task.Title,
+            ["description"] = task.Description,
+            ["role"] = task.Role,
+            ["repositories"] = new JsonArray([.. task.Repositories.Select(repository => JsonValue.Create(repository))]),
+        })]),
+    }.ToJsonString());
 
     /// <summary>The roles a Task can have.</summary>
     private static readonly AgentRole[] TaskRoles = [AgentRole.Designer, AgentRole.Developer];

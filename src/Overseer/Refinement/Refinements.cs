@@ -327,7 +327,7 @@ public sealed class Refinements(
                         // The Refinement ends here: the Intent is no longer Refining, and the session and Sandbox go. Should it have
                         // left Refining meanwhile, the Spec is not stored, and the Refinement is no longer the Intent's to run.
                         if (await lifecycle.AwaitSpecApprovalAsync(
-                                intentId, (database, stopping) => SpecStore.AddVersionAsync(database, intentId, written, time.GetUtcNow(), stopping), cancellationToken)
+                                intentId, (database, stopping) => SpecStore.AddVersionAsync(database, intentId, written, SpecAuthor.Analyst, time.GetUtcNow(), stopping), cancellationToken)
                             is IntentChange.Refused refused)
                         {
                             logger.LogWarning("The Spec the Analyst handed in for the Intent {IntentId} was not stored: {Error}", intentId, refused.Error);

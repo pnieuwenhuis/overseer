@@ -94,7 +94,7 @@ One batch of numbered questions the Analyst puts to the human during Refinement,
 _Avoid_: Iteration, turn, questionnaire
 
 **Spec**:
-The agent-written, versioned description of how an Intent will be implemented, divided into Tasks; kept separate from the Intent's original text.
+The agent-written, versioned description of how an Intent will be implemented, divided into Tasks; kept separate from the Intent's original text. The human may edit it before approving it, each save a new version.
 _Avoid_: Plan, design doc, requirements
 
 **Task**:

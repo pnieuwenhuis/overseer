@@ -166,6 +166,38 @@ public sealed class IntentLifecycle(
         }, cancellationToken);
 
     /// <summary>
+    /// Adds a version to the Spec of an Intent awaiting its approval, which <paramref name="addVersion"/> does in the same transaction,
+    /// under the lock on the Intent's row: no other version is added meanwhile. The Intent stays awaiting approval, now of that version.
+    /// Refused unless the Intent awaits Spec approval at this moment, or when <paramref name="addVersion"/> refuses, and then nothing is
+    /// stored.
+    /// </summary>
+    /// <param name="addVersion">
+    /// Adds the version to the database it is given, without saving, and gives <c>null</c>; or adds nothing, and gives why not.
+    /// </param>
+    public async Task<IntentChange> EditSpecAsync(
+        Guid id, Func<OverseerDbContext, CancellationToken, Task<string?>> addVersion, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        if ((WhyNotSpecEditable(await LockStateAsync(database, id, cancellationToken)) ?? await addVersion(database, cancellationToken)) is { } refusal)
+        {
+            return new IntentChange.Refused(refusal);
+        }
+        await database.SaveChangesAsync(cancellationToken);
+        return await CommitAndAnnounceAsync(transaction, cancellationToken);
+    }
+
+    /// <summary>Why the Spec of an Intent in <paramref name="state"/> can't be edited, or <c>null</c> when it can.</summary>
+    /// <param name="state">The Intent's state; <c>null</c> when there is no such Intent.</param>
+    // Names AwaitingSpecApproval rather than the states it refuses, so that a state added later is refused.
+    public static string? WhyNotSpecEditable(IntentState? state) => state switch
+    {
+        null => NoSuchIntent,
+        IntentState.AwaitingSpecApproval => null,
+        { } other => $"This Intent is {other.InWords()}, and only a Spec awaiting approval can be edited.",
+    };
+
+    /// <summary>
     /// Pauses an Intent agents are working on: it leaves its Active Intent slot, its Working Time stops, and it keeps the state it was
     /// paused from, which Resume returns it to. Refused unless the Intent is Refining, Implementing or In Review at this moment, or when
     /// <paramref name="confirm"/> says the reason to pause no longer holds.

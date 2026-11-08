@@ -65,7 +65,9 @@
         @if (Shown.Spec is { } spec)
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
-                <SpecView Version="spec" AwaitsApproval="@(intent.State == IntentState.AwaitingSpecApproval)" />
+                @* The latest version, which is the one awaiting approval and the one an edit starts from. *@
+                <SpecView Version="spec" IntentId="Id" Versions="Shown.SpecVersions" AwaitsApproval="@(intent.State == IntentState.AwaitingSpecApproval)"
+                          Editable="@(IntentLifecycle.WhyNotSpecEditable(intent.State) is null)" />
             </div>
         }
         @if (Shown.Transcript.Count > 0)
@@ -118,7 +120,8 @@
             },
             intent is null ? null : await Refinements.ProgressOfAsync(intent, cancellationToken),
             intent is null ? [] : await Refinements.TranscriptOfAsync(intent.Id, cancellationToken),
-            intent is null ? null : await Specs.LatestOfAsync(intent.Id, cancellationToken));
+            intent is null ? null : await Specs.LatestOfAsync(intent.Id, cancellationToken),
+            intent is null ? [] : await Specs.VersionsOfAsync(intent.Id, cancellationToken));
     }
 
     /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
@@ -129,8 +132,10 @@
     /// <param name="Refinement">Where its Refinement stands; <c>null</c> unless it is Refining.</param>
     /// <param name="Transcript">The Rounds of its Refinement, in order; empty when it has none.</param>
     /// <param name="Spec">The latest version of its Spec; <c>null</c> when it has none.</param>
+    /// <param name="SpecVersions">Every version of its Spec, in order; empty when it has none.</param>
     public sealed record Detail(
-        Intent? Intent, string? WhyNot, RefinementProgress? Refinement, IReadOnlyList<Round> Transcript, SpecVersion? Spec);
+        Intent? Intent, string? WhyNot, RefinementProgress? Refinement, IReadOnlyList<Round> Transcript, SpecVersion? Spec,
+        IReadOnlyList<SpecVersionHeading> SpecVersions);
 
     /// <summary>A change of an Intent's state that the page offers with a button, disabled while it can't be made.</summary>
     public enum StateChange

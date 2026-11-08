@@ -51,7 +51,20 @@ public sealed record SpecTask(int Number, string Title, string Description, Agen
 }
 
 /// <summary>A version of an Intent's Spec, numbered from 1.</summary>
-public sealed record SpecVersion(int Number, Spec Spec);
+public sealed record SpecVersion(int Number, SpecAuthor WrittenBy, Spec Spec);
+
+/// <summary>A version of an Intent's Spec, without what it says, as a list of its versions shows it.</summary>
+public sealed record SpecVersionHeading(int Number, SpecAuthor WrittenBy);
+
+/// <summary>Who wrote a Spec version.</summary>
+public enum SpecAuthor
+{
+    /// <summary>The Analyst handed it in, ending the Refinement.</summary>
+    Analyst,
+
+    /// <summary>The user edited the version before it.</summary>
+    User,
+}
 
 /// <summary>A version of an Intent's Spec, as PostgreSQL holds it.</summary>
 public sealed class SpecVersionRecord
@@ -59,6 +72,7 @@ public sealed class SpecVersionRecord
     public required Guid IntentId { get; init; }
     public required int Number { get; init; }
     public required DateTimeOffset WrittenAt { get; init; }
+    public required SpecAuthor WrittenBy { get; init; }
     public required string Summary { get; init; }
     public required string Approach { get; init; }
     public required string AcceptanceCriteria { get; init; }

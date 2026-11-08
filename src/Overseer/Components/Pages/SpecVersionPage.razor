@@ -1,0 +1,48 @@
+@page "/intents/{Id:guid}/spec/versions/{Number:int}"
+@attribute [ExcludeFromInteractiveRouting]
+@using Overseer.Specs
+@inject SpecStore Specs
+@inject NavigationManager Navigation
+
+<PageTitle>Spec version @Number · Overseer</PageTitle>
+
+<IntentBackLink IntentId="Id" />
+<h1 class="mb-6">Spec version @Number</h1>
+
+@if (_version is not null)
+{
+    @if (_versions.Count > 0 && _versions[^1].Number != Number)
+    {
+        <p class="callout-warning mb-4" role="status">
+            This is an earlier version of the Spec. The Intent shows the latest, version @_versions[^1].Number.
+        </p>
+    }
+    <article class="panel px-5 py-4 sm:px-6">
+        <SpecView Version="_version" IntentId="Id" Versions="_versions" />
+    </article>
+}
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [Parameter]
+    public Guid Id { get; set; }
+
+    [Parameter]
+    public int Number { get; set; }
+
+    private SpecVersion? _version;
+    private IReadOnlyList<SpecVersionHeading> _versions = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _version = await Specs.VersionOfAsync(Id, Number, HttpContext.RequestAborted);
+        if (_version is null)
+        {
+            Navigation.NotFound();
+            return;
+        }
+        _versions = await Specs.VersionsOfAsync(Id, HttpContext.RequestAborted);
+    }
+}
