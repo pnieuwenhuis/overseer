@@ -12,12 +12,12 @@ Decided: an unanswered Round that was paused stays answerable after Resume. The 
 
 **Blocked by:** 02 (Rounds: the Analyst asks, the user answers)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A Round left unanswered for longer than the idle timeout moves the Intent to Paused through the Intent Lifecycle, destroys its Sandbox and frees its slot; time spent while the Analyst works doesn't count as idle
-- [ ] Changing the idle timeout applies to Refinements already waiting
-- [ ] A Paused Intent takes no slot and has no light (new test for story 42); its Working Time stops accruing
-- [ ] Resume is offered on a Paused Intent that was Refining, and is disabled with the same explanation as Start when all slots are taken
-- [ ] Resuming moves the Intent back to Refining in a fresh Sandbox, and the new Analyst session's first message holds the full transcript
-- [ ] After `serve` restarts, each Refining Intent continues in a fresh Sandbox from its transcript, and Sandboxes left from before the restart are destroyed
-- [ ] Covered by tests through the application with the fake Sandbox Provider and a controllable clock
+- [x] A Round left unanswered for longer than the idle timeout moves the Intent to Paused through the Intent Lifecycle, destroys its Sandbox and frees its slot; time spent while the Analyst works doesn't count as idle
+- [x] Changing the idle timeout applies to Refinements already waiting
+- [x] A Paused Intent takes no slot and has no light (new test for story 42); its Working Time stops accruing
+- [x] Resume is offered on a Paused Intent that was Refining, and is disabled with the same explanation as Start when all slots are taken
+- [x] Resuming moves the Intent back to Refining in a fresh Sandbox, and the new Analyst session's first message holds the full transcript
+- [x] After `serve` restarts, each Refining Intent continues in a fresh Sandbox from its transcript, and Sandboxes left from before the restart are destroyed
+- [x] Covered by tests through the application with the fake Sandbox Provider and a controllable clock
