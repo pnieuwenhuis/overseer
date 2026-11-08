@@ -6,12 +6,12 @@ An edited Spec has to pass the same validation as one written by the Analyst (03
 
 **Blocked by:** 03 (The Analyst writes the Spec)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] On an Intent awaiting Spec approval, the user can edit the prose sections and every Task's title, description, role and repositories, and add and remove Tasks
-- [ ] The user can move a Task up or down in the ordered list
-- [ ] Saving creates a new Spec version; earlier versions stay readable, each showing whether the Analyst wrote it or the user edited it
-- [ ] An edit that fails Spec validation is refused with the reasons, and no version is created
-- [ ] Editing is refused in any state other than AwaitingSpecApproval, also when the Portal is bypassed
-- [ ] Two saves based on the same version can't both succeed; the second is refused and the user sees the newer version
-- [ ] Covered by tests through the application
+- [x] On an Intent awaiting Spec approval, the user can edit the prose sections and every Task's title, description, role and repositories, and add and remove Tasks
+- [x] The user can move a Task up or down in the ordered list
+- [x] Saving creates a new Spec version; earlier versions stay readable, each showing whether the Analyst wrote it or the user edited it
+- [x] An edit that fails Spec validation is refused with the reasons, and no version is created
+- [x] Editing is refused in any state other than AwaitingSpecApproval, also when the Portal is bypassed
+- [x] Two saves based on the same version can't both succeed; the second is refused and the user sees the newer version
+- [x] Covered by tests through the application
