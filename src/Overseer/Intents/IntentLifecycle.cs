@@ -172,19 +172,30 @@ public sealed class IntentLifecycle(
     /// stored.
     /// </summary>
     /// <param name="addVersion">
-    /// Adds the version to the database it is given, without saving, and gives <c>null</c>; or adds nothing, and gives why not.
+    /// Adds the version to the database it is given, without saving, and gives <c>null</c>; or adds nothing, and gives its refusal.
     /// </param>
-    public async Task<IntentChange> EditSpecAsync(
-        Guid id, Func<OverseerDbContext, CancellationToken, Task<string?>> addVersion, CancellationToken cancellationToken)
+    /// <param name="notEditable">The refusal for why the Intent's Spec can't be edited at this moment.</param>
+    /// <returns><c>null</c> once the version is added; otherwise the refusal.</returns>
+    public async Task<TRefusal?> EditSpecAsync<TRefusal>(
+        Guid id,
+        Func<OverseerDbContext, CancellationToken, Task<TRefusal?>> addVersion,
+        Func<string, TRefusal> notEditable,
+        CancellationToken cancellationToken)
+        where TRefusal : class
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-        if ((WhyNotSpecEditable(await LockStateAsync(database, id, cancellationToken)) ?? await addVersion(database, cancellationToken)) is { } refusal)
+        if (WhyNotSpecEditable(await LockStateAsync(database, id, cancellationToken)) is { } notNow)
         {
-            return new IntentChange.Refused(refusal);
+            return notEditable(notNow);
+        }
+        if (await addVersion(database, cancellationToken) is { } refusal)
+        {
+            return refusal;
         }
         await database.SaveChangesAsync(cancellationToken);
-        return await CommitAndAnnounceAsync(transaction, cancellationToken);
+        await CommitAndAnnounceAsync(transaction, cancellationToken);
+        return null;
     }
 
     /// <summary>Why the Spec of an Intent in <paramref name="state"/> can't be edited, or <c>null</c> when it can.</summary>

@@ -1,6 +1,7 @@
 @page "/intents/{Id:guid}/spec/edit"
 @attribute [ExcludeFromInteractiveRouting]
 @using System.Globalization
+@using Microsoft.Extensions.Primitives
 @using Overseer.GitHub
 @using Overseer.Intents
 @using Overseer.Specs
@@ -22,17 +23,12 @@
     @* A form submitted from a page opened earlier is handled whatever became of the Intent, keeping what the user entered, and only a form on the page can handle it. *@
     @if (_notEditable is null || IsSubmitted)
     {
-        @if (_newer is not null)
+        @if (_unsaved is not null)
         {
-            <div class="mb-6 flex flex-col gap-4">
-                <p role="alert" class="callout-warning">
-                    Your changes were not saved: version @_newer.Number of the Spec was saved meanwhile, and it is shown below. Your changes are
-                    still in the form, now based on version @_newer.Number. Saving them makes them version @(_newer.Number + 1).
-                </p>
-                <article class="panel px-5 py-4 sm:px-6">
-                    <SpecView Version="_newer" IntentId="Id" />
-                </article>
-            </div>
+            <p role="alert" class="callout-warning mb-6">
+                Your changes were not saved: version @_basedOn of the Spec was saved meanwhile, and the form now holds it. Your changes are
+                shown below the form, not saved: enter in the form what you still want of them, then save it as version @(_basedOn + 1).
+            </p>
         }
         <form method="post" @formname="@FormName" @onsubmit="SubmitAsync" class="panel form p-5 sm:p-6">
             <AntiforgeryToken />
@@ -52,59 +48,66 @@
             <p class="form-note">
                 Saving makes your changes version @(_basedOn + 1) of the Spec, written in Markdown like the Analyst's. The earlier versions are kept.
             </p>
-            @Section(nameof(SpecDraft.Summary), "Summary", _draft.Summary, optional: false)
-            @Section(nameof(SpecDraft.Approach), "Approach", _draft.Approach, optional: false)
+            @Section(nameof(EditedSpec.Summary), SpecLabels.Summary, _edit.Summary, optional: false)
+            @Section(nameof(EditedSpec.Approach), SpecLabels.Approach, _edit.Approach, optional: false)
             <section class="spec-editor-decisions">
-                <h2>Decisions</h2>
-                <p class="form-note">The decisions stay as the version you edit has them.</p>
-                @if (_decisions.Count == 0)
+                <h2>@SpecLabels.Decisions</h2>
+                <p class="form-note">A decision you change or add is yours: only one left as it is stays an Analyst's Choice.</p>
+                @if (_edit.Decisions.Count > 0)
                 {
-                    <p>None.</p>
-                }
-                else
-                {
-                    <ol class="spec-decisions">
-                        @foreach (var (decision, number) in _decisions.Select((decision, index) => (decision, index + 1)))
+                    <ol class="spec-editor-list">
+                        @foreach (var (decision, number) in _edit.Decisions.Select((decision, index) => (decision, index + 1)))
                         {
-                            <li class="spec-decision" data-analysts-choice="@decision.IsAnalystsChoice">
-                                @if (decision.IsAnalystsChoice)
-                                {
-                                    <p class="analysts-choice">Analyst's Choice</p>
-                                }
-                                <MarkdownPreview Label="@($"Decision {number}")" Text="@decision.Text" />
+                            <li class="spec-editor-decision">
+                                <label>
+                                    <span>
+                                        Decision @number
+                                        @if (EditedSpec.IsAnalystsChoice(decision, _editedDecisions))
+                                        {
+                                            <span class="analysts-choice">Analyst's Choice</span>
+                                        }
+                                    </span>
+                                    <textarea name="@nameof(EditedSpec.Decisions)" rows="3" spellcheck="true">@decision</textarea>
+                                </label>
+                                <span class="buttons">
+                                    <button type="submit" name="@nameof(FormButton.RemoveDecision)" value="@number" class="btn-row">Remove</button>
+                                </span>
                             </li>
                         }
                     </ol>
                 }
+                <span class="buttons">
+                    <button type="submit" name="@nameof(FormButton.AddDecision)">Add decision</button>
+                </span>
             </section>
-            @Section(nameof(SpecDraft.AcceptanceCriteria), "Acceptance criteria", _draft.AcceptanceCriteria, optional: false)
-            @Section(nameof(SpecDraft.Dependencies), "Dependencies", _draft.Dependencies, optional: false)
-            @Section(nameof(SpecDraft.ApiEndpointChanges), "API endpoint changes", _draft.ApiEndpointChanges, optional: true)
-            @Section(nameof(SpecDraft.DataModelChanges), "Data model changes", _draft.DataModelChanges, optional: true)
-            @Section(nameof(SpecDraft.UiChanges), "UI changes", _draft.UiChanges, optional: true)
+            @Section(nameof(EditedSpec.AcceptanceCriteria), SpecLabels.AcceptanceCriteria, _edit.AcceptanceCriteria, optional: false)
+            @Section(nameof(EditedSpec.Dependencies), SpecLabels.Dependencies, _edit.Dependencies, optional: false)
+            @Section(nameof(EditedSpec.ApiEndpointChanges), SpecLabels.ApiEndpointChanges, _edit.ApiEndpointChanges, optional: true)
+            @Section(nameof(EditedSpec.DataModelChanges), SpecLabels.DataModelChanges, _edit.DataModelChanges, optional: true)
+            @Section(nameof(EditedSpec.UiChanges), SpecLabels.UiChanges, _edit.UiChanges, optional: true)
             <section class="spec-editor-tasks">
-                <h2>Tasks</h2>
+                <h2>@SpecLabels.Tasks</h2>
                 <p class="form-note">Carried out one at a time, in this order.</p>
-                <ol class="spec-tasks">
-                    @foreach (var (task, number) in _draft.Tasks.Select((task, index) => (task, index + 1)))
+                <ol class="spec-editor-list">
+                    @foreach (var (task, number) in _edit.Tasks.Select((task, index) => (task, index + 1)))
                     {
                         <li class="spec-editor-task" data-task="@number">
                             <input type="hidden" name="@TaskField" value="@number" />
                             <h3 class="spec-task-heading"><span class="spec-task-number">@number.</span> Task @number</h3>
                             <label>
                                 Title
-                                <input type="text" name="@TaskFieldName(number, "Title")" value="@task.Title" />
+                                <input type="text" name="@TaskFieldName(number, nameof(EditedTask.Title))" value="@task.Title" />
                             </label>
                             <label>
                                 Description
-                                <textarea name="@TaskFieldName(number, "Description")" rows="5" spellcheck="true">@task.Description</textarea>
+                                <textarea name="@TaskFieldName(number, nameof(EditedTask.Description))" rows="5" spellcheck="true">@task.Description</textarea>
                             </label>
                             <label>
                                 Role
-                                <select name="@TaskFieldName(number, "Role")">
-                                    @foreach (var role in Roles)
+                                <select name="@TaskFieldName(number, nameof(EditedTask.Role))">
+                                    @foreach (var role in SpecHandIn.TaskRoles)
                                     {
-                                        <option value="@role" selected="@(task.Role == role)">@role</option>
+                                        <option value="@role" selected="@(task.Role == role.ToString())">@role</option>
                                     }
                                 </select>
                             </label>
@@ -113,29 +116,75 @@
                                 @foreach (var repository in _repositories)
                                 {
                                     <label>
-                                        <input type="checkbox" name="@TaskFieldName(number, "Repositories")" value="@repository"
+                                        <input type="checkbox" name="@TaskFieldName(number, nameof(EditedTask.Repositories))" value="@repository"
                                                checked="@task.Repositories.Any(touched => RepositoryName.TryParse(touched, out var name) && RepositoryName.SameRepository.Equals(name, repository))" />
                                         @repository
                                     </label>
                                 }
                             </fieldset>
                             <span class="buttons">
-                                <button type="submit" name="@ActionField" value="@($"{MoveUpAction}{number}")" disabled="@(number == 1)">Move up</button>
-                                <button type="submit" name="@ActionField" value="@($"{MoveDownAction}{number}")" disabled="@(number == _draft.Tasks.Count)">Move down</button>
-                                <button type="submit" name="@ActionField" value="@($"{RemoveAction}{number}")" class="btn-row">Remove</button>
+                                <button type="submit" name="@nameof(FormButton.MoveUp)" value="@number" disabled="@(number == 1)">Move up</button>
+                                <button type="submit" name="@nameof(FormButton.MoveDown)" value="@number" disabled="@(number == _edit.Tasks.Count)">Move down</button>
+                                <button type="submit" name="@nameof(FormButton.RemoveTask)" value="@number" class="btn-row">Remove</button>
                             </span>
                         </li>
                     }
                 </ol>
                 <span class="buttons">
-                    <button type="submit" name="@ActionField" value="@AddAction">Add Task</button>
+                    <button type="submit" name="@nameof(FormButton.AddTask)">Add Task</button>
                 </span>
             </section>
             <span class="buttons">
                 <a href="intents/@Id" class="btn">Cancel</a>
-                <button type="submit" name="@ActionField" value="@SaveAction" class="btn-primary">Save as version @(_basedOn + 1)</button>
+                <button type="submit" name="@nameof(FormButton.Save)" class="btn-primary">Save as version @(_basedOn + 1)</button>
             </span>
         </form>
+        @if (_unsaved is not null)
+        {
+            <section class="panel spec-unsaved mt-6 p-5 sm:p-6" aria-labelledby="spec-unsaved-heading">
+                <h2 class="spec-unsaved-heading" id="spec-unsaved-heading">Your changes, not saved</h2>
+                <p class="form-note">What you entered, as you tried to save it. None of it is in the form above.</p>
+                @Unsaved(SpecLabels.Summary, _unsaved.Summary)
+                @Unsaved(SpecLabels.Approach, _unsaved.Approach)
+                <div class="spec-unsaved-section" data-section="@SpecLabels.Decisions">
+                    <h3>@SpecLabels.Decisions</h3>
+                    @if (_unsaved.Decisions.Count == 0)
+                    {
+                        <p class="form-note">None.</p>
+                    }
+                    else
+                    {
+                        <ol class="spec-unsaved-list">
+                            @foreach (var decision in _unsaved.Decisions)
+                            {
+                                <li><pre class="spec-unsaved-text">@decision</pre></li>
+                            }
+                        </ol>
+                    }
+                </div>
+                @Unsaved(SpecLabels.AcceptanceCriteria, _unsaved.AcceptanceCriteria)
+                @Unsaved(SpecLabels.Dependencies, _unsaved.Dependencies)
+                @Unsaved(SpecLabels.ApiEndpointChanges, _unsaved.ApiEndpointChanges)
+                @Unsaved(SpecLabels.DataModelChanges, _unsaved.DataModelChanges)
+                @Unsaved(SpecLabels.UiChanges, _unsaved.UiChanges)
+                <div class="spec-unsaved-section" data-section="@SpecLabels.Tasks">
+                    <h3>@SpecLabels.Tasks</h3>
+                    <ol class="spec-unsaved-list">
+                        @foreach (var (task, number) in _unsaved.Tasks.Select((task, index) => (task, index + 1)))
+                        {
+                            <li class="spec-unsaved-task">
+                                <h4 class="spec-task-heading"><span class="spec-task-number">@number.</span> <span class="spec-unsaved-task-title">@task.Title</span></h4>
+                                <p class="spec-task-facts">
+                                    <span class="spec-task-role">@task.Role</span>
+                                    <span class="spec-task-repositories">@string.Join(", ", task.Repositories)</span>
+                                </p>
+                                <pre class="spec-unsaved-text">@task.Description</pre>
+                            </li>
+                        }
+                    </ol>
+                </div>
+            </section>
+        }
     }
     else
     {
@@ -145,30 +194,31 @@
 
 @code {
     /// <summary>The name of the Spec's editor.</summary>
-    public const string FormName = "edit-spec";
+    private const string FormName = "edit-spec";
 
     /// <summary>The field that holds the number of the version edited.</summary>
-    public const string BasedOnField = "BasedOn";
+    private const string BasedOnField = "BasedOn";
 
     /// <summary>The field whose values number the Tasks in their order, for the fields of each Task.</summary>
-    public const string TaskField = "Task";
+    private const string TaskField = "Task";
 
-    /// <summary>The field that says which button submitted the form.</summary>
-    public const string ActionField = "SpecAction";
-
-    /// <summary>The value of the button that saves. The others change the form only, until it is saved.</summary>
-    public const string SaveAction = "save";
-
-    public const string AddAction = "add";
-    public const string MoveUpAction = "up:";
-    public const string MoveDownAction = "down:";
-    public const string RemoveAction = "remove:";
-
-    /// <summary>The roles a Task can have, which its role offers.</summary>
-    private static readonly string[] Roles = ["Designer", "Developer"];
+    /// <summary>
+    /// The buttons that submit the form, each named after its member. Save saves; the others change the form only, until it is saved.
+    /// A button beside a decision or a Task has its number as its value.
+    /// </summary>
+    private enum FormButton
+    {
+        Save,
+        AddDecision,
+        RemoveDecision,
+        AddTask,
+        MoveUp,
+        MoveDown,
+        RemoveTask,
+    }
 
     /// <summary>The field of Task <paramref name="number"/> holding its <paramref name="property"/>.</summary>
-    public static string TaskFieldName(int number, string property) => $"Task.{number}.{property}";
+    private static string TaskFieldName(int number, string property) => $"Task.{number}.{property}";
 
     [CascadingParameter]
     private HttpContext HttpContext { get; set; } = default!;
@@ -184,13 +234,14 @@
 
     // What the form shows: the latest version, and once the form is submitted, what was submitted, as saving would keep it.
     private int _basedOn;
-    private SpecDraft _draft = new(null, null, null, null, null, null, null, []);
-    private IReadOnlyList<SpecDecision> _decisions = [];
+    private EditedSpec _edit = new(null, null, [], null, null, null, null, null, []);
+    // The decisions of version _basedOn, whose Analyst's Choices the form marks while they are unchanged.
+    private IReadOnlyList<SpecDecision> _editedDecisions = [];
 
     // Why the last save was refused; empty unless it was.
     private IReadOnlyList<string> _refusal = [];
-    // The version saved meanwhile, which refused the last save; null unless one did.
-    private SpecVersion? _newer;
+    // What the user tried to save when a version saved meanwhile refused it, which the form no longer holds; null unless that happened.
+    private EditedSpec? _unsaved;
 
     private bool IsSubmitted => HttpMethods.IsPost(HttpContext.Request.Method);
 
@@ -214,51 +265,78 @@
     private async Task SubmitAsync()
     {
         var form = HttpContext.Request.Form;
-        _basedOn = int.TryParse(form[BasedOnField], NumberStyles.None, CultureInfo.InvariantCulture, out var basedOn) ? basedOn : 0;
-        _decisions = (await Specs.VersionOfAsync(Id, _basedOn, HttpContext.RequestAborted))?.Spec.Decisions ?? [];
+        _basedOn = NumberIn(form[BasedOnField]);
+        _editedDecisions = (await Specs.VersionOfAsync(Id, _basedOn, HttpContext.RequestAborted))?.Spec.Decisions ?? [];
         // The Tasks in the order the form has them, by the number each has on it.
-        var numbers = form[TaskField].Select(number => int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0).ToList();
-        _draft = new SpecDraft(
-            form[nameof(SpecDraft.Summary)],
-            form[nameof(SpecDraft.Approach)],
-            form[nameof(SpecDraft.AcceptanceCriteria)],
-            form[nameof(SpecDraft.Dependencies)],
-            form[nameof(SpecDraft.ApiEndpointChanges)],
-            form[nameof(SpecDraft.DataModelChanges)],
-            form[nameof(SpecDraft.UiChanges)],
-            [.. numbers.Select(number => new SpecTaskDraft(
-                form[TaskFieldName(number, "Title")],
-                form[TaskFieldName(number, "Description")],
-                form[TaskFieldName(number, "Role")],
-                [.. form[TaskFieldName(number, "Repositories")].OfType<string>()]))]);
+        var tasks = form[TaskField].Select(number => NumberIn(number)).ToList();
+        _edit = new EditedSpec(
+            form[nameof(EditedSpec.Summary)],
+            form[nameof(EditedSpec.Approach)],
+            [.. form[nameof(EditedSpec.Decisions)]],
+            form[nameof(EditedSpec.AcceptanceCriteria)],
+            form[nameof(EditedSpec.Dependencies)],
+            form[nameof(EditedSpec.ApiEndpointChanges)],
+            form[nameof(EditedSpec.DataModelChanges)],
+            form[nameof(EditedSpec.UiChanges)],
+            [.. tasks.Select(number => new EditedTask(
+                form[TaskFieldName(number, nameof(EditedTask.Title))],
+                form[TaskFieldName(number, nameof(EditedTask.Description))],
+                form[TaskFieldName(number, nameof(EditedTask.Role))],
+                [.. form[TaskFieldName(number, nameof(EditedTask.Repositories))].OfType<string>()]))]);
 
-        // Which Task, counted in the form's order, a button beside a Task was pressed for.
-        int TaskOf(string action) =>
-            int.TryParse(action.AsSpan(action.IndexOf(':') + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? numbers.IndexOf(number) + 1 : 0;
-
-        switch (form[ActionField].ToString())
+        if (Pressed(form) is not { } pressed)
         {
-            case SaveAction:
+            return;
+        }
+        var (button, number) = pressed;
+        // A Task's buttons have the number the form gives it, which counts it in the form's order.
+        var task = tasks.IndexOf(number) + 1;
+        switch (button)
+        {
+            case FormButton.Save:
                 await SaveAsync();
                 break;
-            case AddAction:
-                _draft = _draft.WithTaskAdded();
+            case FormButton.AddDecision:
+                _edit = _edit.WithDecisionAdded();
                 break;
-            case var action when action.StartsWith(MoveUpAction, StringComparison.Ordinal):
-                _draft = _draft.WithTaskMoved(TaskOf(action), -1);
+            case FormButton.RemoveDecision:
+                _edit = _edit.WithoutDecision(number);
                 break;
-            case var action when action.StartsWith(MoveDownAction, StringComparison.Ordinal):
-                _draft = _draft.WithTaskMoved(TaskOf(action), 1);
+            case FormButton.AddTask:
+                _edit = _edit.WithTaskAdded();
                 break;
-            case var action when action.StartsWith(RemoveAction, StringComparison.Ordinal):
-                _draft = _draft.WithoutTask(TaskOf(action));
+            case FormButton.MoveUp:
+                _edit = _edit.WithTaskMoved(task, -1);
+                break;
+            case FormButton.MoveDown:
+                _edit = _edit.WithTaskMoved(task, 1);
+                break;
+            case FormButton.RemoveTask:
+                _edit = _edit.WithoutTask(task);
                 break;
         }
     }
 
+    /// <summary>The button that submitted <paramref name="form"/>, with its value as a number (0 when it has none); <c>null</c> when none did.</summary>
+    private static (FormButton Button, int Number)? Pressed(IFormCollection form)
+    {
+        foreach (var button in Enum.GetValues<FormButton>())
+        {
+            if (form.TryGetValue(button.ToString(), out var value))
+            {
+                return (button, NumberIn(value));
+            }
+        }
+        return null;
+    }
+
+    /// <summary>The number a field holds; 0 when it holds none.</summary>
+    private static int NumberIn(StringValues value) =>
+        int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0;
+
     private async Task SaveAsync()
     {
-        switch (await Edits.SaveAsync(Id, _basedOn, _draft, HttpContext.RequestAborted))
+        switch (await Edits.SaveAsync(Id, _basedOn, _edit, HttpContext.RequestAborted))
         {
             case SpecEdit.Saved:
                 Navigation.NavigateTo($"/intents/{Id}");
@@ -267,10 +345,10 @@
                 _refusal = reasons;
                 break;
             case SpecEdit.Outdated(var latest):
-                // The user's changes stay in the form, to save on top of the newer version once they have seen it.
-                _newer = latest;
-                _basedOn = latest.Number;
-                _decisions = latest.Spec.Decisions;
+                // The form takes the newer version, so that saving it again can't undo what that save wrote; the user's own changes
+                // are shown apart, for them to enter again.
+                _unsaved = _edit;
+                StartFrom(latest);
                 break;
         }
     }
@@ -278,8 +356,8 @@
     private void StartFrom(SpecVersion version)
     {
         _basedOn = version.Number;
-        _draft = SpecDraft.Of(version.Spec);
-        _decisions = version.Spec.Decisions;
+        _edit = EditedSpec.Of(version.Spec);
+        _editedDecisions = version.Spec.Decisions;
     }
 
     /// <summary>A prose section of the Spec: its heading, and its Markdown to edit.</summary>
@@ -292,4 +370,18 @@
             }
             <textarea name="@field" rows="@(optional ? 3 : 5)" spellcheck="true">@markdown</textarea>
         </label>;
+
+    /// <summary>A prose section the user tried to save, as they entered it.</summary>
+    private static RenderFragment Unsaved(string heading, string? markdown) =>
+        @<div class="spec-unsaved-section" data-section="@heading">
+            <h3>@heading</h3>
+            @if (string.IsNullOrWhiteSpace(markdown))
+            {
+                <p class="form-note">Empty.</p>
+            }
+            else
+            {
+                <pre class="spec-unsaved-text">@markdown</pre>
+            }
+        </div>;
 }

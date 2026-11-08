@@ -106,7 +106,7 @@ A Task whose work still does not pass verification after the allowed number of a
 _Avoid_: Broken task, errored task
 
 **Analyst's Choice**:
-A decision in a Spec that the human left to the Analyst by accepting its suggested answer instead of giving their own.
+A decision in a Spec that the human left to the Analyst by accepting its suggested answer instead of giving their own. When the human edits the Spec, a decision stays an Analyst's Choice only while they leave its text unchanged.
 _Avoid_: Assumption, default
 
 **Approved Spec**:

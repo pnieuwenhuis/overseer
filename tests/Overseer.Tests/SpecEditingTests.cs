@@ -19,7 +19,7 @@ public class SpecEditingTests(PostgresServer postgres)
         var form = await SpecForm.OpenAsync(overseer, address);
 
         form.Set("Summary", "Orders can be exported as **Excel**.");
-        var page = await form.SubmitAsync("save");
+        var page = await form.SubmitAsync("Save");
 
         Assert.Equal(address, "/" + page.Address);
         Assert.Equal(2, SpecVersionOn(page.Html));
@@ -54,12 +54,12 @@ public class SpecEditingTests(PostgresServer postgres)
         form.Set("Task.1.Description", "Write every order to a file.\r\n\r\n- as CSV");
         form.Set("Task.1.Role", "Designer");
         form.Set("Task.1.Repositories", "acme/web", "acme/api");
-        await form.SubmitAsync("remove:2");
-        await form.SubmitAsync("add");
+        await form.SubmitAsync("RemoveTask", "2");
+        await form.SubmitAsync("AddTask");
         form.Set("Task.2.Title", "Email the file");
         form.Set("Task.2.Description", "Send it to the user.");
         form.Set("Task.2.Repositories", "acme/api");
-        var page = (await form.SubmitAsync("save")).Html;
+        var page = (await form.SubmitAsync("Save")).Html;
 
         Assert.Equal(2, SpecVersionOn(page));
         Assert.Equal(
@@ -93,12 +93,12 @@ public class SpecEditingTests(PostgresServer postgres)
         var address = await AwaitingApprovalOfAsync(overseer, spec, "acme/web");
         var form = await SpecForm.OpenAsync(overseer, address);
 
-        var moved = await form.SubmitAsync("up:3");
+        var moved = await form.SubmitAsync("MoveUp", "3");
         Assert.Equal(["First", "Third", "Second"], form.Get("Task").Select(number => form.Get($"Task.{number}.Title").Single()));
         // Moving only changes the form: nothing is saved until the user saves.
         Assert.Equal(1, SpecVersionOn(await GetAsync(overseer, address)));
-        await form.SubmitAsync("down:1");
-        var page = (await form.SubmitAsync("save")).Html;
+        await form.SubmitAsync("MoveDown", "1");
+        var page = (await form.SubmitAsync("Save")).Html;
 
         Assert.Equal(2, SpecVersionOn(page));
         Assert.Equal(
@@ -112,7 +112,7 @@ public class SpecEditingTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task An_edit_that_isnt_a_valid_Spec_is_refused_with_every_reason_keeping_what_the_user_entered_and_no_version_is_made()
+    public async Task An_edit_that_isnt_a_valid_Spec_is_refused_with_every_reason_in_the_forms_words_keeping_what_the_user_entered_and_no_version_is_made()
     {
         // acme/api is configured, but not in this Intent's scope.
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web", "acme/api");
@@ -121,25 +121,30 @@ public class SpecEditingTests(PostgresServer postgres)
 
         form.Set("Summary", " ");
         form.Set("Approach", "Changed.");
+        form.Set("AcceptanceCriteria", "");
         form.Set("Task.1.Repositories");
-        await form.SubmitAsync("add");
+        await form.SubmitAsync("AddDecision");
+        await form.SubmitAsync("AddTask");
         form.Set("Task.2.Description", "No title.");
         form.Set("Task.2.Role", "Reviewer");
         form.Set("Task.2.Repositories", "acme/api");
-        var refused = await form.SubmitAsync("save");
+        var refused = await form.SubmitAsync("Save");
 
         Assert.Equal(address + "/spec/edit", "/" + refused.Address);
         Assert.Equal(
             [
-                "The Spec has no \"summary\": it must be Markdown text that isn't empty.",
-                "Task 1 touches no repository: \"repositories\" must list at least one of the Repositories in scope, acme/web.",
-                "Task 2 has no \"title\": it must be text that isn't empty.",
-                "Task 2 has the role \"Reviewer\": it must be \"Designer\" or \"Developer\".",
+                "Summary is empty: write it in Markdown.",
+                "Acceptance criteria is empty: write it in Markdown.",
+                "Decision 3 is empty: write it in Markdown, or remove it.",
+                "Task 1 touches no repository: tick at least one of the Repositories in scope, acme/web.",
+                "Task 2's title is empty.",
+                "Task 2's role is Reviewer: choose Designer or Developer.",
                 "Task 2 touches acme/api, which isn't a Repository in scope: those are acme/web.",
             ],
             RefusalOn(refused.Html));
         Assert.Equal(["Changed."], form.Get("Approach"));
         Assert.Equal(["No title."], form.Get("Task.2.Description"));
+        Assert.Equal(["The export is *CSV*.", "It holds every order.", ""], form.Get("Decisions"));
         var detail = await GetAsync(overseer, address);
         Assert.Equal(1, SpecVersionOn(detail));
         Assert.Empty(VersionsOn(detail));
@@ -158,8 +163,8 @@ public class SpecEditingTests(PostgresServer postgres)
         var address = await AwaitingApprovalOfAsync(overseer, spec, "acme/web");
         var form = await SpecForm.OpenAsync(overseer, address);
 
-        await form.SubmitAsync("remove:1");
-        var refused = await form.SubmitAsync("save");
+        await form.SubmitAsync("RemoveTask", "1");
+        var refused = await form.SubmitAsync("Save");
 
         Assert.Equal(
             ["No Task creates the Repository Manifest of acme/web, which has none on its default branch: add a Task that touches it and creates its `.overseer.yml`, naming that file in its title or description."],
@@ -180,7 +185,7 @@ public class SpecEditingTests(PostgresServer postgres)
         await SetStateAsync(overseer, "Export data", state);
 
         form.Set("Summary", "Changed.");
-        var refused = await form.SubmitAsync("save");
+        var refused = await form.SubmitAsync("Save");
 
         Assert.Equal([$"This Intent is {shownAs}, and only a Spec awaiting approval can be edited."], RefusalOn(refused.Html));
         var detail = await GetAsync(overseer, address);
@@ -202,7 +207,7 @@ public class SpecEditingTests(PostgresServer postgres)
         [
             new("BasedOn", "0"), new("Summary", "Mine."), new("Approach", "Mine."), new("AcceptanceCriteria", "Mine."), new("Dependencies", "None."),
             new("Task", "1"), new("Task.1.Title", "Mine"), new("Task.1.Description", "Mine."), new("Task.1.Role", "Developer"),
-            new("Task.1.Repositories", "acme/web"), new("SpecAction", "save"),
+            new("Task.1.Repositories", "acme/web"), new("Save", ""),
         ]);
 
         Assert.Equal(["This Intent is Draft, and only a Spec awaiting approval can be edited."], RefusalOn(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
@@ -210,7 +215,7 @@ public class SpecEditingTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task Of_two_saves_based_on_the_same_version_the_second_is_refused_and_shows_the_newer_version_keeping_the_users_changes()
+    public async Task Of_two_saves_based_on_the_same_version_the_second_is_refused_and_the_form_holds_the_newer_version_beside_the_users_unsaved_changes()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         var address = await AwaitingApprovalOfAsync(overseer, Spec(), "acme/web");
@@ -218,23 +223,63 @@ public class SpecEditingTests(PostgresServer postgres)
         var second = await SpecForm.OpenAsync(overseer, address);
         first.Set("Summary", "From the first tab.");
         second.Set("Approach", "From the second tab.");
+        second.Set("Task.1.Title", "Retitled in the second tab");
 
-        await first.SubmitAsync("save");
-        var refused = await second.SubmitAsync("save");
+        await first.SubmitAsync("Save");
+        var refused = await second.SubmitAsync("Save");
 
         Assert.StartsWith("Your changes were not saved: version 2 of the Spec was saved meanwhile", Alert(refused.Html));
-        Assert.Equal(2, SpecVersionOn(refused.Html));
-        Assert.Equal("<p>From the first tab.</p>", SpecMarkdown(refused.Html, "Summary"));
-        Assert.Equal(["From the second tab."], second.Get("Approach"));
+        // The form holds the newer version, so that saving again keeps what the other save wrote.
         Assert.Equal(["2"], second.Get("BasedOn"));
+        Assert.Equal(["From the first tab."], second.Get("Summary"));
+        Assert.Equal(["Add an export endpoint and a button on the orders page."], second.Get("Approach"));
+        Assert.Equal(["Add the export endpoint"], second.Get("Task.1.Title"));
+        // The user's own changes are shown read-only, as not saved, to enter again by hand.
+        Assert.Equal("Your changes, not saved", ElementText(refused.Html, "spec-unsaved-heading"));
+        Assert.Equal("From the second tab.", UnsavedSection(refused.Html, "Approach"));
+        Assert.Equal("Orders can be exported as **CSV**.", UnsavedSection(refused.Html, "Summary"));
+        Assert.Equal("Retitled in the second tab", ElementText(refused.Html, "spec-unsaved-task-title"));
         var detail = await GetAsync(overseer, address);
         Assert.Equal([(1, "written by the Analyst"), (2, "edited by you")], VersionsOn(detail));
 
-        // Once seen, the user can save their changes on top of the newer version.
-        var saved = (await second.SubmitAsync("save")).Html;
+        second.Set("Approach", "From the second tab.");
+        var saved = (await second.SubmitAsync("Save")).Html;
         Assert.Equal(3, SpecVersionOn(saved));
-        Assert.Equal("<p>Orders can be exported as <strong>CSV</strong>.</p>", SpecMarkdown(saved, "Summary"));
+        Assert.Equal("<p>From the first tab.</p>", SpecMarkdown(saved, "Summary"));
         Assert.Equal("<p>From the second tab.</p>", SpecMarkdown(saved, "Approach"));
+        Assert.Equal(["Add the export endpoint"], Tasks(saved).Select(task => task.Title));
+    }
+
+    [Fact]
+    public async Task The_user_edits_adds_and_removes_decisions_and_only_an_unchanged_Analysts_Choice_stays_one()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        var spec = Spec();
+        spec["decisions"] = new JsonArray(
+            new JsonObject { ["decision"] = "The export is *CSV*.", ["analystsChoice"] = true },
+            new JsonObject { ["decision"] = "It holds every order.", ["analystsChoice"] = false },
+            new JsonObject { ["decision"] = "Exports are logged.\n\n- with the user", ["analystsChoice"] = true });
+        var address = await AwaitingApprovalOfAsync(overseer, spec, "acme/web");
+        var form = await SpecForm.OpenAsync(overseer, address);
+        Assert.Equal(["The export is *CSV*.", "It holds every order.", "Exports are logged.\n\n- with the user"], form.Get("Decisions"));
+
+        await form.SubmitAsync("RemoveDecision", "2");
+        await form.SubmitAsync("AddDecision");
+        // As a browser sends a textarea, with CRLF line breaks: the decision left as it was is still the Analyst's Choice.
+        form.Set("Decisions", "The export is *Excel*.", "Exports are logged.\r\n\r\n- with the user", "It runs nightly.");
+        var page = (await form.SubmitAsync("Save")).Html;
+
+        Assert.Equal(2, SpecVersionOn(page));
+        Assert.Equal(
+            [
+                ("<p>The export is <em>Excel</em>.</p>", false),
+                ("<p>Exports are logged.</p>\n<ul>\n<li>with the user</li>\n</ul>", true),
+                ("<p>It runs nightly.</p>", false),
+            ],
+            Decisions(page));
+        Assert.Equal(
+            [("<p>The export is <em>CSV</em>.</p>", true), ("<p>It holds every order.</p>", false), ("<p>Exports are logged.</p>\n<ul>\n<li>with the user</li>\n</ul>", true)],
+            Decisions(await GetAsync(overseer, VersionAddress(page, 1))));
     }
 
     [Fact]
@@ -262,6 +307,12 @@ public class SpecEditingTests(PostgresServer postgres)
         Regex.Match(page, "<ul class=\"spec-editor-errors\">(.*?)</ul>", RegexOptions.Singleline) is { Success: true } reasons
             ? [.. Regex.Matches(reasons.Groups[1].Value, "<li>(.*?)</li>", RegexOptions.Singleline).Select(reason => WebUtility.HtmlDecode(reason.Groups[1].Value).Trim())]
             : [];
+
+    /// <summary>The Markdown of a prose section among the user's changes the page shows as not saved.</summary>
+    private static string UnsavedSection(string page, string heading) =>
+        Regex.Match(page, $"<div class=\"spec-unsaved-section\" data-section=\"{Regex.Escape(heading)}\">.*?<pre[^>]*>(.*?)</pre>", RegexOptions.Singleline) is { Success: true } section
+            ? WebUtility.HtmlDecode(section.Groups[1].Value)
+            : throw new InvalidOperationException($"The page shows no unsaved {heading}: {page}");
 
     /// <summary>The address the page's Edit button for the Spec leads to; <c>null</c> when it has none.</summary>
     private static string? EditLinkOn(string page) =>
@@ -329,12 +380,13 @@ internal sealed class SpecForm
     }
 
     /// <summary>
-    /// Presses the button with this value, and gives the page the browser then shows. When that page has the editor again, as after
-    /// moving a Task or a refused save, this form holds its fields from then on.
+    /// Presses the button of this name, beside the Task or decision numbered <paramref name="number"/> when it is one of theirs, and
+    /// gives the page the browser then shows. When that page has the editor again, as after moving a Task or a refused save, this form
+    /// holds its fields from then on.
     /// </summary>
-    public async Task<ShownPage> SubmitAsync(string action)
+    public async Task<ShownPage> SubmitAsync(string button, string number = "")
     {
-        using var response = await _tab.SubmitFormAsync(Name, [.. _fields, new("SpecAction", action)]);
+        using var response = await _tab.SubmitFormAsync(Name, [.. _fields, new(button, number)]);
         var html = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.True(response.IsSuccessStatusCode, html);
         if (FieldsOf(html) is { } fields)

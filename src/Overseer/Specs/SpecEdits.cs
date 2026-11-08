@@ -12,25 +12,25 @@ namespace Overseer.Specs;
 public sealed class SpecEdits(IntentLifecycle lifecycle, SpecStore specs, IGitHubGateway gitHub, TimeProvider time)
 {
     /// <summary>
-    /// Saves <paramref name="draft"/> as the next version of the Intent's Spec, with the decisions of version
-    /// <paramref name="basedOn"/>, which it edits. Refused, saving nothing, unless the Intent awaits Spec approval, the draft is a valid
-    /// Spec, and version <paramref name="basedOn"/> is still the latest.
+    /// Saves <paramref name="edit"/> as the next version of the Intent's Spec, which edits version <paramref name="basedOn"/>.
+    /// Refused, saving nothing, unless the Intent awaits Spec approval, the edit is a valid Spec, and version
+    /// <paramref name="basedOn"/> is still the latest.
     /// </summary>
-    public async Task<SpecEdit> SaveAsync(Guid intentId, int basedOn, SpecDraft draft, CancellationToken cancellationToken)
+    public async Task<SpecEdit> SaveAsync(Guid intentId, int basedOn, EditedSpec edit, CancellationToken cancellationToken)
     {
         var intent = await lifecycle.FindAsync(intentId, cancellationToken);
         if (IntentLifecycle.WhyNotSpecEditable(intent?.State) is { } notEditable)
         {
             return new SpecEdit.Refused([notEditable]);
         }
-        if (await specs.VersionOfAsync(intentId, basedOn, cancellationToken) is not { } edited)
+        if (await specs.VersionOfAsync(intentId, basedOn, cancellationToken) is not { } version)
         {
             return new SpecEdit.Refused([$"The Spec has no version {basedOn} to edit."]);
         }
 
         // The Repository Manifests as they are now, as a Refinement starting now would find them.
         var manifests = await ManifestCheck.RunAsync(gitHub, intent!.RepositoriesInScope, cancellationToken);
-        switch (new SpecHandIn(intent.RepositoriesInScope, manifests.Lacking).Check(draft, edited.Spec.Decisions))
+        switch (new SpecHandIn(intent.RepositoriesInScope, manifests.Lacking).Check(edit, version.Spec.Decisions))
         {
             case HandedIn<Spec>.Invalid(var errors):
                 return new SpecEdit.Refused(errors);
@@ -44,24 +44,17 @@ public sealed class SpecEdits(IntentLifecycle lifecycle, SpecStore specs, IGitHu
     /// <summary>Adds <paramref name="spec"/> as the next version of the Intent's Spec, while version <paramref name="basedOn"/> is the latest.</summary>
     private async Task<SpecEdit> AddVersionAsync(Guid intentId, int basedOn, Spec spec, CancellationToken cancellationToken)
     {
-        var outdated = false;
-        var change = await lifecycle.EditSpecAsync(intentId, async (database, stopping) =>
+        var refusal = await lifecycle.EditSpecAsync<SpecEdit>(intentId, async (database, stopping) =>
         {
-            if (await SpecStore.LatestNumberAsync(database, intentId, stopping) != basedOn)
+            if (await SpecStore.LatestOfAsync(database, intentId, stopping) is { } latest && latest.Number != basedOn)
             {
-                outdated = true;
-                return "A newer version of the Spec was saved meanwhile.";
+                return new SpecEdit.Outdated(latest);
             }
             await SpecStore.AddVersionAsync(database, intentId, spec, SpecAuthor.User, time.GetUtcNow(), stopping);
             return null;
-        }, cancellationToken);
-        return change switch
-        {
-            IntentChange.Made => new SpecEdit.Saved(basedOn + 1),
-            IntentChange.Refused when outdated && await specs.LatestOfAsync(intentId, cancellationToken) is { } latest => new SpecEdit.Outdated(latest),
-            IntentChange.Refused refused => new SpecEdit.Refused([refused.Error]),
-            _ => throw new InvalidOperationException("A change is either made or refused."),
-        };
+        }, notEditable => new SpecEdit.Refused([notEditable]), cancellationToken);
+        // Added under the lock while version basedOn was the latest, so as the one after it.
+        return refusal ?? new SpecEdit.Saved(basedOn + 1);
     }
 }
 

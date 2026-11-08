@@ -14,9 +14,13 @@ public sealed class SpecStore(IDbContextFactory<OverseerDbContext> databases)
     public async Task<SpecVersion?> LatestOfAsync(Guid intentId, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        return await ReadFirstAsync(
-            database.SpecVersions.Where(version => version.IntentId == intentId).OrderByDescending(version => version.Number), cancellationToken);
+        return await LatestOfAsync(database, intentId, cancellationToken);
     }
+
+    /// <summary>The latest version of the Intent's Spec, as <paramref name="database"/> sees it; <c>null</c> when it has none.</summary>
+    internal static Task<SpecVersion?> LatestOfAsync(OverseerDbContext database, Guid intentId, CancellationToken cancellationToken) =>
+        ReadFirstAsync(
+            database.SpecVersions.Where(version => version.IntentId == intentId).OrderByDescending(version => version.Number), cancellationToken);
 
     /// <summary>Version <paramref name="number"/> of the Intent's Spec; <c>null</c> when it has no such version.</summary>
     public async Task<SpecVersion?> VersionOfAsync(Guid intentId, int number, CancellationToken cancellationToken)

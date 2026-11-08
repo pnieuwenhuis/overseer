@@ -1227,7 +1227,7 @@
         color: var(--color-muted);
     }
 
-    /* The Spec's editor: its sections, then each Task with its fields and the buttons that move or remove it. */
+    /* The Spec's editor: its sections, each decision with the button that removes it, then each Task with its fields and the buttons that move or remove it. */
     .spec-editor-errors {
         list-style: disc;
         margin-top: 0.25rem;
@@ -1242,19 +1242,65 @@
         gap: 0.75rem;
     }
 
-    .spec-editor-decisions .markdown-preview {
-        background: transparent;
-        box-shadow: none;
-        padding: 0;
+    .spec-editor-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
     }
 
-    .spec-editor-task {
+    .spec-editor-decision {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .spec-editor-decision .analysts-choice {
+        margin-left: 0.5rem;
+    }
+
+    .spec-editor-task,
+    .spec-unsaved-task {
         display: flex;
         flex-direction: column;
         gap: 0.875rem;
         border: 1px solid var(--color-line);
         border-radius: 0.625rem;
         padding: 0.875rem 1rem;
+    }
+
+    /* What the user tried to save when a newer version refused it, shown apart from the form, as entered. */
+    .spec-unsaved {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .spec-unsaved-heading {
+        font-size: 1.125rem;
+        font-weight: 600;
+    }
+
+    .spec-unsaved-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .spec-unsaved-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .spec-unsaved-text {
+        font-family: var(--font-mono);
+        font-size: 0.8125rem;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+    }
+
+    .spec-unsaved-task-title {
+        overflow-wrap: anywhere;
     }
 
     .spec-section {

@@ -10,7 +10,7 @@
                 <a href="intents/@IntentId/spec/edit" class="btn">Edit</a>
             }
         </div>
-        <p class="spec-written-by">@(Version.WrittenBy == SpecAuthor.Analyst ? "Written by the Analyst" : "Edited by you")</p>
+        <p class="spec-written-by">@WrittenBy(Version.WrittenBy, startsSentence: true)</p>
         @if (AwaitsApproval)
         {
             <p class="spec-status">It awaits your approval.</p>
@@ -30,17 +30,17 @@
                             {
                                 <a href="intents/@IntentId/spec/versions/@version.Number">Version @version.Number</a>
                             }
-                            <span class="spec-versions-author">@(version.WrittenBy == SpecAuthor.Analyst ? "written by the Analyst" : "edited by you")</span>
+                            <span class="spec-versions-author">@WrittenBy(version.WrittenBy, startsSentence: false)</span>
                         </li>
                     }
                 </ol>
             </nav>
         }
     </header>
-    @Section("Summary", Spec.Summary)
-    @Section("Approach", Spec.Approach)
-    <section class="spec-section" data-section="Decisions">
-        <h3>Decisions</h3>
+    @Section(SpecLabels.Summary, Spec.Summary)
+    @Section(SpecLabels.Approach, Spec.Approach)
+    <section class="spec-section" data-section="@SpecLabels.Decisions">
+        <h3>@SpecLabels.Decisions</h3>
         @if (Spec.Decisions.Count == 0)
         {
             <p class="spec-no-decisions">None.</p>
@@ -61,22 +61,22 @@
             </ol>
         }
     </section>
-    @Section("Acceptance criteria", Spec.AcceptanceCriteria)
-    @Section("Dependencies", Spec.Dependencies)
+    @Section(SpecLabels.AcceptanceCriteria, Spec.AcceptanceCriteria)
+    @Section(SpecLabels.Dependencies, Spec.Dependencies)
     @if (Spec.ApiEndpointChanges is { } apiEndpointChanges)
     {
-        @Section("API endpoint changes", apiEndpointChanges)
+        @Section(SpecLabels.ApiEndpointChanges, apiEndpointChanges)
     }
     @if (Spec.DataModelChanges is { } dataModelChanges)
     {
-        @Section("Data model changes", dataModelChanges)
+        @Section(SpecLabels.DataModelChanges, dataModelChanges)
     }
     @if (Spec.UiChanges is { } uiChanges)
     {
-        @Section("UI changes", uiChanges)
+        @Section(SpecLabels.UiChanges, uiChanges)
     }
-    <section class="spec-section" data-section="Tasks">
-        <h3>Tasks</h3>
+    <section class="spec-section" data-section="@SpecLabels.Tasks">
+        <h3>@SpecLabels.Tasks</h3>
         <ol class="spec-tasks">
             @foreach (var task in Spec.Tasks)
             {
@@ -115,6 +115,13 @@
     public bool Editable { get; set; }
 
     private Spec Spec => Version.Spec;
+
+    /// <summary>Who wrote a version, in words that go on a sentence, or start one.</summary>
+    private static string WrittenBy(SpecAuthor author, bool startsSentence)
+    {
+        var words = author == SpecAuthor.Analyst ? "written by the Analyst" : "edited by you";
+        return startsSentence ? char.ToUpperInvariant(words[0]) + words[1..] : words;
+    }
 
     /// <summary>A prose section of the Spec: its heading, and its Markdown rendered.</summary>
     private static RenderFragment Section(string heading, string markdown) =>
