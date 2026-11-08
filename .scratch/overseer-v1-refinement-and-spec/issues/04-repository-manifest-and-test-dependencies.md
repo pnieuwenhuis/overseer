@@ -6,11 +6,11 @@ Following ADR 0003, Overseer only checks whether the manifest exists. It doesn't
 
 **Blocked by:** 03 (The Analyst writes the Spec)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Overseer checks each Repository in scope for `.overseer.yml` on its default branch through the GitHub Gateway when Refinement starts or resumes
-- [ ] The Analyst's first message names the Repositories in scope that lack a Repository Manifest, or says that all have one
-- [ ] A Spec without a manifest-creating Task for each repository that lacks one is rejected, naming the repositories, and the Analyst gets that reason
-- [ ] When the Gateway can't tell (no token, or GitHub fails), Refinement still starts; the Analyst is told the check failed and to look for the manifest in its Sandbox itself
-- [ ] The Analyst's instructions cover asking about external test dependencies and adding a Docker Compose Task when they are needed and missing
-- [ ] Covered by tests through the application with the fake Sandbox Provider and the fake GitHub Gateway
+- [x] Overseer checks each Repository in scope for `.overseer.yml` on its default branch through the GitHub Gateway when Refinement starts or resumes
+- [x] The Analyst's first message names the Repositories in scope that lack a Repository Manifest, or says that all have one
+- [x] A Spec without a manifest-creating Task for each repository that lacks one is rejected, naming the repositories, and the Analyst gets that reason
+- [x] When the Gateway can't tell (no token, or GitHub fails), Refinement still starts; the Analyst is told the check failed and to look for the manifest in its Sandbox itself
+- [x] The Analyst's instructions cover asking about external test dependencies and adding a Docker Compose Task when they are needed and missing
+- [x] Covered by tests through the application with the fake Sandbox Provider and the fake GitHub Gateway
