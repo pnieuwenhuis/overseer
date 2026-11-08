@@ -46,13 +46,20 @@ public abstract record GitHubFileCheck
     public sealed record Found : GitHubFileCheck;
 
     /// <summary>
-    /// The token finds no such file: the file isn't on the branch, the branch doesn't exist (as in an empty repository),
-    /// or the repository doesn't exist or can't be reached. GitHub doesn't say which.
+    /// The token reaches the repository, but finds no such file: the file isn't on the branch, or the branch doesn't exist (as in
+    /// an empty repository). GitHub doesn't say which.
     /// </summary>
     public sealed record NotFound : GitHubFileCheck;
 
-    /// <summary>GitHub refused the request, as for a token it rejects, or could not be asked; <paramref name="Error"/> says why.</summary>
+    /// <summary>
+    /// GitHub refused the request, as for a token it rejects or a repository the token can't reach (<see cref="Unreachable"/>), or
+    /// could not be asked; <paramref name="Error"/> says why.
+    /// </summary>
     public sealed record Fails(string Error) : GitHubFileCheck;
+
+    /// <summary>The error of a check in <paramref name="repository"/> when the token can't reach it.</summary>
+    public static string Unreachable(RepositoryName repository) =>
+        $"The GitHub token can't reach {repository}: it doesn't exist, or the token has no access to it.";
 }
 
 /// <summary>What GitHub did when asked to create a repository.</summary>

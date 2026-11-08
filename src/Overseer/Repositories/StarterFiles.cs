@@ -9,11 +9,9 @@ namespace Overseer.Repositories;
 /// </summary>
 public sealed class StarterFiles(SandboxRegistry sandboxes, IGitHubGateway gitHub)
 {
-    /// <summary>The Repository Manifest, which must be on main when the agent is done.</summary>
-    public const string ManifestPath = RepositoryManifest.Path;
-
     /// <summary>
-    /// Has an agent write the starter files of the Repository Setup's repository, and destroys its Sandbox again.
+    /// Has an agent write the starter files of the Repository Setup's repository, and destroys its Sandbox again. The
+    /// Repository Manifest must be on main when the agent is done.
     /// </summary>
     /// <param name="agentWorking">Called once the Sandbox is ready, as the agent starts.</param>
     /// <returns>Why the starter files aren't on main; <c>null</c> once they are.</returns>
@@ -52,12 +50,12 @@ public sealed class StarterFiles(SandboxRegistry sandboxes, IGitHubGateway gitHu
                     return $"The agent asked a question, which no one answers during a Repository Setup: {asked.Question}";
                 }
             }
-            return await gitHub.CheckFileAsync(setup.Repository, "main", ManifestPath, cancellationToken) switch
+            return await gitHub.CheckFileAsync(setup.Repository, "main", RepositoryManifest.Path, cancellationToken) switch
             {
                 GitHubFileCheck.Found => null,
-                GitHubFileCheck.NotFound => $"The agent finished, but {ManifestPath} is not on main of {setup.Repository}.",
-                GitHubFileCheck.Fails fails => $"The agent finished, but GitHub could not say whether {ManifestPath} is on main: {fails.Error}",
-                null => $"The agent finished, but without a GitHub token Overseer can't check that {ManifestPath} is on main.",
+                GitHubFileCheck.NotFound => $"The agent finished, but {RepositoryManifest.Path} is not on main of {setup.Repository}.",
+                GitHubFileCheck.Fails fails => $"The agent finished, but GitHub could not say whether {RepositoryManifest.Path} is on main: {fails.Error}",
+                null => $"The agent finished, but without a GitHub token Overseer can't check that {RepositoryManifest.Path} is on main.",
                 _ => throw new InvalidOperationException("GitHub either finds the file, doesn't, or fails."),
             };
         }

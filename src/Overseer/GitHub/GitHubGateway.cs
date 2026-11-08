@@ -53,11 +53,14 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
         {
             return null;
         }
-        if (!GitHubToken.IsWellFormed(token))
-        {
-            return new GitHubRepositoryCheck.Fails(GitHubToken.NotWellFormedError);
-        }
+        return GitHubToken.IsWellFormed(token)
+            ? await CheckRepositoryAsync(repository, token, cancellationToken)
+            : new GitHubRepositoryCheck.Fails(GitHubToken.NotWellFormedError);
+    }
 
+    /// <summary>Checks that <paramref name="token"/>, well-formed, can reach <paramref name="repository"/>.</summary>
+    private static async Task<GitHubRepositoryCheck> CheckRepositoryAsync(RepositoryName repository, string token, CancellationToken cancellationToken)
+    {
         try
         {
             using var request = Get($"repos/{Uri.EscapeDataString(repository.Owner)}/{Uri.EscapeDataString(repository.Name)}", token);
@@ -150,10 +153,17 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
                 (branch is null ? "" : $"?ref={Uri.EscapeDataString(branch)}"),
                 token);
             using var response = await Http.SendAsync(request, cancellationToken);
-            // Also for a branch that doesn't exist, and for an empty repository ("This repository is empty.").
+            // Also for a branch that doesn't exist, for an empty repository ("This repository is empty."), and for a repository the
+            // token can't reach, which only asking for the repository itself tells apart.
             if (response.StatusCode == HttpStatusCode.NotFound)
             {
-                return new GitHubFileCheck.NotFound();
+                return await CheckRepositoryAsync(repository, token, cancellationToken) switch
+                {
+                    GitHubRepositoryCheck.Reachable => new GitHubFileCheck.NotFound(),
+                    GitHubRepositoryCheck.NotFound => new GitHubFileCheck.Fails(GitHubFileCheck.Unreachable(repository)),
+                    GitHubRepositoryCheck.Fails fails => new GitHubFileCheck.Fails(fails.Error),
+                    _ => throw new InvalidOperationException("GitHub either reaches the repository, doesn't, or fails."),
+                };
             }
             return response.IsSuccessStatusCode
                 ? new GitHubFileCheck.Found()

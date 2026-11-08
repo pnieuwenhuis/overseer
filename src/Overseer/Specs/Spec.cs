@@ -1,4 +1,5 @@
 using Overseer.GitHub;
+using Overseer.Repositories;
 using Overseer.Sandboxes;
 
 namespace Overseer.Specs;
@@ -28,7 +29,26 @@ public sealed record SpecDecision(string Text, bool IsAnalystsChoice);
 /// <param name="Description">Markdown.</param>
 /// <param name="Role">Designer or Developer.</param>
 /// <param name="Repositories">The Repositories in scope it touches, at least one, as the Intent has them in scope.</param>
-public sealed record SpecTask(int Number, string Title, string Description, AgentRole Role, IReadOnlyList<RepositoryName> Repositories);
+public sealed record SpecTask(int Number, string Title, string Description, AgentRole Role, IReadOnlyList<RepositoryName> Repositories)
+{
+    /// <summary>
+    /// What a Task that creates a missing Repository Manifest looks like, so that Overseer recognizes it, for "the Spec must have ...".
+    /// </summary>
+    internal const string CreatingManifest =
+        $"a Task that touches it and creates its `{RepositoryManifest.Path}`, naming that file in its title or description";
+
+    /// <summary>
+    /// Whether a Task creates the Repository Manifest of <paramref name="repository"/>, as far as Overseer can tell: it touches the
+    /// repository and names the manifest's file in its title or description. Also for a Task handed in with errors, from what
+    /// could be read of it.
+    /// </summary>
+    /// <param name="repositories">The Repositories in scope the Task touches.</param>
+    /// <param name="title"><c>null</c> when it can't be read.</param>
+    /// <param name="description"><c>null</c> when it can't be read.</param>
+    internal static bool CreatesManifestOf(
+        RepositoryName repository, IReadOnlyList<RepositoryName> repositories, string? title, string? description) =>
+        repositories.Contains(repository) && (RepositoryManifest.IsNamedIn(title) || RepositoryManifest.IsNamedIn(description));
+}
 
 /// <summary>A version of an Intent's Spec, numbered from 1.</summary>
 public sealed record SpecVersion(int Number, Spec Spec);

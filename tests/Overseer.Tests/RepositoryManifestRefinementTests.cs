@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Overseer.Repositories;
 using Overseer.Sandboxes;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
@@ -111,6 +112,21 @@ public class RepositoryManifestRefinementTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task A_Repository_in_scope_the_GitHub_token_cannot_reach_is_not_taken_to_lack_a_Repository_Manifest()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        // Its access was taken away after it was configured.
+        overseer.GitHub.AddRepository("acme/web", reachableBy: "github_pat_11SOMEONEELSE");
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+
+        using var started = await StartAsync(overseer, await AddressAsync(overseer, "Export data"));
+
+        var instructions = await FirstMessageAsync(overseer);
+        Assert.DoesNotContain("have none on their default branch", instructions);
+        Assert.Contains("Overseer could not check on GitHub whether these Repositories in scope have one:\n\n- acme/web: GitHub could not say: ", instructions);
+    }
+
+    [Fact]
     public async Task The_Analysts_instructions_cover_what_a_Repository_Manifest_holds_and_asking_about_external_test_dependencies()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
@@ -140,7 +156,7 @@ public class RepositoryManifestRefinementTests(PostgresServer postgres)
         WithoutManifest(overseer, "acme/ops");
         var spec = Spec();
         // Naming the manifest, but in a Task that touches only a repository that has one.
-        spec["tasks"] = new JsonArray(TaskJson("Update .overseer.yml", "Add the export test to `test`.", "acme/web"));
+        spec["tasks"] = new JsonArray(TaskJson("Update .overseer.yml", "Add the export test to `test`.", ["acme/web"]));
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(spec), FakeAgentTurn.Endless()));
         using var saved = await SaveAsync(overseer, "Export data", "acme/web", "acme/api", "acme/ops");
         var address = await AddressAsync(overseer, "Export data");
@@ -162,6 +178,58 @@ public class RepositoryManifestRefinementTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task A_Task_naming_another_file_that_contains_the_Repository_Manifests_name_does_not_create_it()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web", "acme/api");
+        WithoutManifest(overseer, "acme/api");
+        var spec = Spec();
+        spec["tasks"]!.AsArray().Add(TaskJson("Add the example settings", "Copy `.overseer.yml.example` and `ci.overseer.yml` from acme/web.", ["acme/api"]));
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(spec), FakeAgentTurn.Endless()));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web", "acme/api");
+
+        using var started = await StartAsync(overseer, await AddressAsync(overseer, "Export data"));
+
+        var rejection = await EventuallyAsync(() => Task.FromResult(overseer.Sandboxes.MessagesSent.ElementAtOrDefault(1)), "the Analyst to be told");
+        Assert.Contains("- No Task creates the Repository Manifest of acme/api", rejection.Message);
+    }
+
+    [Fact]
+    public async Task A_Spec_with_other_errors_is_rejected_naming_the_missing_Repository_Manifests_in_the_same_rejection()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web", "acme/api");
+        WithoutManifest(overseer, "acme/api");
+        var spec = SpecWithout("summary");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(spec), FakeAgentTurn.Endless()));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web", "acme/api");
+
+        using var started = await StartAsync(overseer, await AddressAsync(overseer, "Export data"));
+
+        var rejection = await EventuallyAsync(() => Task.FromResult(overseer.Sandboxes.MessagesSent.ElementAtOrDefault(1)), "the Analyst to be told");
+        Assert.Contains("- The Spec has no \"summary\"", rejection.Message);
+        Assert.Contains("- No Task creates the Repository Manifest of acme/api", rejection.Message);
+    }
+
+    [Fact]
+    public async Task A_Task_creating_a_missing_Repository_Manifest_counts_even_when_it_is_rejected_for_another_error()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web", "acme/api");
+        WithoutManifest(overseer, "acme/api");
+        var spec = Spec();
+        var task = TaskJson("Add the Repository Manifest", "Create `.overseer.yml` with `setup`, `build` and `test`.", ["acme/api", "acme/nowhere"]);
+        task.Remove("role");
+        spec["tasks"]!.AsArray().Add(task);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(spec), FakeAgentTurn.Endless()));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web", "acme/api");
+
+        using var started = await StartAsync(overseer, await AddressAsync(overseer, "Export data"));
+
+        var rejection = await EventuallyAsync(() => Task.FromResult(overseer.Sandboxes.MessagesSent.ElementAtOrDefault(1)), "the Analyst to be told");
+        Assert.Contains("- Task 2 has no \"role\"", rejection.Message);
+        Assert.Contains("- Task 2 touches acme/nowhere, which isn't a Repository in scope", rejection.Message);
+        Assert.DoesNotContain("Repository Manifest of acme/api", rejection.Message);
+    }
+
+    [Fact]
     public async Task A_Spec_with_a_Task_creating_each_missing_Repository_Manifest_is_stored()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web", "acme/api", "acme/ops");
@@ -169,8 +237,8 @@ public class RepositoryManifestRefinementTests(PostgresServer postgres)
         WithoutManifest(overseer, "acme/ops");
         var spec = Spec();
         spec["tasks"] = new JsonArray(
-            TaskJson("Add the Repository Manifests", "Create `.overseer.yml` with `setup`, `build` and `test`.", "acme/api", "acme/ops"),
-            TaskJson("Add the export endpoint", "Stream every order as CSV.", "acme/web"));
+            TaskJson("Add the Repository Manifests", "Create `.overseer.yml` with `setup`, `build` and `test`.", ["acme/api", "acme/ops"]),
+            TaskJson("Add the export endpoint", "Stream every order as CSV.", ["acme/web"]));
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(spec)));
         using var saved = await SaveAsync(overseer, "Export data", "acme/web", "acme/api", "acme/ops");
         var address = await AddressAsync(overseer, "Export data");
@@ -211,22 +279,13 @@ public class RepositoryManifestRefinementTests(PostgresServer postgres)
         await RefinementTests.FailedAsync(overseer, address);
         Assert.Contains("have none on their default branch:\n\n- acme/web\n", overseer.Sandboxes.MessagesSent[0].Message);
         // Someone adds it meanwhile.
-        overseer.GitHub.AddFile("acme/web", FakeGitHubGateway.DefaultBranch, ManifestPath);
+        overseer.GitHub.AddFile("acme/web", FakeGitHubGateway.DefaultBranch, RepositoryManifest.Path);
 
         using var retried = await RefinementTests.RetryAsync(overseer, address);
 
         await AwaitingSpecApprovalAsync(overseer, address);
         Assert.Contains("Every Repository in scope has one.", overseer.Sandboxes.MessagesSent[1].Message);
     }
-
-    /// <summary>A Task of a Spec, as JSON, for a Developer.</summary>
-    private static JsonObject TaskJson(string title, string description, params string[] repositories) => new()
-    {
-        ["title"] = title,
-        ["description"] = description,
-        ["role"] = "Developer",
-        ["repositories"] = new JsonArray([.. repositories.Select(repository => (JsonNode)repository)]),
-    };
 
     /// <summary>The first message the Analyst got.</summary>
     private static async Task<string> FirstMessageAsync(RunningOverseer overseer) =>

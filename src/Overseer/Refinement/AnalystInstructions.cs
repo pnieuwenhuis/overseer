@@ -96,10 +96,6 @@ internal static class AnalystInstructions
         "run from the repository's root, and optionally `compose`, the path of a Docker Compose file that starts the services " +
         "the tests need.";
 
-    /// <summary>What a Task that creates a missing Repository Manifest looks like, so that Overseer recognizes it.</summary>
-    private const string ManifestTask =
-        $"a Task that touches it and creates its `{RepositoryManifest.Path}`, naming that file in its title or description";
-
     /// <summary>Which Repositories in scope lack a Repository Manifest, and what the Spec must do about it.</summary>
     private static string ManifestStatus(ManifestCheck manifests)
     {
@@ -112,7 +108,7 @@ internal static class AnalystInstructions
 
                 {string.Join("\n", manifests.Lacking.Select(repository => $"- {repository}"))}
 
-                For each of them, the Spec must have {ManifestTask}. Overseer doesn't accept a Spec without one.
+                For each of them, the Spec must have {SpecTask.CreatingManifest}. Overseer doesn't accept a Spec without one.
                 """);
         }
         if (manifests.Unknown.Count > 0)
@@ -123,7 +119,7 @@ internal static class AnalystInstructions
 
                 {string.Join("\n", manifests.Unknown.Select(unknown => $"- {unknown.Repository}: {unknown.Error}"))}
 
-                Look for `{RepositoryManifest.Path}` at the root of each of them in this Sandbox yourself, on its default branch. For each that has none, the Spec must have {ManifestTask}.
+                Look for `{RepositoryManifest.Path}` at the root of each of them in this Sandbox yourself, on its default branch. For each that has none, the Spec must have {SpecTask.CreatingManifest}.
                 """);
         }
         return paragraphs.Count > 0 ? string.Join("\n\n", paragraphs) : "Every Repository in scope has one.";

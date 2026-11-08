@@ -134,7 +134,8 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
             GitHubRepositoryCheck.Fails fails => new GitHubFileCheck.Fails(fails.Error),
             GitHubRepositoryCheck.Reachable when _repositories[Key(repository)] is var found
                 && _files.ContainsKey((Key(repository), branch ?? found.DefaultBranch, path)) => new GitHubFileCheck.Found(),
-            _ => new GitHubFileCheck.NotFound(),
+            GitHubRepositoryCheck.Reachable => new GitHubFileCheck.NotFound(),
+            _ => new GitHubFileCheck.Fails(GitHubFileCheck.Unreachable(repository)),
         };
 
     private static string Key(RepositoryName repository) => repository.ToString().ToLowerInvariant();

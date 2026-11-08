@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Overseer.Intents;
+using Overseer.Repositories;
 using Overseer.Sandboxes;
 using Overseer.Settings;
 using static Overseer.Tests.RepositorySetupPortal;
@@ -36,19 +37,16 @@ public static class IntentPortal
         foreach (var repository in repositories)
         {
             overseer.GitHub.AddRepository(repository);
-            overseer.GitHub.AddFile(repository, FakeGitHubGateway.DefaultBranch, ManifestPath);
+            overseer.GitHub.AddFile(repository, FakeGitHubGateway.DefaultBranch, RepositoryManifest.Path);
             using var added = await overseer.SubmitFormAsync("/settings", "repository-add", new Dictionary<string, string> { ["Repository"] = repository });
             Assert.Contains($"{repository} is added.", await added.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         }
         return overseer;
     }
 
-    /// <summary>The Repository Manifest's path in a repository.</summary>
-    public const string ManifestPath = ".overseer.yml";
-
     /// <summary>Takes the Repository Manifest off the default branch of a repository <see cref="StartWithRepositoriesAsync(string, string[], TimeProvider?, IReadOnlyDictionary{string, string?}?, ILoggerProvider?)"/> configured.</summary>
     public static void WithoutManifest(RunningOverseer overseer, string repository) =>
-        overseer.GitHub.RemoveFile(repository, FakeGitHubGateway.DefaultBranch, ManifestPath);
+        overseer.GitHub.RemoveFile(repository, FakeGitHubGateway.DefaultBranch, RepositoryManifest.Path);
 
     /// <summary>Makes every Analyst session from now on work until it is stopped, as a started Intent's Analyst does while it refines.</summary>
     public static void AnalystKeepsWorking(RunningOverseer overseer) =>

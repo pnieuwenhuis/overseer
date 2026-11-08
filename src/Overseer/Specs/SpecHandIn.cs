@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Overseer.GitHub;
-using Overseer.Repositories;
 using Overseer.Sandboxes;
 
 namespace Overseer.Specs;
@@ -11,8 +10,8 @@ namespace Overseer.Specs;
 /// </summary>
 /// <param name="repositoriesInScope">The Intent's, which its Tasks may touch and no others.</param>
 /// <param name="lackingManifest">
-/// The Repositories in scope known to have no Repository Manifest, each of which a Task must touch and create it in, naming its
-/// file in its title or description.
+/// The Repositories in scope known to have no Repository Manifest, for each of which the Spec must have
+/// <see cref="SpecTask.CreatingManifest"/>.
 /// </param>
 internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInScope, IReadOnlyList<RepositoryName> lackingManifest) : HandIn<Spec>
 {
@@ -64,12 +63,8 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
         var dataModelChanges = OptionalSection(root, "dataModelChanges", errors);
         var uiChanges = OptionalSection(root, "uiChanges", errors);
         var decisions = ReadDecisions(root, errors);
-        var tasks = ReadTasks(root, errors);
-        // Only once the rest is valid: a Task with other errors isn't read, and would seem missing here.
-        if (errors.Count == 0)
-        {
-            CheckManifestTasks(tasks, errors);
-        }
+        var tasks = ReadTasks(root, errors, out var manifestsCreated);
+        CheckManifestTasks(manifestsCreated, errors);
 
         return errors.Count > 0
             ? new HandedIn<Spec>.Invalid(errors)
@@ -77,23 +72,13 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
                 summary!, approach!, decisions, acceptanceCriteria!, dependencies!, apiEndpointChanges, dataModelChanges, uiChanges, tasks));
     });
 
-    /// <summary>
-    /// Adds an error for each Repository in scope that lacks a Repository Manifest and has no Task that creates it: one that touches
-    /// it and names the manifest's file in its title or description.
-    /// </summary>
-    private void CheckManifestTasks(IReadOnlyList<SpecTask> tasks, List<string> errors)
+    /// <summary>Adds an error for each Repository in scope that lacks a Repository Manifest and has no Task that creates it.</summary>
+    /// <param name="manifestsCreated">The repositories whose manifest a Task creates, also one with errors of its own.</param>
+    private void CheckManifestTasks(IReadOnlySet<RepositoryName> manifestsCreated, List<string> errors)
     {
-        foreach (var repository in lackingManifest)
+        foreach (var repository in lackingManifest.Where(repository => !manifestsCreated.Contains(repository)))
         {
-            var created = tasks.Any(task => task.Repositories.Contains(repository)
-                && (task.Title.Contains(RepositoryManifest.Path, StringComparison.OrdinalIgnoreCase)
-                    || task.Description.Contains(RepositoryManifest.Path, StringComparison.OrdinalIgnoreCase)));
-            if (!created)
-            {
-                errors.Add(
-                    $"No Task creates the Repository Manifest of {repository}, which has none on its default branch: add a Task that touches it " +
-                    $"and creates its `{RepositoryManifest.Path}`, naming that file in its title or description.");
-            }
+            errors.Add($"No Task creates the Repository Manifest of {repository}, which has none on its default branch: add {SpecTask.CreatingManifest}.");
         }
     }
 
@@ -149,8 +134,13 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
     }
 
     /// <summary>The Spec's Tasks in order, at least one, without those that are wrong, each adding its errors.</summary>
-    private List<SpecTask> ReadTasks(JsonElement root, List<string> errors)
+    /// <param name="manifestsCreated">
+    /// The repositories whose Repository Manifest a Task creates, from what could be read of each, so that a Task left out for
+    /// another error doesn't seem missing as well.
+    /// </param>
+    private List<SpecTask> ReadTasks(JsonElement root, List<string> errors, out HashSet<RepositoryName> manifestsCreated)
     {
+        var created = manifestsCreated = [];
         if (ListOf(root, "tasks") is not { Count: > 0 } tasks)
         {
             errors.Add("The Spec has no Tasks: \"tasks\" must be a list of at least one Task.");
@@ -171,6 +161,7 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
             }
             var role = ReadRole(task, number, errors);
             var repositories = ReadRepositories(task, number, errors);
+            created.UnionWith(repositories.Where(repository => SpecTask.CreatesManifestOf(repository, repositories, title, description)));
             return errors.Count == before ? new SpecTask(number, title!, description!, role!.Value, repositories) : null;
         });
     }

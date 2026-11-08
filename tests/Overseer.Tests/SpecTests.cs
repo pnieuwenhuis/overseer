@@ -130,20 +130,8 @@ public class SpecTests(PostgresServer postgres)
         spec["dataModelChanges"] = "Orders get an `exported_at` column.";
         spec["uiChanges"] = "An *Export* button above the orders table.";
         spec["tasks"] = new JsonArray(
-            new JsonObject
-            {
-                ["title"] = "Design the Export button",
-                ["description"] = "Place it above the table.",
-                ["role"] = "Designer",
-                ["repositories"] = new JsonArray("acme/web"),
-            },
-            new JsonObject
-            {
-                ["title"] = "Add the export endpoint & <button>",
-                ["description"] = "Stream **every** order.\r\n\r\n- as CSV",
-                ["role"] = "Developer",
-                ["repositories"] = new JsonArray("ACME/API", "acme/web"),
-            });
+            TaskJson("Design the Export button", "Place it above the table.", ["acme/web"], role: "Designer"),
+            TaskJson("Add the export endpoint & <button>", "Stream **every** order.\r\n\r\n- as CSV", ["ACME/API", "acme/web"]));
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(spec)));
         using var saved = await SaveAsync(overseer, "Export data", "acme/web", "acme/api");
         var address = await AddressAsync(overseer, "Export data");
@@ -488,14 +476,16 @@ public class SpecTests(PostgresServer postgres)
             new JsonObject { ["decision"] = "It holds every order.", ["analystsChoice"] = false }),
         ["acceptanceCriteria"] = "- The orders page offers Export\n- The file opens in a spreadsheet",
         ["dependencies"] = "None.",
-        ["tasks"] = new JsonArray(
-            new JsonObject
-            {
-                ["title"] = "Add the export endpoint",
-                ["description"] = "`GET /orders/export` returns every order as CSV.",
-                ["role"] = "Developer",
-                ["repositories"] = new JsonArray("acme/web"),
-            }),
+        ["tasks"] = new JsonArray(TaskJson("Add the export endpoint", "`GET /orders/export` returns every order as CSV.", ["acme/web"])),
+    };
+
+    /// <summary>A Task of a Spec, as JSON, touching these repositories, each as owner/name.</summary>
+    internal static JsonObject TaskJson(string title, string description, string[] repositories, string role = "Developer") => new()
+    {
+        ["title"] = title,
+        ["description"] = description,
+        ["role"] = role,
+        ["repositories"] = new JsonArray([.. repositories.Select(repository => (JsonNode)repository)]),
     };
 
     /// <summary>The valid Spec of <see cref="Spec"/> without these properties.</summary>

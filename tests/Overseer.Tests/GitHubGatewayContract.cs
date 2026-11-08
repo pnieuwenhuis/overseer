@@ -224,6 +224,19 @@ public abstract class GitHubGatewayContract : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Checking_a_file_in_a_repository_the_token_cannot_reach_fails_naming_the_repository()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        // GitHub says "Not Found" for its files too, as for a file that isn't there.
+        var repository = new RepositoryName("octocat", $"no-such-repository-{Guid.NewGuid():N}");
+
+        var check = await Gateway.CheckFileAsync(repository, branch: null, ".overseer.yml", TestContext.Current.CancellationToken);
+
+        var fails = Assert.IsType<GitHubFileCheck.Fails>(check);
+        Assert.Contains(repository.ToString(), fails.Error);
+    }
+
+    [Fact]
     public async Task Without_a_stored_token_no_file_is_checked()
     {
         Assert.Null(await Gateway.CheckFileAsync(PublicRepository, "master", "README", TestContext.Current.CancellationToken));
