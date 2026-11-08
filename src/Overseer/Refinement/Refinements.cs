@@ -89,7 +89,7 @@ public sealed class Refinements(
 
     /// <summary>
     /// Where the Refinement of <paramref name="intent"/> stands; <c>null</c> unless it is Refining. A Refining Intent whose
-    /// Refinement hasn't recorded anything yet, or is still recorded paused, as just after Resume, is about to provision its Sandbox.
+    /// Refinement hasn't recorded anything yet, as just after Start, is about to provision its Sandbox.
     /// </summary>
     public async Task<RefinementProgress?> ProgressOfAsync(Intent intent, CancellationToken cancellationToken)
     {
@@ -101,7 +101,7 @@ public sealed class Refinements(
         return await database.Refinements
             .Where(refinement => refinement.IntentId == intent.Id)
             .Select(refinement => new RefinementProgress(
-                refinement.Phase == RefinementPhase.Paused ? RefinementPhase.ProvisioningSandbox : refinement.Phase,
+                refinement.Phase,
                 refinement.Error,
                 refinement.Phase == RefinementPhase.AwaitingAnswers
                     ? database.Rounds.Where(round => round.IntentId == intent.Id).Max(round => (int?)round.Number)
@@ -141,7 +141,7 @@ public sealed class Refinements(
                     && database.Intents.Any(intent => intent.Id == intentId && intent.State == IntentState.Refining)
                     && database.Rounds.Any(round => round.IntentId == intentId && round.Number == roundNumber && round.AnsweredAt == null)
                     && !database.Rounds.Any(round => round.IntentId == intentId && round.Number > roundNumber))
-                .ExecuteUpdateAsync(refinement => refinement.SetProperty(r => r.Phase, RefinementPhase.AnalystWorking), cancellationToken);
+                .ExecuteUpdateAsync(refinement => refinement.SetProperty(record => record.Phase, RefinementPhase.AnalystWorking), cancellationToken);
             if (taken == 0)
             {
                 return await WhyNotAnswerableAsync(database, intentId, roundNumber, cancellationToken);
@@ -204,8 +204,8 @@ public sealed class Refinements(
                 .Where(refinement => refinement.IntentId == intentId && refinement.Phase == RefinementPhase.Failed
                     && database.Intents.Any(intent => intent.Id == intentId && intent.State == IntentState.Refining))
                 .ExecuteUpdateAsync(refinement => refinement
-                    .SetProperty(r => r.Phase, RefinementPhase.ProvisioningSandbox)
-                    .SetProperty(r => r.Error, (string?)null), cancellationToken);
+                    .SetProperty(record => record.Phase, RefinementPhase.ProvisioningSandbox)
+                    .SetProperty(record => record.Error, (string?)null), cancellationToken);
             if (retried == 0)
             {
                 return false;
@@ -292,7 +292,7 @@ public sealed class Refinements(
                 {
                     logger.LogWarning("The Analyst of the Intent {IntentId} handed something in while Round {Round} was open; it is ignored.", intentId, open.Number);
                 }
-                if (await AskAsync(intentId, (_, _) => Task.FromResult(open.Number), cancellationToken) is not { } answered)
+                if (await AskAsync(intentId, newRound: null, cancellationToken) is not { } answered)
                 {
                     return null;
                 }
@@ -317,8 +317,7 @@ public sealed class Refinements(
                 {
                     case (HandedRound.Valid(var questions), HandedIn<Spec>.Nothing):
                         failedHandIns = 0;
-                        if (await AskAsync(intentId, (database, stopping) => AddRoundAsync(database, intentId, questions, stopping), cancellationToken)
-                            is not { } answered)
+                        if (await AskAsync(intentId, questions, cancellationToken) is not { } answered)
                         {
                             return null;
                         }
@@ -376,12 +375,14 @@ public sealed class Refinements(
     /// Puts a Round to the human and waits for their answers, for as long as the Refinement idle timeout lets it: once the Round has
     /// waited longer, the Intent is paused instead. Only the time it waits counts, not the time the Analyst worked before it.
     /// </summary>
-    /// <param name="putRound">
-    /// Records the Round in the database it is given, without saving, and gives its number: a new Round, or the one still open.
+    /// <param name="newRound">
+    /// The questions of a new Round, the Intent's next; <c>null</c> to put the Round still open to the human again, the Intent's latest.
     /// </param>
-    /// <returns>The Round, answered; <c>null</c> when the Intent was paused, and the Refinement is no longer the Intent's to run.</returns>
-    private async Task<Round?> AskAsync(
-        Guid intentId, Func<OverseerDbContext, CancellationToken, Task<int>> putRound, CancellationToken cancellationToken)
+    /// <returns>
+    /// The Round, answered; <c>null</c> when the Intent was paused, or has left Refining otherwise, and the Refinement is no longer the
+    /// Intent's to run.
+    /// </returns>
+    private async Task<Round?> AskAsync(Guid intentId, IReadOnlyList<HandedInQuestion>? newRound, CancellationToken cancellationToken)
     {
         var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         // Ahead of the Round, so that no answer comes before there is something to tell.
@@ -392,7 +393,9 @@ public sealed class Refinements(
             await using (var database = await databases.CreateDbContextAsync(cancellationToken))
             {
                 await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-                number = await putRound(database, cancellationToken);
+                // One Refinement runs per Intent at a time, so no other Round is added meanwhile.
+                var latest = await database.Rounds.Where(round => round.IntentId == intentId).MaxAsync(round => (int?)round.Number, cancellationToken) ?? 0;
+                number = newRound is null ? latest : AddRound(database, intentId, latest + 1, newRound);
                 await database.SaveChangesAsync(cancellationToken);
                 await EnterPhaseAsync(database, intentId, RefinementPhase.AwaitingAnswers, error: null, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
@@ -415,13 +418,10 @@ public sealed class Refinements(
         }
     }
 
-    /// <summary>Adds a Round of these questions as the Intent's next, without saving.</summary>
+    /// <summary>Adds a Round of these questions with this number, without saving.</summary>
     /// <returns>Its number.</returns>
-    private async Task<int> AddRoundAsync(
-        OverseerDbContext database, Guid intentId, IReadOnlyList<HandedInQuestion> questions, CancellationToken cancellationToken)
+    private int AddRound(OverseerDbContext database, Guid intentId, int number, IReadOnlyList<HandedInQuestion> questions)
     {
-        // One Refinement runs per Intent at a time, so no other Round is added meanwhile.
-        var number = 1 + (await database.Rounds.Where(round => round.IntentId == intentId).MaxAsync(round => (int?)round.Number, cancellationToken) ?? 0);
         database.Rounds.Add(new RoundRecord
         {
             IntentId = intentId,
@@ -445,7 +445,10 @@ public sealed class Refinements(
     /// saved, so that a change applies to a Round already waiting.
     /// </summary>
     /// <param name="answered">Completes once the answers are recorded.</param>
-    /// <returns>Whether the answers came; <c>false</c> when the Intent was paused instead.</returns>
+    /// <returns>
+    /// Whether the answers came; <c>false</c> when the Intent was paused instead, or has left Refining otherwise, and the Refinement is
+    /// no longer the Intent's to run.
+    /// </returns>
     private async Task<bool> AwaitAnswersAsync(Guid intentId, Task answered, DateTimeOffset idleSince, CancellationToken cancellationToken)
     {
         while (!answered.IsCompleted)
@@ -472,11 +475,13 @@ public sealed class Refinements(
                 }
                 if (time.GetUtcNow() >= idleUntil)
                 {
-                    if (await PauseAsync(intentId, cancellationToken))
+                    // Not paused when answers took the Refinement first, or the Intent has left Refining meanwhile some other way.
+                    if (await PauseAsync(intentId, cancellationToken)
+                        || await lifecycle.FindAsync(intentId, cancellationToken) is not { State: IntentState.Refining })
                     {
                         return false;
                     }
-                    // Answers took the Refinement first, while the Intent is Refining nothing else does, and they are told once recorded.
+                    // Answers took it, which are told once recorded.
                     await answered.WaitAsync(cancellationToken);
                 }
             }
@@ -490,9 +495,10 @@ public sealed class Refinements(
 
     /// <summary>
     /// Pauses the Intent through the Intent Lifecycle, as its Refinement has waited for answers for longer than the idle timeout, and
-    /// records the Refinement paused, so that answers no longer go through.
+    /// sets the Refinement to provision a Sandbox, which it does first when it continues after Resume, so that answers no longer go
+    /// through and a resumed Intent shows where its Refinement stands from the moment it is Refining again.
     /// </summary>
-    /// <returns>Whether it paused; not when answers came first.</returns>
+    /// <returns>Whether it paused; not when answers came first, or the Intent is no longer Refining.</returns>
     private async Task<bool> PauseAsync(Guid intentId, CancellationToken cancellationToken)
     {
         var paused = await lifecycle.PauseAsync(
@@ -500,7 +506,7 @@ public sealed class Refinements(
             // Of the pause and answers given at the same moment, the one that takes the Refinement's row first goes through.
             async (database, stopping) => await database.Refinements
                 .Where(refinement => refinement.IntentId == intentId && refinement.Phase == RefinementPhase.AwaitingAnswers)
-                .ExecuteUpdateAsync(refinement => refinement.SetProperty(r => r.Phase, RefinementPhase.Paused), stopping) > 0,
+                .ExecuteUpdateAsync(refinement => refinement.SetProperty(record => record.Phase, RefinementPhase.ProvisioningSandbox), stopping) > 0,
             cancellationToken);
         if (paused is IntentChange.Refused refused)
         {
@@ -568,7 +574,7 @@ public sealed class Refinements(
 
         Task<int> UpdateAsync() => database.Refinements
             .Where(refinement => refinement.IntentId == intentId)
-            .ExecuteUpdateAsync(refinement => refinement.SetProperty(r => r.Phase, phase).SetProperty(r => r.Error, error), cancellationToken);
+            .ExecuteUpdateAsync(refinement => refinement.SetProperty(record => record.Phase, phase).SetProperty(record => record.Error, error), cancellationToken);
     }
 }
 
@@ -601,7 +607,10 @@ public sealed class RefinementAttention : IIntentAttention
 /// <summary>Where an Intent's Refinement stands.</summary>
 public enum RefinementPhase
 {
-    /// <summary>Creating the Sandbox the Analyst works in, which takes minutes in Azure.</summary>
+    /// <summary>
+    /// Creating the Sandbox the Analyst works in, which takes minutes in Azure, or about to: a Refinement that continues once its Intent
+    /// is resumed, or serve has restarted, is set to this ahead of it.
+    /// </summary>
     ProvisioningSandbox,
 
     /// <summary>The Analyst is working on the Intent.</summary>
@@ -612,12 +621,6 @@ public enum RefinementPhase
 
     /// <summary>The Refinement failed; it can be retried.</summary>
     Failed,
-
-    /// <summary>
-    /// The Intent was paused, as the Refinement waited for answers for longer than the idle timeout; it goes on from its transcript
-    /// when the Intent resumes.
-    /// </summary>
-    Paused,
 }
 
 /// <summary>Where an Intent's Refinement stands, and why it failed when it did.</summary>

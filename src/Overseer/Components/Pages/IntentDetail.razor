@@ -15,7 +15,7 @@
 @* A form submitted from a page opened earlier is handled whatever became of the Intent. *@
 @if (_intent is not null || IsSubmitted)
 {
-    <LiveIntent Id="Id" StartRefused="_startRefused" ResumeRefused="_resumeRefused" AnswersRefused="@_answersRefused" RefusedAnswers="_refusedAnswers"
+    <LiveIntent Id="Id" Refused="_refused" AnswersRefused="@_answersRefused" RefusedAnswers="_refusedAnswers"
                 @rendermode="InteractiveServer" />
 }
 @* Blazor handles a submitted form only when the page has a form of its name. The Start, Resume and answer forms the user sees are LiveIntent's, which come and go as the Intent changes. *@
@@ -54,8 +54,7 @@
     public Guid Id { get; set; }
 
     private Intent? _intent;
-    private bool _startRefused;
-    private bool _resumeRefused;
+    private LiveIntent.StateChange? _refused;
     private string? _answersRefused;
     private RefinementRounds.Draft? _refusedAnswers;
 
@@ -70,30 +69,20 @@
         }
     }
 
-    private async Task StartAsync()
+    private Task StartAsync() => ChangeStateAsync(LiveIntent.StateChange.Start, Lifecycle.StartAsync);
+
+    private Task ResumeAsync() => ChangeStateAsync(LiveIntent.StateChange.Resume, Lifecycle.ResumeAsync);
+
+    private async Task ChangeStateAsync(LiveIntent.StateChange change, Func<Guid, CancellationToken, Task<IntentChange>> make)
     {
-        switch (await Lifecycle.StartAsync(Id, HttpContext.RequestAborted))
+        switch (await make(Id, HttpContext.RequestAborted))
         {
             case IntentChange.Made:
                 Navigation.NavigateTo($"/intents/{Id}");
                 break;
             case IntentChange.Refused:
                 // LiveIntent then reads the Intent again, and says why as it is now.
-                _startRefused = true;
-                break;
-        }
-    }
-
-    private async Task ResumeAsync()
-    {
-        switch (await Lifecycle.ResumeAsync(Id, HttpContext.RequestAborted))
-        {
-            case IntentChange.Made:
-                Navigation.NavigateTo($"/intents/{Id}");
-                break;
-            case IntentChange.Refused:
-                // As for Start: LiveIntent reads the Intent again, and says why as it is now.
-                _resumeRefused = true;
+                _refused = change;
                 break;
         }
     }

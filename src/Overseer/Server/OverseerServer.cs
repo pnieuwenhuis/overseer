@@ -23,9 +23,10 @@ public static class OverseerServer
     /// <param name="logs">Also receives everything the server logs, next to the console.</param>
     /// <param name="time">The clock, instead of the system's.</param>
     /// <param name="gitHub">Creates the GitHub Gateway, instead of the one that calls GitHub.</param>
+    /// <param name="sandboxes">Creates the Sandbox Provider, instead of the one the configuration says.</param>
     public static WebApplication Build(
         IReadOnlyDictionary<string, string?> environment, ILoggerProvider? logs = null, TimeProvider? time = null,
-        Func<IServiceProvider, IGitHubGateway>? gitHub = null)
+        Func<IServiceProvider, IGitHubGateway>? gitHub = null, Func<IServiceProvider, ISandboxProvider>? sandboxes = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -49,7 +50,7 @@ public static class OverseerServer
         builder.Services.AddSingleton<AccountLockout>();
 
         builder.Services.AddSingleton(time ?? TimeProvider.System);
-        builder.Services.AddSandboxes(builder.Configuration, environment);
+        builder.Services.AddSandboxes(builder.Configuration, environment, sandboxes);
         builder.Services.AddSecrets(builder.Configuration, environment);
         builder.Services.AddSmokeTest(builder.Configuration);
         builder.Services.AddSingleton(gitHub ?? (services => new GitHubGateway(services.GetRequiredService<ISecretReader>())));
@@ -140,14 +141,11 @@ public static class OverseerServer
 
     /// <summary>Builds the server, brings the database schema up to date, and starts listening.</summary>
     /// <inheritdoc cref="Build"/>
-    /// <param name="prepare">
-    /// Runs on the built server's services just before it starts, such as to script a fake for the work that resumes as it starts.
-    /// </param>
     public static async Task<WebApplication> StartAsync(
         IReadOnlyDictionary<string, string?> environment, CancellationToken cancellationToken, ILoggerProvider? logs = null,
-        TimeProvider? time = null, Func<IServiceProvider, IGitHubGateway>? gitHub = null, Action<IServiceProvider>? prepare = null)
+        TimeProvider? time = null, Func<IServiceProvider, IGitHubGateway>? gitHub = null, Func<IServiceProvider, ISandboxProvider>? sandboxes = null)
     {
-        var app = Build(environment, logs, time, gitHub);
+        var app = Build(environment, logs, time, gitHub, sandboxes);
         try
         {
             // Fail on a missing credential before touching the database: without it nobody can log in.
@@ -157,7 +155,6 @@ public static class OverseerServer
                 await database.Database.MigrateAsync(cancellationToken);
             }
             await app.Services.GetRequiredService<IntentLifecycle>().RecordStartsBeforeTransitionsAsync(cancellationToken);
-            prepare?.Invoke(app.Services);
             await app.StartAsync(cancellationToken);
             switch (app.Services.GetRequiredService<ISandboxProvider>())
             {

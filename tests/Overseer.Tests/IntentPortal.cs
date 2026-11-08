@@ -33,7 +33,7 @@ public static class IntentPortal
         {
             // A started Intent's Analyst works until the test scripts it otherwise, such as to hand in a Round; so does the Analyst of a
             // Refinement that continues after a restart.
-            provider.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(FakeAgentTurn.Endless()));
+            AnalystKeepsWorking(provider);
             sandboxes?.Invoke(provider);
         });
         await overseer.LogInAsync();
@@ -54,8 +54,8 @@ public static class IntentPortal
         overseer.GitHub.RemoveFile(repository, FakeGitHubGateway.DefaultBranch, RepositoryManifest.Path);
 
     /// <summary>Makes every Analyst session from now on work until it is stopped, as a started Intent's Analyst does while it refines.</summary>
-    public static void AnalystKeepsWorking(RunningOverseer overseer) =>
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(FakeAgentTurn.Endless()));
+    public static void AnalystKeepsWorking(FakeSandboxProvider sandboxes) =>
+        sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(FakeAgentTurn.Endless()));
 
     /// <summary>Saves this maximum of Active Intents on the Settings page, with the other limits at their defaults.</summary>
     public static Task SetMaxActiveIntentsAsync(RunningOverseer overseer, int maximum) =>

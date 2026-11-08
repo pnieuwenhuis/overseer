@@ -5,13 +5,9 @@
 @inherits LiveIntentsView<LiveIntent.Detail>
 @inject SpecStore Specs
 
-@if (Shown is { WhyNotStartable: { } why } && (Shown.Intent?.State is null or IntentState.Draft || StartRefused))
+@if (Shown is { WhyNot: { } why })
 {
     <p role="alert" class="callout-warning mb-4">@why</p>
-}
-else if (Shown is { WhyNotResumable: { } whyNot } && (Shown.Intent?.PausedFrom is not null || ResumeRefused))
-{
-    <p role="alert" class="callout-warning mb-4">@whyNot</p>
 }
 @if (AnswersRefused is { } refused)
 {
@@ -35,23 +31,23 @@ else if (Shown is { WhyNotResumable: { } whyNot } && (Shown.Intent?.PausedFrom i
                     <form method="post" action="intents/@Id">
                         <input type="hidden" name="_handler" value="@Pages.IntentDetail.StartFormName" />
                         <AntiforgeryToken />
-                        <button type="submit" class="btn-primary" disabled="@(Shown.WhyNotStartable is not null)">Start</button>
+                        <button type="submit" class="btn-primary" disabled="@(Shown.WhyNot is not null)">Start</button>
                     </form>
                 </div>
             }
-            else if (intent.PausedFrom is not null)
+            else if (intent.ResumesTo is not null)
             {
                 <div class="intent-actions">
                     @* A plain form, like Start's. *@
                     <form method="post" action="intents/@Id">
                         <input type="hidden" name="_handler" value="@Pages.IntentDetail.ResumeFormName" />
                         <AntiforgeryToken />
-                        <button type="submit" class="btn-primary" disabled="@(Shown.WhyNotResumable is not null)">Resume</button>
+                        <button type="submit" class="btn-primary" disabled="@(Shown.WhyNot is not null)">Resume</button>
                     </form>
                 </div>
             }
         </header>
-        @if (intent.PausedFrom == IntentState.Refining)
+        @if (intent.ResumesTo == IntentState.Refining)
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
                 <p class="paused-status" role="status">
@@ -87,13 +83,12 @@ else if (Shown is { WhyNotResumable: { } whyNot } && (Shown.Intent?.PausedFrom i
     [Parameter, EditorRequired]
     public required Guid Id { get; set; }
 
-    /// <summary>A Start was just refused, so this page says why also when the Intent isn't a Draft, where it otherwise wouldn't.</summary>
+    /// <summary>
+    /// The change of state that was just refused, so this page says why also where it otherwise wouldn't, as when the Intent is no
+    /// longer a Draft or Paused; <c>null</c> unless one was.
+    /// </summary>
     [Parameter]
-    public bool StartRefused { get; set; }
-
-    /// <summary>A Resume was just refused, so this page says why also when the Intent isn't Paused, where it otherwise wouldn't.</summary>
-    [Parameter]
-    public bool ResumeRefused { get; set; }
+    public StateChange? Refused { get; set; }
 
     /// <summary>Why answers to a Round were just refused; <c>null</c> unless they were.</summary>
     [Parameter]
@@ -106,22 +101,41 @@ else if (Shown is { WhyNotResumable: { } whyNot } && (Shown.Intent?.PausedFrom i
     protected override async Task<Detail> ReadAsync(CancellationToken cancellationToken)
     {
         var intent = await Lifecycle.FindAsync(Id, cancellationToken);
+        // The one this page offers, or the one just refused; without an Intent, the page says why it can't be started.
+        var change = Refused ?? intent switch
+        {
+            null or { State: IntentState.Draft } => StateChange.Start,
+            { ResumesTo: not null } => StateChange.Resume,
+            _ => (StateChange?)null,
+        };
         return new(
             intent,
-            await Lifecycle.WhyNotStartableAsync(Id, cancellationToken),
-            await Lifecycle.WhyNotResumableAsync(Id, cancellationToken),
+            change switch
+            {
+                StateChange.Start => await Lifecycle.WhyNotStartableAsync(Id, cancellationToken),
+                StateChange.Resume => await Lifecycle.WhyNotResumableAsync(Id, cancellationToken),
+                _ => null,
+            },
             intent is null ? null : await Refinements.ProgressOfAsync(intent, cancellationToken),
             intent is null ? [] : await Refinements.TranscriptOfAsync(intent.Id, cancellationToken),
             intent is null ? null : await Specs.LatestOfAsync(intent.Id, cancellationToken));
     }
 
     /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
-    /// <param name="WhyNotStartable">Why it can't be started at the moment, as a Draft's page explains and a refused Start says.</param>
-    /// <param name="WhyNotResumable">Why it can't be resumed at the moment, as a Paused Intent's page explains and a refused Resume says.</param>
+    /// <param name="WhyNot">
+    /// Why the Start or Resume the page offers, or the one just refused, can't be made at the moment, as the page explains next to its
+    /// button and a refusal says; <c>null</c> when it can, or there is none.
+    /// </param>
     /// <param name="Refinement">Where its Refinement stands; <c>null</c> unless it is Refining.</param>
     /// <param name="Transcript">The Rounds of its Refinement, in order; empty when it has none.</param>
     /// <param name="Spec">The latest version of its Spec; <c>null</c> when it has none.</param>
     public sealed record Detail(
-        Intent? Intent, string? WhyNotStartable, string? WhyNotResumable, RefinementProgress? Refinement, IReadOnlyList<Round> Transcript,
-        SpecVersion? Spec);
+        Intent? Intent, string? WhyNot, RefinementProgress? Refinement, IReadOnlyList<Round> Transcript, SpecVersion? Spec);
+
+    /// <summary>A change of an Intent's state that the page offers with a button, disabled while it can't be made.</summary>
+    public enum StateChange
+    {
+        Start,
+        Resume,
+    }
 }

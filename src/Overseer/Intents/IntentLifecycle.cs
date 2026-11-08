@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -20,6 +21,15 @@ public sealed class IntentLifecycle(
 
     /// <summary>The states of an Intent that is closed: what isn't one of these is open.</summary>
     private static readonly IntentState[] ClosedStates = [IntentState.Done, IntentState.Cancelled];
+
+    /// <summary>
+    /// The states a Paused Intent can be resumed to, as the module that works on Intents in that state takes it up again: so far only
+    /// Refinement does. Implementing and In Review join as their tickets make them resumable.
+    /// </summary>
+    private static readonly IntentState[] ResumableStates = [IntentState.Refining];
+
+    /// <summary>What a change refused for want of the Intent says.</summary>
+    private const string NoSuchIntent = "There is no such Intent: it may have been deleted.";
 
     /// <summary>The PostgreSQL advisory lock for the slots, in this database; the number means nothing, and only has to stay the only one used.</summary>
     private const long ActiveIntentSlotsLock = 7_234_001;
@@ -126,19 +136,13 @@ public sealed class IntentLifecycle(
     {
         // Ahead of the transaction, so that no request holds a connection and its locks while it waits for another connection.
         var limits = await settings.GetOperatingLimitsAsync(cancellationToken);
-        await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-        var state = await LockStateAsync(database, id, cancellationToken);
-        await HoldActiveIntentSlotsAsync(database, cancellationToken);
-        if (await WhyNotStartableAsync(database, id, state, limits.MaxActiveIntents, cancellationToken) is { } notStartable)
+        return await ChangeStateAsync(id, async (database, state, stopping) =>
         {
-            return new IntentChange.Refused(notStartable);
-        }
-
-        await TransitionAsync(database, id, IntentState.Refining, cancellationToken);
-        var made = await CommitAndAnnounceAsync(transaction, cancellationToken);
-        Transitioned?.Invoke(id, IntentState.Refining);
-        return made;
+            await HoldActiveIntentSlotsAsync(database, stopping);
+            return await WhyNotStartableAsync(database, id, state, limits.MaxActiveIntents, stopping) is { } notStartable
+                ? new Decision.Refuse(notStartable)
+                : new Decision.MoveTo(IntentState.Refining);
+        }, cancellationToken);
     }
 
     /// <summary>
@@ -147,24 +151,19 @@ public sealed class IntentLifecycle(
     /// Working Time stops. Refused unless the Intent is Refining at this moment, and then nothing is stored.
     /// </summary>
     /// <param name="storeSpec">Adds the Spec to the database it is given, under the lock on the Intent's row, without saving.</param>
-    public async Task<IntentChange> AwaitSpecApprovalAsync(
-        Guid id, Func<OverseerDbContext, CancellationToken, Task> storeSpec, CancellationToken cancellationToken)
-    {
-        await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-        if (await LockStateAsync(database, id, cancellationToken) is var state and not IntentState.Refining)
+    public Task<IntentChange> AwaitSpecApprovalAsync(
+        Guid id, Func<OverseerDbContext, CancellationToken, Task> storeSpec, CancellationToken cancellationToken) =>
+        ChangeStateAsync(id, async (database, state, stopping) =>
         {
-            return new IntentChange.Refused(state is null
-                ? "There is no such Intent: it may have been deleted."
-                : $"This Intent is {state.Value.InWords()}, and only a Refining Intent gets a Spec from the Analyst.");
-        }
-
-        await storeSpec(database, cancellationToken);
-        await TransitionAsync(database, id, IntentState.AwaitingSpecApproval, cancellationToken);
-        var made = await CommitAndAnnounceAsync(transaction, cancellationToken);
-        Transitioned?.Invoke(id, IntentState.AwaitingSpecApproval);
-        return made;
-    }
+            if (state is not IntentState.Refining)
+            {
+                return new Decision.Refuse(state is null
+                    ? NoSuchIntent
+                    : $"This Intent is {state.Value.InWords()}, and only a Refining Intent gets a Spec from the Analyst.");
+            }
+            await storeSpec(database, stopping);
+            return new Decision.MoveTo(IntentState.AwaitingSpecApproval);
+        }, cancellationToken);
 
     /// <summary>
     /// Pauses an Intent agents are working on: it leaves its Active Intent slot, its Working Time stops, and it keeps the state it was
@@ -175,52 +174,39 @@ public sealed class IntentLifecycle(
     /// Under the lock on the Intent's row, confirms that the reason to pause still holds, and records in the database it is given what
     /// goes with the pause, without saving; <c>false</c> leaves the Intent as it is.
     /// </param>
-    public async Task<IntentChange> PauseAsync(
-        Guid id, Func<OverseerDbContext, CancellationToken, Task<bool>> confirm, CancellationToken cancellationToken)
-    {
-        await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-        var state = await LockStateAsync(database, id, cancellationToken);
-        if (state is not { } active || !ActiveStates.Contains(active))
+    public Task<IntentChange> PauseAsync(
+        Guid id, Func<OverseerDbContext, CancellationToken, Task<bool>> confirm, CancellationToken cancellationToken) =>
+        ChangeStateAsync(id, async (database, state, stopping) =>
         {
-            return new IntentChange.Refused(state is null
-                ? "There is no such Intent: it may have been deleted."
-                : $"This Intent is {state.Value.InWords()}, and only an Intent that is Refining, Implementing or In Review can be paused.");
-        }
-        if (!await confirm(database, cancellationToken))
-        {
-            return new IntentChange.Refused("The reason to pause this Intent no longer holds.");
-        }
-
-        await TransitionAsync(database, id, IntentState.Paused, cancellationToken);
-        var made = await CommitAndAnnounceAsync(transaction, cancellationToken);
-        Transitioned?.Invoke(id, IntentState.Paused);
-        return made;
-    }
+            if (state is not { } active || !ActiveStates.Contains(active))
+            {
+                return new Decision.Refuse(state is null
+                    ? NoSuchIntent
+                    : $"This Intent is {state.Value.InWords()}, and only an Intent that is Refining, Implementing or In Review can be paused.");
+            }
+            return await confirm(database, stopping)
+                ? new Decision.MoveTo(IntentState.Paused)
+                : new Decision.Refuse("The reason to pause this Intent no longer holds.");
+        }, cancellationToken);
 
     /// <summary>
     /// Resumes a Paused Intent: it moves back to the state it was paused from, taking an Active Intent slot again, and the module that
-    /// works on Intents in that state goes on with it, as Refinement does in a fresh Sandbox. Whether it may is decided as the Intent is at
-    /// this moment rather than as the user's page showed it.
+    /// works on Intents in that state goes on with it, as Refinement does in a fresh Sandbox. So far that is only Refinement, so only an
+    /// Intent paused while Refining can be resumed (<see cref="Intent.ResumesTo"/>). Whether it may is decided as the Intent is at this
+    /// moment rather than as the user's page showed it.
     /// </summary>
     public async Task<IntentChange> ResumeAsync(Guid id, CancellationToken cancellationToken)
     {
         // Ahead of the transaction, as for Start.
         var limits = await settings.GetOperatingLimitsAsync(cancellationToken);
-        await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-        var state = await LockStateAsync(database, id, cancellationToken);
-        await HoldActiveIntentSlotsAsync(database, cancellationToken);
-        var pausedFrom = await PausedFromAsync(database, id, cancellationToken);
-        if (await WhyNotResumableAsync(database, state, pausedFrom, limits.MaxActiveIntents, cancellationToken) is { } notResumable)
+        return await ChangeStateAsync(id, async (database, _, stopping) =>
         {
-            return new IntentChange.Refused(notResumable);
-        }
-
-        await TransitionAsync(database, id, pausedFrom!.Value, cancellationToken);
-        var made = await CommitAndAnnounceAsync(transaction, cancellationToken);
-        Transitioned?.Invoke(id, pausedFrom.Value);
-        return made;
+            await HoldActiveIntentSlotsAsync(database, stopping);
+            var intent = await FindAsync(database, id, stopping);
+            return await WhyNotResumableAsync(database, intent, limits.MaxActiveIntents, stopping) is { } notResumable
+                ? new Decision.Refuse(notResumable)
+                : new Decision.MoveTo(intent!.ResumesTo!.Value);
+        }, cancellationToken);
     }
 
     /// <summary>Why the Intent with this id can't be resumed at the moment, with what a refused Resume says, or <c>null</c> when it can.</summary>
@@ -228,8 +214,7 @@ public sealed class IntentLifecycle(
     {
         var limits = await settings.GetOperatingLimitsAsync(cancellationToken);
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        var state = await database.Intents.Where(intent => intent.Id == id).Select(intent => (IntentState?)intent.State).SingleOrDefaultAsync(cancellationToken);
-        return await WhyNotResumableAsync(database, state, await PausedFromAsync(database, id, cancellationToken), limits.MaxActiveIntents, cancellationToken);
+        return await WhyNotResumableAsync(database, await FindAsync(database, id, cancellationToken), limits.MaxActiveIntents, cancellationToken);
     }
 
     /// <summary>Why the Intent with this id can't be started at the moment, with what a refused Start says, or <c>null</c> when it can.</summary>
@@ -273,8 +258,12 @@ public sealed class IntentLifecycle(
     public async Task<Intent?> FindAsync(Guid id, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        return (await ReadAsync(database, database.Intents.Where(intent => intent.Id == id), cancellationToken)).SingleOrDefault();
+        return await FindAsync(database, id, cancellationToken);
     }
+
+    /// <summary>The Intent with this id, as <paramref name="database"/> sees it; <c>null</c> when there is none.</summary>
+    private async Task<Intent?> FindAsync(OverseerDbContext database, Guid id, CancellationToken cancellationToken) =>
+        (await ReadAsync(database, database.Intents.Where(intent => intent.Id == id), cancellationToken)).SingleOrDefault();
 
     /// <summary>
     /// Gives each Intent that left Draft before transitions were recorded the start it must have had, now: when it was started isn't
@@ -316,6 +305,45 @@ public sealed class IntentLifecycle(
         await transaction.CommitAsync(cancellationToken);
         Changed?.Invoke();
         return new IntentChange.Made();
+    }
+
+    /// <summary>
+    /// How every change of an Intent's state is made: under the lock on its row, <paramref name="decide"/> is given its state and decides
+    /// where it goes, recording what goes with that in the database it is given, without saving. The Intent then moves there, and the
+    /// change is committed and announced, raising <see cref="Transitioned"/>. A refusal changes nothing.
+    /// </summary>
+    /// <param name="decide">Given the Intent's state, <c>null</c> when there is no such Intent.</param>
+    private async Task<IntentChange> ChangeStateAsync(
+        Guid id, Func<OverseerDbContext, IntentState?, CancellationToken, Task<Decision>> decide, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        switch (await decide(database, await LockStateAsync(database, id, cancellationToken), cancellationToken))
+        {
+            case Decision.MoveTo(var to):
+                await TransitionAsync(database, id, to, cancellationToken);
+                var made = await CommitAndAnnounceAsync(transaction, cancellationToken);
+                Transitioned?.Invoke(id, to);
+                return made;
+            case Decision.Refuse(var error):
+                return new IntentChange.Refused(error);
+            default:
+                throw new UnreachableException();
+        }
+    }
+
+    /// <summary>Where a change of state goes, as decided under the lock on the Intent's row.</summary>
+    private abstract record Decision
+    {
+        private Decision()
+        {
+        }
+
+        /// <summary>The Intent moves to <paramref name="State"/>.</summary>
+        public sealed record MoveTo(IntentState State) : Decision;
+
+        /// <summary>Nothing changes; <paramref name="Error"/> says why.</summary>
+        public sealed record Refuse(string Error) : Decision;
     }
 
     /// <summary>
@@ -389,12 +417,12 @@ public sealed class IntentLifecycle(
     }
 
     private static async Task<string?> WhyNotResumableAsync(
-        OverseerDbContext database, IntentState? state, IntentState? pausedFrom, int maxActiveIntents, CancellationToken cancellationToken) =>
-        state switch
+        OverseerDbContext database, Intent? intent, int maxActiveIntents, CancellationToken cancellationToken) =>
+        intent switch
         {
-            null => "There is no such Intent: it may have been deleted.",
-            not IntentState.Paused => $"This Intent is {state.Value.InWords()}, and Resume continues a Paused Intent.",
-            _ when pausedFrom is null => "This Intent wasn't paused from a state it can go back to, so it can't be resumed.",
+            null => NoSuchIntent,
+            { State: not IntentState.Paused } => $"This Intent is {intent.State.InWords()}, and Resume continues a Paused Intent.",
+            { ResumesTo: null } => "So far Resume only continues a Refinement, and this Intent wasn't Refining when it was paused.",
             _ => await WhyNoFreeSlotAsync(database, maxActiveIntents, cancellationToken),
         };
 
@@ -409,20 +437,6 @@ public sealed class IntentLifecycle(
         return active.Count < maxActiveIntents ? null : $"All Active Intent slots are taken, by {Prose.List(active)}. You can raise the maximum in Settings.";
     }
 
-    /// <summary>
-    /// The Active state the Intent with this id was last paused from, which Resume returns it to; <c>null</c> when its last pause wasn't
-    /// from one, or it was never paused. Says nothing of whether it is Paused now.
-    /// </summary>
-    private static async Task<IntentState?> PausedFromAsync(OverseerDbContext database, Guid id, CancellationToken cancellationToken)
-    {
-        var from = await database.Set<IntentTransitionRecord>()
-            .Where(transition => transition.IntentId == id && transition.To == IntentState.Paused)
-            .OrderByDescending(transition => transition.Id)
-            .Select(transition => transition.From)
-            .FirstOrDefaultAsync(cancellationToken);
-        return from is { } state && ActiveStates.Contains(state) ? state : null;
-    }
-
     /// <summary>The problems there are, as one message; <c>null</c> when there are none.</summary>
     private static string? AllOf(string?[] problems) =>
         problems.OfType<string>().ToList() is { Count: > 0 } found ? string.Join(" ", found) : null;
@@ -430,7 +444,7 @@ public sealed class IntentLifecycle(
     // Names Draft rather than the states it refuses, so that a state added later is refused, open or not.
     private static string? WhyNotADraft(IntentState? state, Func<string, string> refusal) => state switch
     {
-        null => "There is no such Intent: it may have been deleted.",
+        null => NoSuchIntent,
         IntentState.Draft => null,
         { } other => refusal(other.InWords()),
     };
@@ -496,13 +510,20 @@ public sealed class IntentLifecycle(
             intent.HasFailed,
             intent.NeedsAttention)
         {
-            PausedFrom = intent.State == IntentState.Paused ? PausedFromOf(intent.Transitions) : null,
+            ResumesTo = ResumesToOf(intent.State, intent.Transitions),
         })];
     }
 
-    /// <summary>The Active state the last of these transitions into Paused left, as <see cref="PausedFromAsync"/> reads it.</summary>
-    private static IntentState? PausedFromOf(IEnumerable<Transition> transitions) =>
-        transitions.LastOrDefault(transition => transition.To == IntentState.Paused) is { From: { } from } && ActiveStates.Contains(from) ? from : null;
+    /// <summary>
+    /// The state Resume moves an Intent in <paramref name="state"/> with these transitions back to: the one the last transition into
+    /// Paused left, when the Intent is Paused and that state is one it can be resumed to; otherwise <c>null</c>. The one place that is decided.
+    /// </summary>
+    private static IntentState? ResumesToOf(IntentState state, IEnumerable<Transition> transitions) =>
+        state == IntentState.Paused
+        && transitions.LastOrDefault(transition => transition.To == IntentState.Paused) is { From: { } from }
+        && ResumableStates.Contains(from)
+            ? from
+            : null;
 
     /// <summary>A transition as Working Time and Resume need it: the state the Intent left and the one it moved to, and when.</summary>
     private readonly record struct Transition(IntentState? From, IntentState To, DateTimeOffset At);
@@ -609,10 +630,10 @@ public sealed partial record Intent(
         ?? text.Trim().Split('\n', 2)[0].Trim();
 
     /// <summary>
-    /// The state a Paused Intent was paused from, which Resume returns it to: Refining, Implementing or In Review. <c>null</c> unless it
-    /// is Paused, and when it wasn't paused from one of those, and then it can't be resumed.
+    /// The state Resume moves a Paused Intent back to, the one it was paused from. <c>null</c> unless it is Paused from a state it can
+    /// be resumed to, and then it can't be resumed: so far only Refining, as nothing yet takes up an Intent in another Active state.
     /// </summary>
-    public IntentState? PausedFrom { get; init; }
+    public IntentState? ResumesTo { get; init; }
 
     /// <summary>The Repositories in scope, in a line of their own.</summary>
     public string RepositoriesInScopeLine =>

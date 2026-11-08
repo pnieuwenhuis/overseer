@@ -69,8 +69,8 @@ public sealed class RunningOverseer : IAsyncDisposable
     /// <param name="logs">Also receives everything the server logs.</param>
     /// <param name="time">The server's clock, such as a <c>FakeTimeProvider</c> the test advances.</param>
     /// <param name="sandboxes">
-    /// Scripts the server's fake Sandbox Provider before the server starts: as it starts, the Refinements a restart interrupted
-    /// continue, before the test could script it otherwise.
+    /// Scripts the server's fake Sandbox Provider as it is created, before the server uses it: as the server starts, the Refinements a
+    /// restart interrupted continue, before the test could script it otherwise.
     /// </param>
     public static async Task<RunningOverseer> StartAsync(
         string connectionString, IReadOnlyDictionary<string, string?>? environment = null, ILoggerProvider? logs = null,
@@ -94,7 +94,12 @@ public sealed class RunningOverseer : IAsyncDisposable
             logs,
             time,
             services => new FakeGitHubGateway(services.GetRequiredService<ISecretReader>()),
-            services => sandboxes?.Invoke((FakeSandboxProvider)services.GetRequiredService<ISandboxProvider>()));
+            services =>
+            {
+                var fake = new FakeSandboxProvider(services.GetRequiredService<TimeProvider>());
+                sandboxes?.Invoke(fake);
+                return fake;
+            });
 
         return new RunningOverseer(app, connectionString);
     }

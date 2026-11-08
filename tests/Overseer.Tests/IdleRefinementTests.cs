@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Time.Testing;
+using Overseer.Intents;
 using Overseer.Sandboxes;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
@@ -211,6 +212,83 @@ public class IdleRefinementTests(PostgresServer postgres)
         Assert.Equal(("Green", "Working"), LightOn(await GetAsync(overseer, address)));
     }
 
+    [Fact]
+    public async Task What_the_Analyst_hands_in_while_catching_up_is_ignored_and_does_not_count_against_its_hand_in_attempts()
+    {
+        var time = new FakeTimeProvider(Morning);
+        await using var overseer = await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/web"], time);
+        var nothing = new FakeAgentTurn([], new AgentOutcome.Done());
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst,
+            new FakeAgentSession(HandsInRound(("Which format?", "CSV."))),
+            new FakeAgentSession(
+            [
+                // Told to hand in nothing while it catches up, it hands in a Round anyway.
+                HandsInRound(("Which format, again?", "CSV.")),
+                // Then it misses every attempt but the last.
+                .. Enumerable.Repeat(nothing, Refinement.Refinements.HandInAttempts - 1),
+                HandsInRound(("Which page offers it?", "The orders page.")),
+                FakeAgentTurn.Endless(),
+            ]));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        using var started = await StartAsync(overseer, address);
+        await AwaitingAnswersAsync(overseer, address);
+        time.Advance(TimeSpan.FromMinutes(31));
+        await PausedAsync(overseer, address);
+        using var resumed = await ResumeAsync(overseer, address);
+
+        var reopened = await AwaitingAnswersAsync(overseer, address);
+        Assert.Equal([new ShownRound(1, Open: true, [new ShownQuestion(1, "Which format?", "CSV.", Answer: null, AnalystsChoice: false)])], Rounds(reopened));
+        using var answered = await AnswerAsync(overseer, address, 1, ("1", "Excel."));
+
+        var page = await EventuallyAsync(async () => await GetAsync(overseer, address) is var shown && Rounds(shown) is [_, { Open: true }] ? shown : null, "Round 2");
+        Assert.Equal("Which page offers it?", Rounds(page)[1].Questions.Single().Text);
+        Assert.Equal(("Orange", "Needs Attention"), LightOn(page));
+    }
+
+    [Fact]
+    public async Task A_Refinement_waiting_for_answers_whose_Intent_left_Refining_otherwise_ends_once_it_is_idle_rather_than_waiting_on()
+    {
+        var time = new FakeTimeProvider(Morning);
+        await using var overseer = await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/web"], time);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInRound(("Which format?", "CSV."))));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        using var started = await StartAsync(overseer, address);
+        await AwaitingAnswersAsync(overseer, address);
+        // As a Cancel will, which nothing in the Portal does yet.
+        await TransitionAsync(overseer, "Export data", IntentState.Cancelled, time);
+
+        time.Advance(TimeSpan.FromMinutes(31));
+
+        await RefinementTests.NoSandboxLeftAsync(overseer);
+        Assert.Equal([AgentRole.Analyst], overseer.Sandboxes.AgentSessionsStopped.Select(session => session.Role));
+        Assert.Equal("Cancelled", ElementText(await GetAsync(overseer, address), "intent-state"));
+    }
+
+    [Fact]
+    public async Task Resume_is_neither_offered_nor_accepted_on_an_Intent_that_was_paused_while_not_Refining()
+    {
+        var time = new FakeTimeProvider(Morning);
+        await using var overseer = await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/web"], time);
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        // Nothing picks up an Implementing Intent yet, so Resume would leave it with nothing working on it.
+        await TransitionAsync(overseer, "Export data", IntentState.Implementing, time);
+        await TransitionAsync(overseer, "Export data", IntentState.Paused, time);
+
+        var page = await GetAsync(overseer, address);
+        using var refused = await ResumeAsync(overseer, address);
+
+        Assert.Equal("Paused", ElementText(page, "intent-state"));
+        Assert.DoesNotContain("resume-intent", page);
+        Assert.DoesNotContain("role=\"alert\"", page);
+        var refusal = await refused.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("So far Resume only continues a Refinement, and this Intent wasn't Refining when it was paused.", Alert(refusal));
+        Assert.Equal("Paused", ElementText(await GetAsync(overseer, address), "intent-state"));
+        Assert.Empty(overseer.Sandboxes.AgentSessionsStarted);
+    }
+
     /// <summary>
     /// Captures a Draft with this text and <c>acme/web</c> in scope, starts it, has the Analyst ask a Round and leaves it unanswered for
     /// 31 minutes, so that the Intent is Paused; returns the address of its detail page.
@@ -224,7 +302,7 @@ public class IdleRefinementTests(PostgresServer postgres)
         await AwaitingAnswersAsync(overseer, address);
         time.Advance(TimeSpan.FromMinutes(31));
         await PausedAsync(overseer, address);
-        AnalystKeepsWorking(overseer);
+        AnalystKeepsWorking(overseer.Sandboxes);
         return address;
     }
 

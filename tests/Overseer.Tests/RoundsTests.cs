@@ -171,9 +171,12 @@ public class RoundsTests(PostgresServer postgres)
 
         var catchingUp = new TaskCompletionSource();
 
-        // The resumed Analyst catches up on the transcript, then works on the answers.
+        // The resumed Analyst catches up on the transcript, then goes on from the answers with its next Round.
         await using var second = await StartWithRepositoriesAsync(connectionString, [], sandboxes: sandboxes => sandboxes.ScriptAgentSessions(AgentRole.Analyst,
-            new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = catchingUp.Task }, FakeAgentTurn.Endless())));
+            new FakeAgentSession(
+                new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = catchingUp.Task },
+                HandsInRound(("Which columns?", "All of them.")),
+                FakeAgentTurn.Endless())));
 
         var catchingUpPage = await EventuallyAsync(async () => await GetAsync(second, address) is var shown && shown.Contains("data-phase=\"AnalystWorking\"") ? shown : null,
             "the Analyst to catch up");
@@ -198,6 +201,8 @@ public class RoundsTests(PostgresServer postgres)
         var sent = await EventuallyAsync(() => Task.FromResult(second.Sandboxes.MessagesSent.ElementAtOrDefault(1)), "the answers to reach the Analyst");
         Assert.Equal(Assert.Single(second.Sandboxes.AgentSessionsStarted).Sandbox, sent.Sandbox);
         Assert.Contains("The human answered Round 2.\n\nQuestion 1: Up to how many rows?\nThe human's answer: Ten thousand.", sent.Message);
+        var continued = await EventuallyAsync(async () => Rounds(await GetAsync(second, address)) is [_, _, { Open: true } next] ? next : null, "Round 3");
+        Assert.Equal(new ShownRound(3, Open: true, [new ShownQuestion(1, "Which columns?", "All of them.", Answer: null, AnalystsChoice: false)]), continued);
     }
 
     [Fact]
@@ -342,9 +347,14 @@ public class RoundsTests(PostgresServer postgres)
     internal static FakeAgentTurn HandsIn(string round) =>
         new([], new AgentOutcome.Done()) { Writes = new Dictionary<string, string> { [RoundPath] = round } };
 
-    /// <summary>Waits for the Intent's detail page to show its Refinement awaiting answers, and gives the page.</summary>
+    /// <summary>
+    /// Waits for the Intent's detail page to show its Refinement awaiting answers, and its light orange with it, and gives the page. The
+    /// page reads the Intent, with its light, a moment before its Refinement, so a page read as the Round comes may show the light of
+    /// the moment before.
+    /// </summary>
     internal static Task<string> AwaitingAnswersAsync(RunningOverseer overseer, string address) =>
-        EventuallyAsync(async () => await GetAsync(overseer, address) is var page && page.Contains("data-phase=\"AwaitingAnswers\"") ? page : null,
+        EventuallyAsync(async () => await GetAsync(overseer, address) is var page && page.Contains("data-phase=\"AwaitingAnswers\"")
+            && LightOn(page) is ("Orange", _) ? page : null,
             "the Refinement to await answers");
 
     /// <summary>

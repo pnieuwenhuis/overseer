@@ -11,11 +11,17 @@ public static class SandboxProviderConfiguration
     public const string PrivateNetworkKey = $"{AzureSection}:PrivateNetwork";
     public const string ManagedIdentityClientIdKey = $"{AzureSection}:ManagedIdentityClientId";
 
+    /// <param name="createProvider">Creates the Sandbox Provider, instead of the one the configuration says.</param>
     /// <exception cref="MissingConfigurationException">The Azure Sandbox Provider is configured, but lacks a setting it needs.</exception>
     public static IServiceCollection AddSandboxes(
-        this IServiceCollection services, IConfiguration configuration, IReadOnlyDictionary<string, string?> environment)
+        this IServiceCollection services, IConfiguration configuration, IReadOnlyDictionary<string, string?> environment,
+        Func<IServiceProvider, ISandboxProvider>? createProvider = null)
     {
-        if (configuration.GetSection(AzureSection).Exists())
+        if (createProvider is not null)
+        {
+            services.AddSingleton(createProvider);
+        }
+        else if (configuration.GetSection(AzureSection).Exists())
         {
             var settings = AzureSettings(configuration);
             services.AddSingleton<ISandboxProvider>(provider => new AzureSandboxProvider(
