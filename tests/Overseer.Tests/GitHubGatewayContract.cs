@@ -179,6 +179,39 @@ public abstract class GitHubGatewayContract : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_file_on_the_default_branch_is_found_without_naming_the_branch()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+
+        // Hello-World's default branch is master.
+        var check = await Gateway.CheckFileAsync(PublicRepository, branch: null, "README", TestContext.Current.CancellationToken);
+
+        Assert.IsType<GitHubFileCheck.Found>(check);
+    }
+
+    [Fact]
+    public async Task A_file_that_is_not_on_the_default_branch_is_not_found()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+
+        var check = await Gateway.CheckFileAsync(PublicRepository, branch: null, ".overseer.yml", TestContext.Current.CancellationToken);
+
+        Assert.IsType<GitHubFileCheck.NotFound>(check);
+    }
+
+    [Fact]
+    public async Task In_a_new_and_empty_repository_no_file_is_found_on_its_default_branch()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var repository = NewRepositoryName();
+        Assert.IsType<GitHubRepositoryCreation.Created>(await CreateAsync(repository));
+
+        var check = await Gateway.CheckFileAsync(repository, branch: null, ".overseer.yml", TestContext.Current.CancellationToken);
+
+        Assert.IsType<GitHubFileCheck.NotFound>(check);
+    }
+
+    [Fact]
     public async Task In_a_new_and_empty_repository_no_file_is_found()
     {
         await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
@@ -246,7 +279,7 @@ public sealed class FakeGitHubGatewayContract : GitHubGatewayContract
     {
         _gateway = new FakeGitHubGateway(Secrets);
         _gateway.AcceptToken(WorkingToken.Token, WorkingToken.Login);
-        _gateway.AddRepository(PublicRepository.ToString());
+        _gateway.AddRepository(PublicRepository.ToString(), defaultBranch: "master");
         _gateway.AddFile(PublicRepository.ToString(), "master", "README");
     }
 

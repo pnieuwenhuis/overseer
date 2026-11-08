@@ -17,7 +17,10 @@ public static class IntentPortal
     public static async Task<RunningOverseer> StartWithRepositoriesAsync(PostgresServer postgres, params string[] repositories) =>
         await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), repositories);
 
-    /// <summary>A running Overseer, logged in, with these repositories configured.</summary>
+    /// <summary>
+    /// A running Overseer, logged in, with these repositories configured, each with a Repository Manifest on its default branch
+    /// unless the test takes it away with <see cref="WithoutManifest"/>.
+    /// </summary>
     /// <param name="environment">Overrides the test defaults, as for <see cref="RunningOverseer.StartAsync"/>.</param>
     /// <param name="logs">Also receives everything the server logs.</param>
     public static async Task<RunningOverseer> StartWithRepositoriesAsync(
@@ -33,11 +36,19 @@ public static class IntentPortal
         foreach (var repository in repositories)
         {
             overseer.GitHub.AddRepository(repository);
+            overseer.GitHub.AddFile(repository, FakeGitHubGateway.DefaultBranch, ManifestPath);
             using var added = await overseer.SubmitFormAsync("/settings", "repository-add", new Dictionary<string, string> { ["Repository"] = repository });
             Assert.Contains($"{repository} is added.", await added.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         }
         return overseer;
     }
+
+    /// <summary>The Repository Manifest's path in a repository.</summary>
+    public const string ManifestPath = ".overseer.yml";
+
+    /// <summary>Takes the Repository Manifest off the default branch of a repository <see cref="StartWithRepositoriesAsync(string, string[], TimeProvider?, IReadOnlyDictionary{string, string?}?, ILoggerProvider?)"/> configured.</summary>
+    public static void WithoutManifest(RunningOverseer overseer, string repository) =>
+        overseer.GitHub.RemoveFile(repository, FakeGitHubGateway.DefaultBranch, ManifestPath);
 
     /// <summary>Makes every Analyst session from now on work until it is stopped, as a started Intent's Analyst does while it refines.</summary>
     public static void AnalystKeepsWorking(RunningOverseer overseer) =>

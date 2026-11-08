@@ -130,7 +130,7 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
         }
     }
 
-    public async Task<GitHubFileCheck?> CheckFileAsync(RepositoryName repository, string branch, string path, CancellationToken cancellationToken)
+    public async Task<GitHubFileCheck?> CheckFileAsync(RepositoryName repository, string? branch, string path, CancellationToken cancellationToken)
     {
         if (await secrets.ReadAsync(GitHubToken.SecretName, cancellationToken) is not { } token)
         {
@@ -144,9 +144,10 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
         try
         {
             var filePath = string.Join('/', path.Split('/').Select(Uri.EscapeDataString));
+            // Without a ref, GitHub looks on the repository's default branch.
             using var request = Get(
                 $"repos/{Uri.EscapeDataString(repository.Owner)}/{Uri.EscapeDataString(repository.Name)}/contents/{filePath}" +
-                $"?ref={Uri.EscapeDataString(branch)}",
+                (branch is null ? "" : $"?ref={Uri.EscapeDataString(branch)}"),
                 token);
             using var response = await Http.SendAsync(request, cancellationToken);
             // Also for a branch that doesn't exist, and for an empty repository ("This repository is empty.").

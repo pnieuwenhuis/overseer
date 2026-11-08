@@ -390,11 +390,11 @@ public class RefinementTests(PostgresServer postgres)
         }, "every Sandbox to be destroyed");
 
     /// <summary>Waits for the Intent's detail page to show its Refinement failed.</summary>
-    private static Task<ShownRefinement> FailedAsync(RunningOverseer overseer, string address) =>
+    internal static Task<ShownRefinement> FailedAsync(RunningOverseer overseer, string address) =>
         EventuallyAsync(async () => RefinementOn(await GetAsync(overseer, address)) is { Phase: "Failed" } shown ? shown : null, "the Refinement to fail");
 
     /// <summary>Presses the Retry button on the Intent's detail page, as a browser would.</summary>
-    private static async Task<HttpResponseMessage> RetryAsync(RunningOverseer overseer, string address)
+    internal static async Task<HttpResponseMessage> RetryAsync(RunningOverseer overseer, string address)
     {
         var page = await GetAsync(overseer, address);
         var form = Regex.Match(page, "<form[^>]*action=\"([^\"]*retry)\".*?</form>", RegexOptions.Singleline);
@@ -438,5 +438,5 @@ public class RefinementTests(PostgresServer postgres)
     /// <param name="Status">What the page says about it, such as the error it failed with.</param>
     /// <param name="Light">The colour and label of the Intent's light; <c>null</c> when it shows none.</param>
     /// <param name="RetryAction">Where its Retry button posts to; <c>null</c> when it has none.</param>
-    private sealed record ShownRefinement(string Phase, string Status, (string Colour, string Label)? Light, string? RetryAction);
+    internal sealed record ShownRefinement(string Phase, string Status, (string Colour, string Label)? Light, string? RetryAction);
 }

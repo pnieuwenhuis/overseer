@@ -33,13 +33,16 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
     /// <summary>
     /// Makes GitHub have the repository <paramref name="ownerAndName"/>, in that case. Every token GitHub accepts can reach
     /// it, or only <paramref name="reachableBy"/>: to any other, GitHub says it doesn't exist, as it does for a private
-    /// repository.
+    /// repository. Its default branch is <paramref name="defaultBranch"/>.
     /// </summary>
-    public void AddRepository(string ownerAndName, string? reachableBy = null)
+    public void AddRepository(string ownerAndName, string? reachableBy = null, string defaultBranch = DefaultBranch)
     {
         var repository = RepositoryName.Parse(ownerAndName);
-        _repositories[Key(repository)] = new FakeRepository(repository, reachableBy);
+        _repositories[Key(repository)] = new FakeRepository(repository, reachableBy, defaultBranch);
     }
+
+    /// <summary>The default branch of a repository unless the test says otherwise, as GitHub's own default for new repositories.</summary>
+    public const string DefaultBranch = "main";
 
     public async Task<GitHubRepositoryCheck?> CheckRepositoryAsync(RepositoryName repository, CancellationToken cancellationToken)
     {
@@ -105,7 +108,7 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
         {
             return new GitHubRepositoryCreation.Fails(refusal);
         }
-        if (!_repositories.TryAdd(Key(repository), new FakeRepository(repository, ReachableBy: null)))
+        if (!_repositories.TryAdd(Key(repository), new FakeRepository(repository, ReachableBy: null, DefaultBranch)))
         {
             return new GitHubRepositoryCreation.Fails("Repository creation failed: name already exists on this account (HTTP 422)");
         }
@@ -120,16 +123,21 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
     public void AddFile(string ownerAndName, string branch, string path) =>
         _files[(Key(RepositoryName.Parse(ownerAndName)), branch, path)] = true;
 
-    public async Task<GitHubFileCheck?> CheckFileAsync(RepositoryName repository, string branch, string path, CancellationToken cancellationToken) =>
+    /// <summary>Takes <paramref name="path"/> off <paramref name="branch"/> of the repository <paramref name="ownerAndName"/>.</summary>
+    public void RemoveFile(string ownerAndName, string branch, string path) =>
+        _files.TryRemove((Key(RepositoryName.Parse(ownerAndName)), branch, path), out _);
+
+    public async Task<GitHubFileCheck?> CheckFileAsync(RepositoryName repository, string? branch, string path, CancellationToken cancellationToken) =>
         await CheckRepositoryAsync(repository, cancellationToken) switch
         {
             null => null,
             GitHubRepositoryCheck.Fails fails => new GitHubFileCheck.Fails(fails.Error),
-            GitHubRepositoryCheck.Reachable when _files.ContainsKey((Key(repository), branch, path)) => new GitHubFileCheck.Found(),
+            GitHubRepositoryCheck.Reachable when _repositories[Key(repository)] is var found
+                && _files.ContainsKey((Key(repository), branch ?? found.DefaultBranch, path)) => new GitHubFileCheck.Found(),
             _ => new GitHubFileCheck.NotFound(),
         };
 
     private static string Key(RepositoryName repository) => repository.ToString().ToLowerInvariant();
 
-    private sealed record FakeRepository(RepositoryName Name, string? ReachableBy);
+    private sealed record FakeRepository(RepositoryName Name, string? ReachableBy, string DefaultBranch);
 }

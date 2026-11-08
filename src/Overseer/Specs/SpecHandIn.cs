@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Overseer.GitHub;
+using Overseer.Repositories;
 using Overseer.Sandboxes;
 
 namespace Overseer.Specs;
@@ -9,7 +10,11 @@ namespace Overseer.Specs;
 /// Repositories in scope of the Intent. The Analyst's instructions describe the format.
 /// </summary>
 /// <param name="repositoriesInScope">The Intent's, which its Tasks may touch and no others.</param>
-internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInScope) : HandIn<Spec>
+/// <param name="lackingManifest">
+/// The Repositories in scope known to have no Repository Manifest, each of which a Task must touch and create it in, naming its
+/// file in its title or description.
+/// </param>
+internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInScope, IReadOnlyList<RepositoryName> lackingManifest) : HandIn<Spec>
 {
     /// <summary>In the home of the Sandbox's user, outside the repositories, next to the Round's.</summary>
     public const string FilePath = "/home/overseer/.overseer/spec.json";
@@ -60,12 +65,37 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
         var uiChanges = OptionalSection(root, "uiChanges", errors);
         var decisions = ReadDecisions(root, errors);
         var tasks = ReadTasks(root, errors);
+        // Only once the rest is valid: a Task with other errors isn't read, and would seem missing here.
+        if (errors.Count == 0)
+        {
+            CheckManifestTasks(tasks, errors);
+        }
 
         return errors.Count > 0
             ? new HandedIn<Spec>.Invalid(errors)
             : new HandedIn<Spec>.Valid(new Spec(
                 summary!, approach!, decisions, acceptanceCriteria!, dependencies!, apiEndpointChanges, dataModelChanges, uiChanges, tasks));
     });
+
+    /// <summary>
+    /// Adds an error for each Repository in scope that lacks a Repository Manifest and has no Task that creates it: one that touches
+    /// it and names the manifest's file in its title or description.
+    /// </summary>
+    private void CheckManifestTasks(IReadOnlyList<SpecTask> tasks, List<string> errors)
+    {
+        foreach (var repository in lackingManifest)
+        {
+            var created = tasks.Any(task => task.Repositories.Contains(repository)
+                && (task.Title.Contains(RepositoryManifest.Path, StringComparison.OrdinalIgnoreCase)
+                    || task.Description.Contains(RepositoryManifest.Path, StringComparison.OrdinalIgnoreCase)));
+            if (!created)
+            {
+                errors.Add(
+                    $"No Task creates the Repository Manifest of {repository}, which has none on its default branch: add a Task that touches it " +
+                    $"and creates its `{RepositoryManifest.Path}`, naming that file in its title or description.");
+            }
+        }
+    }
 
     /// <summary>The Markdown of a prose section every Spec has; <c>null</c>, with the error, when it has none.</summary>
     private static string? RequiredSection(JsonElement root, string section, List<string> errors)

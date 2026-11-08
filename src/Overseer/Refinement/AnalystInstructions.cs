@@ -1,4 +1,5 @@
 using Overseer.Intents;
+using Overseer.Repositories;
 using Overseer.Specs;
 
 namespace Overseer.Refinement;
@@ -7,9 +8,10 @@ namespace Overseer.Refinement;
 internal static class AnalystInstructions
 {
     /// <summary>
-    /// The Analyst's first message: its instructions, the Intent's text as the human wrote it, and its Repositories in scope.
+    /// The Analyst's first message: its instructions, the Intent's text as the human wrote it, and its Repositories in scope with
+    /// which of them lack a Repository Manifest.
     /// </summary>
-    public static string FirstMessage(Intent intent) =>
+    public static string FirstMessage(Intent intent, ManifestCheck manifests) =>
         $"""
         You are the Analyst of Overseer, a system in which one human directs a team of AI agents. The human captured the
         Intent below: a single change they want made to their software. Your job is Refinement: find out what exactly
@@ -22,6 +24,15 @@ internal static class AnalystInstructions
         Its Repositories in scope, the GitHub repositories it may change, are in this Sandbox:
 
         {string.Join("\n", intent.RepositoriesInScope.Select(repository => $"- {repository} ({repository.WebUrl})"))}
+
+        Each Repository in scope needs a Repository Manifest, `{RepositoryManifest.Path}` at its root on its default branch, so
+        that the work on it can be verified. {ManifestFormat}
+
+        {ManifestStatus(manifests)}
+
+        Ask the human, in a Round, whether testing the change needs external dependencies, such as a database, and suggest the answer the code points to.
+        When it does, and a Repository in scope that needs them has no Docker Compose setup that starts them, add a Task to the Spec that touches that
+        repository, creates a Docker Compose file that starts them, and references it as `compose` in its `{RepositoryManifest.Path}`.
 
         What you may do in this Sandbox:
 
@@ -78,6 +89,45 @@ internal static class AnalystInstructions
         Overseer takes the file away once your turn ends. When it isn't valid, it isn't stored and the human doesn't see it:
         you are told what is wrong, and write the whole Spec again.
         """;
+
+    /// <summary>What a Repository Manifest holds, for an Analyst that has a Task create one.</summary>
+    private const string ManifestFormat =
+        "It holds the shell commands `setup` (prepares a fresh clone, such as installing dependencies), `build` and `test`, " +
+        "run from the repository's root, and optionally `compose`, the path of a Docker Compose file that starts the services " +
+        "the tests need.";
+
+    /// <summary>What a Task that creates a missing Repository Manifest looks like, so that Overseer recognizes it.</summary>
+    private const string ManifestTask =
+        $"a Task that touches it and creates its `{RepositoryManifest.Path}`, naming that file in its title or description";
+
+    /// <summary>Which Repositories in scope lack a Repository Manifest, and what the Spec must do about it.</summary>
+    private static string ManifestStatus(ManifestCheck manifests)
+    {
+        var paragraphs = new List<string>();
+        if (manifests.Lacking.Count > 0)
+        {
+            paragraphs.Add(
+                $"""
+                These Repositories in scope have none on their default branch:
+
+                {string.Join("\n", manifests.Lacking.Select(repository => $"- {repository}"))}
+
+                For each of them, the Spec must have {ManifestTask}. Overseer doesn't accept a Spec without one.
+                """);
+        }
+        if (manifests.Unknown.Count > 0)
+        {
+            paragraphs.Add(
+                $"""
+                Overseer could not check on GitHub whether these Repositories in scope have one:
+
+                {string.Join("\n", manifests.Unknown.Select(unknown => $"- {unknown.Repository}: {unknown.Error}"))}
+
+                Look for `{RepositoryManifest.Path}` at the root of each of them in this Sandbox yourself, on its default branch. For each that has none, the Spec must have {ManifestTask}.
+                """);
+        }
+        return paragraphs.Count > 0 ? string.Join("\n\n", paragraphs) : "Every Repository in scope has one.";
+    }
 
     /// <summary>The human's answers to a Round, each Analyst's Choice marked as such, to send to the Analyst that asked it.</summary>
     public static string Answers(Round round) =>

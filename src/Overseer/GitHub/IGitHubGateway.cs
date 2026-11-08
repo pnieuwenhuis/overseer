@@ -29,9 +29,10 @@ public interface IGitHubGateway
     /// Checks, with the GitHub token Overseer uses, whether <paramref name="path"/> is on <paramref name="branch"/> of
     /// <paramref name="repository"/>.
     /// </summary>
+    /// <param name="branch">The branch; <c>null</c> for the repository's default branch, whichever that is.</param>
     /// <param name="path">The file's path from the repository's root, such as <c>.overseer.yml</c>.</param>
     /// <returns>What GitHub says; <c>null</c> when no GitHub token is set.</returns>
-    Task<GitHubFileCheck?> CheckFileAsync(RepositoryName repository, string branch, string path, CancellationToken cancellationToken);
+    Task<GitHubFileCheck?> CheckFileAsync(RepositoryName repository, string? branch, string path, CancellationToken cancellationToken);
 }
 
 /// <summary>What GitHub says about a file on a branch.</summary>

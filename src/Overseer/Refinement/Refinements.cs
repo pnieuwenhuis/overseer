@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using Overseer.GitHub;
 using Overseer.Intents;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
@@ -18,8 +19,8 @@ namespace Overseer.Refinement;
 /// fails leaves the Intent Refining, in its slot, and red until a Retry.
 /// </summary>
 public sealed class Refinements(
-    IntentLifecycle lifecycle, SandboxRegistry sandboxes, IDbContextFactory<OverseerDbContext> databases, TimeProvider time,
-    ILogger<Refinements> logger)
+    IntentLifecycle lifecycle, SandboxRegistry sandboxes, IGitHubGateway gitHub, IDbContextFactory<OverseerDbContext> databases,
+    TimeProvider time, ILogger<Refinements> logger)
     : IHostedService
 {
     /// <summary>
@@ -262,8 +263,10 @@ public sealed class Refinements(
                 return $"The Analyst's session failed: {exception.Message}";
             }
             await using var session = started;
-            var message = AnalystInstructions.FirstMessage(intent);
-            var specHandIn = new SpecHandIn(intent.RepositoriesInScope);
+            // Before the Analyst's first turn, also when a Refinement starts again, as the manifests may have changed meanwhile.
+            var manifests = await ManifestCheck.RunAsync(gitHub, intent.RepositoriesInScope, cancellationToken);
+            var message = AnalystInstructions.FirstMessage(intent, manifests);
+            var specHandIn = new SpecHandIn(intent.RepositoriesInScope, manifests.Lacking);
             var failedHandIns = 0;
             while (true)
             {

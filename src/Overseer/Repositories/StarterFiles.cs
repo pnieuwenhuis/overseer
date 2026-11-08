@@ -10,7 +10,7 @@ namespace Overseer.Repositories;
 public sealed class StarterFiles(SandboxRegistry sandboxes, IGitHubGateway gitHub)
 {
     /// <summary>The Repository Manifest, which must be on main when the agent is done.</summary>
-    public const string ManifestPath = ".overseer.yml";
+    public const string ManifestPath = RepositoryManifest.Path;
 
     /// <summary>
     /// Has an agent write the starter files of the Repository Setup's repository, and destroys its Sandbox again.
