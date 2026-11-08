@@ -15,18 +15,23 @@
 @* A form submitted from a page opened earlier is handled whatever became of the Intent. *@
 @if (_intent is not null || IsSubmitted)
 {
-    <LiveIntent Id="Id" StartRefused="_startRefused" AnswersRefused="@_answersRefused" RefusedAnswers="_refusedAnswers" @rendermode="InteractiveServer" />
+    <LiveIntent Id="Id" StartRefused="_startRefused" ResumeRefused="_resumeRefused" AnswersRefused="@_answersRefused" RefusedAnswers="_refusedAnswers"
+                @rendermode="InteractiveServer" />
 }
-@* Blazor handles a submitted form only when the page has a form of its name. The Start and answer forms the user sees are LiveIntent's, which come and go as the Intent changes. *@
+@* Blazor handles a submitted form only when the page has a form of its name. The Start, Resume and answer forms the user sees are LiveIntent's, which come and go as the Intent changes. *@
 @if (IsSubmitted)
 {
     <form method="post" @formname="@StartFormName" @onsubmit="StartAsync"></form>
+    <form method="post" @formname="@ResumeFormName" @onsubmit="ResumeAsync"></form>
     <form method="post" @formname="@AnswerFormName" @onsubmit="AnswerAsync"></form>
 }
 
 @code {
     /// <summary>The name that a form submitted to this page starts the Intent under.</summary>
     public const string StartFormName = "start-intent";
+
+    /// <summary>The name that a form submitted to this page resumes the Intent under.</summary>
+    public const string ResumeFormName = "resume-intent";
 
     /// <summary>The name that a form submitted to this page answers a Round under.</summary>
     public const string AnswerFormName = "answer-round";
@@ -50,6 +55,7 @@
 
     private Intent? _intent;
     private bool _startRefused;
+    private bool _resumeRefused;
     private string? _answersRefused;
     private RefinementRounds.Draft? _refusedAnswers;
 
@@ -74,6 +80,20 @@
             case IntentChange.Refused:
                 // LiveIntent then reads the Intent again, and says why as it is now.
                 _startRefused = true;
+                break;
+        }
+    }
+
+    private async Task ResumeAsync()
+    {
+        switch (await Lifecycle.ResumeAsync(Id, HttpContext.RequestAborted))
+        {
+            case IntentChange.Made:
+                Navigation.NavigateTo($"/intents/{Id}");
+                break;
+            case IntentChange.Refused:
+                // As for Start: LiveIntent reads the Intent again, and says why as it is now.
+                _resumeRefused = true;
                 break;
         }
     }

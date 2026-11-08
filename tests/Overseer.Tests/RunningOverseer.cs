@@ -68,9 +68,13 @@ public sealed class RunningOverseer : IAsyncDisposable
     /// <param name="environment">Overrides the test defaults; a <c>null</c> value removes that variable.</param>
     /// <param name="logs">Also receives everything the server logs.</param>
     /// <param name="time">The server's clock, such as a <c>FakeTimeProvider</c> the test advances.</param>
+    /// <param name="sandboxes">
+    /// Scripts the server's fake Sandbox Provider before the server starts: as it starts, the Refinements a restart interrupted
+    /// continue, before the test could script it otherwise.
+    /// </param>
     public static async Task<RunningOverseer> StartAsync(
         string connectionString, IReadOnlyDictionary<string, string?>? environment = null, ILoggerProvider? logs = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null, Action<FakeSandboxProvider>? sandboxes = null)
     {
         var defaults = new Dictionary<string, string?>
         {
@@ -89,7 +93,8 @@ public sealed class RunningOverseer : IAsyncDisposable
             TestContext.Current.CancellationToken,
             logs,
             time,
-            services => new FakeGitHubGateway(services.GetRequiredService<ISecretReader>()));
+            services => new FakeGitHubGateway(services.GetRequiredService<ISecretReader>()),
+            services => sandboxes?.Invoke((FakeSandboxProvider)services.GetRequiredService<ISandboxProvider>()));
 
         return new RunningOverseer(app, connectionString);
     }

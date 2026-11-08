@@ -5,12 +5,12 @@ namespace Overseer.Sandboxes;
 /// <summary>
 /// Work that agents do in the background in Sandboxes owned by one kind of owner, such as Refinements or Repository Setups,
 /// shaped the same way for each: it runs until serve stops, which interrupts it and waits for it, and the Sandboxes it leaves
-/// behind are destroyed when serve starts again. The module it belongs to keeps where each piece of work stands, and marks the
-/// work a stop interrupted failed when serve starts.
+/// behind are destroyed when serve starts again. The module it belongs to keeps where each piece of work stands, and takes up the
+/// work a stop interrupted when serve starts: Repository Setups mark it failed, and Refinements continue it.
 /// </summary>
 public sealed class SandboxedWork(SandboxRegistry sandboxes, SandboxOwnerKind ownerKind, ILogger logger)
 {
-    // Cancelled when serve stops: the work running then is interrupted, and the next start marks it failed.
+    // Cancelled when serve stops: the work running then is interrupted, and the next start takes it up.
     private readonly CancellationTokenSource _stopping = new();
 
     // What runs in the background, which stopping waits for.
@@ -49,13 +49,13 @@ public sealed class SandboxedWork(SandboxRegistry sandboxes, SandboxOwnerKind ow
     /// <summary>
     /// Runs <paramref name="work"/> in the background, then records how it ended with <paramref name="finish"/>, unless serve
     /// stopped meanwhile: an error then, such as an agent session the stop broke off, is the stop's doing, so the work's phase is
-    /// left as it is for the next start to mark failed.
+    /// left as it is for the next start to take up.
     /// </summary>
     /// <param name="what">The work, for the log, such as "the Refinement of the Intent …".</param>
     /// <param name="work">Does the work, until serve stops; returns why it failed, or <c>null</c>.</param>
     /// <param name="finish">
     /// Records what <paramref name="work"/> returned, or the message of what it threw. Not cancelled: once the work has ended,
-    /// stopping waits for this. Should it fail, the next start marks the work failed.
+    /// stopping waits for this. Should it fail, the next start takes the work up as interrupted.
     /// </param>
     public void Run(string what, Func<CancellationToken, Task<string?>> work, Func<string?, Task> finish) => Track(Task.Run(async () =>
     {

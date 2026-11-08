@@ -40,7 +40,7 @@
                         <p class="question-answer-label">@(answer.IsAnalystsChoice ? "Analyst's Choice" : "Your answer")</p>
                         <p class="question-answer" data-analysts-choice="@answer.IsAnalystsChoice">@answer.Text</p>
                     </text>
-                    : @<p class="question-unanswered">Awaiting your answer; the Analyst stopped before you gave it.</p>)
+                    : @<p class="question-unanswered">@(Paused ? "Not answered yet: Resume the Intent to answer it." : "Not answered yet: you can answer it once the Analyst is back.")</p>)
             }
         </article>
     }
@@ -56,6 +56,10 @@
     /// <summary>The number of the Round that awaits the user's answers; <c>null</c> when none does.</summary>
     [Parameter]
     public int? OpenRound { get; set; }
+
+    /// <summary>Whether the Intent is Paused, so that a Round left unanswered is answered after Resume.</summary>
+    [Parameter]
+    public bool Paused { get; set; }
 
     /// <summary>Answers to a Round that were just refused, to fill its form in again with; <c>null</c> unless there are.</summary>
     [Parameter]

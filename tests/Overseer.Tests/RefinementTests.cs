@@ -212,7 +212,7 @@ public class RefinementTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task Stopping_serve_destroys_the_Sandbox_and_after_a_restart_the_Refinement_is_shown_failed_and_can_be_retried()
+    public async Task Stopping_serve_destroys_the_Sandbox_and_after_a_restart_the_Refinement_continues_in_a_fresh_Sandbox_from_its_transcript()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
@@ -220,21 +220,27 @@ public class RefinementTests(PostgresServer postgres)
         await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"]))
         {
             firstSandboxes = first.Sandboxes;
+            first.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
+                RoundsTests.HandsInRound(("Which format?", "CSV.")),
+                FakeAgentTurn.Endless("Reading the answers")));
             using var saved = await SaveAsync(first, "Export data", "acme/web");
             address = await AddressAsync(first, "Export data");
             using var started = await StartAsync(first, address);
-            await EventuallyAsync(async () => RefinementOn(await GetAsync(first, address)) is { Phase: "AnalystWorking" } shown ? shown : null, "the Analyst to start working");
+            await RoundsTests.AwaitingAnswersAsync(first, address);
+            using var answered = await RoundsTests.AnswerAsync(first, address, 1, ("1", "Excel."));
+            await EventuallyAsync(async () => RefinementOn(await GetAsync(first, address)) is { Phase: "AnalystWorking" } shown ? shown : null, "the Analyst to work on the answers");
         }
         Assert.Empty(await firstSandboxes.ListAsync(TestContext.Current.CancellationToken));
 
         await using var second = await StartWithRepositoriesAsync(connectionString, []);
 
-        var interrupted = RefinementOn(await GetAsync(second, address));
-        Assert.Equal(
-            new ShownRefinement("Failed", "Overseer restarted while the Analyst was working. Retry to start the Analyst again.", ("Red", "Failed"), $"intents/{IdOf(address)}/retry"),
-            interrupted);
-        using var retried = await RetryAsync(second, address);
-        await EventuallyAsync(async () => RefinementOn(await GetAsync(second, address)) is { Phase: "AnalystWorking" } shown ? shown : null, "the Analyst to start working");
+        var continued = await EventuallyAsync(async () => RefinementOn(await GetAsync(second, address)) is { Phase: "AnalystWorking" } shown ? shown : null, "the Analyst to work again");
+        Assert.Equal(new ShownRefinement("AnalystWorking", "The Analyst is working on the Intent.", ("Green", "Working"), null), continued);
+        var session = Assert.Single(second.Sandboxes.AgentSessionsStarted);
+        Assert.Equal(new SandboxOwner(SandboxOwnerKind.Intent, IdOf(address)), session.Sandbox.Owner);
+        var message = Assert.Single(second.Sandboxes.MessagesSent).Message;
+        Assert.Contains("Round 1, answered:\n\nQuestion 1: Which format?\nThe human's answer: Excel.", message);
+        Assert.Contains("Go on with the Refinement from here", message);
     }
 
     [Fact]
@@ -259,46 +265,48 @@ public class RefinementTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task After_a_restart_during_provisioning_the_Refinement_is_shown_failed_and_the_Sandbox_it_was_provisioning_is_destroyed()
+    public async Task After_a_restart_during_provisioning_the_Sandbox_it_was_provisioning_is_destroyed_and_the_Refinement_continues_in_a_fresh_one()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
+        string interrupted;
         await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"], new FakeTimeProvider()))
         {
             first.Sandboxes.ProvisioningDelay = TimeSpan.FromMinutes(4);
             using var saved = await SaveAsync(first, "Export data", "acme/web");
             address = await AddressAsync(first, "Export data");
             using var started = await StartAsync(first, address);
-            await EventuallyAsync(async () =>
+            interrupted = await EventuallyAsync(async () =>
             {
                 await using var database = first.OpenDatabase();
-                return await database.Sandboxes.AnyAsync(TestContext.Current.CancellationToken) ? "" : null;
+                return (await database.Sandboxes.SingleOrDefaultAsync(TestContext.Current.CancellationToken))?.ResourceId;
             }, "the Sandbox to be recorded");
         }
 
         await using var second = await StartWithRepositoriesAsync(connectionString, []);
 
-        Assert.Equal(
-            new ShownRefinement(
-                "Failed", "Overseer restarted while a Sandbox was being provisioned for the Analyst. Retry to start the Analyst again.",
-                ("Red", "Failed"), $"intents/{IdOf(address)}/retry"),
-            RefinementOn(await GetAsync(second, address)));
-        await NoSandboxLeftAsync(second);
+        await EventuallyAsync(async () => RefinementOn(await GetAsync(second, address)) is { Phase: "AnalystWorking" } shown ? shown : null, "the Analyst to start working");
+        var sandbox = Assert.Single(await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
+        Assert.NotEqual(interrupted, sandbox.ResourceId);
+        await LeftOverDestroyedAsync(second, interrupted);
+        // Nothing to go on from but the Intent: the first session never started.
+        Assert.DoesNotContain("This Refinement began before", Assert.Single(second.Sandboxes.MessagesSent).Message);
     }
 
     [Fact]
-    public async Task After_a_restart_the_Portal_answers_no_request_until_the_interrupted_Refinements_are_marked_failed()
+    public async Task After_a_restart_the_Portal_answers_no_request_until_the_interrupted_Refinements_are_set_to_continue_so_no_answers_reach_a_session_that_is_gone()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
         await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"]))
         {
+            first.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(RoundsTests.HandsInRound(("Which format?", "CSV."))));
             using var saved = await SaveAsync(first, "Export data", "acme/web");
             address = await AddressAsync(first, "Export data");
             using var started = await StartAsync(first, address);
-            await EventuallyAsync(async () => RefinementOn(await GetAsync(first, address)) is { Phase: "AnalystWorking" } shown ? shown : null, "the Analyst to start working");
+            await RoundsTests.AwaitingAnswersAsync(first, address);
         }
-        // Holds the Refinement's row, so that marking it failed waits until the test lets go.
+        // Holds the Refinement's row, so that setting it to continue waits until the test lets go.
         await using var holder = new NpgsqlConnection(connectionString);
         await holder.OpenAsync(TestContext.Current.CancellationToken);
         await using var holding = await holder.BeginTransactionAsync(TestContext.Current.CancellationToken);
@@ -309,7 +317,9 @@ public class RefinementTests(PostgresServer postgres)
         var port = FreePort();
 
         var starting = RunningOverseer.StartAsync(
-            connectionString, new Dictionary<string, string?> { ["OVERSEER_URLS"] = $"http://127.0.0.1:{port}" });
+            connectionString, new Dictionary<string, string?> { ["OVERSEER_URLS"] = $"http://127.0.0.1:{port}" },
+            // The resumed Analyst is still catching up on the transcript.
+            sandboxes: sandboxes => sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(FakeAgentTurn.Endless())));
 
         await EventuallyAsync(async () =>
         {
@@ -319,7 +329,7 @@ public class RefinementTests(PostgresServer postgres)
             await using var waiting = new NpgsqlCommand(
                 "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'", watcher);
             return (long)(await waiting.ExecuteScalarAsync(TestContext.Current.CancellationToken))! > 0 ? "" : null;
-        }, "marking the Refinement failed to wait for its row");
+        }, "setting the Refinement to continue to wait for its row");
         using (var client = new TcpClient())
         {
             await Assert.ThrowsAnyAsync<SocketException>(() => client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken).AsTask());
@@ -327,31 +337,43 @@ public class RefinementTests(PostgresServer postgres)
         await holding.RollbackAsync(TestContext.Current.CancellationToken);
         await using var second = await starting;
         await second.LogInAsync();
-        Assert.Equal("Failed", RefinementOn(await GetAsync(second, address))!.Phase);
+        Assert.NotEqual("AwaitingAnswers", RefinementOn(await GetAsync(second, address))!.Phase);
+        using var early = await RoundsTests.AnswerAsync(second, address, 1, ("1", "Excel."));
+        Assert.Equal("Your answers were not sent: Round 1 no longer awaits answers.", Alert(await early.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
     }
 
     [Fact]
-    public async Task A_Sandbox_left_over_from_a_crash_is_destroyed_when_serve_starts_again()
+    public async Task A_Sandbox_left_over_from_a_crash_is_destroyed_when_serve_starts_again_and_the_Refinement_continues_in_a_fresh_one()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
+        Sandbox leftOver;
         await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"]))
         {
             using var saved = await SaveAsync(first, "Export data", "acme/web");
             var address = await AddressAsync(first, "Export data");
             using var started = await StartAsync(first, address);
             await EventuallyAsync(async () => RefinementOn(await GetAsync(first, address)) is { Phase: "AnalystWorking" } shown ? shown : null, "the Analyst to start working");
+            leftOver = Assert.Single(await first.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
             // As if serve crashed: the Sandbox outlives it.
             first.Sandboxes.FailNextDestruction("Azure could not be reached.");
         }
 
         await using var second = await StartWithRepositoriesAsync(connectionString, []);
 
-        await EventuallyAsync(async () =>
-        {
-            await using var database = second.OpenDatabase();
-            return await database.Sandboxes.AnyAsync(sandbox => sandbox.DestroyedAt == null, TestContext.Current.CancellationToken) ? null : "";
-        }, "the left-over Sandbox to be destroyed");
+        await LeftOverDestroyedAsync(second, leftOver.ResourceId);
+        var fresh = await EventuallyAsync(async () => (await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken)).SingleOrDefault(), "a fresh Sandbox");
+        Assert.Equal(leftOver.Owner, fresh.Owner);
     }
+
+    /// <summary>Waits for the Sandbox left over from before a restart to be recorded destroyed.</summary>
+    private static Task LeftOverDestroyedAsync(RunningOverseer overseer, string resourceId) =>
+        EventuallyAsync(async () =>
+        {
+            await using var database = overseer.OpenDatabase();
+            return await database.Sandboxes.AnyAsync(sandbox => sandbox.ResourceId == resourceId && sandbox.DestroyedAt != null, TestContext.Current.CancellationToken)
+                ? ""
+                : null;
+        }, "the left-over Sandbox to be destroyed");
 
     [Fact]
     public async Task A_Sandbox_whose_destruction_fails_while_serve_runs_stays_recorded_and_the_next_start_destroys_it()
@@ -381,7 +403,7 @@ public class RefinementTests(PostgresServer postgres)
     }
 
     /// <summary>Waits for every Sandbox to be destroyed, and recorded destroyed.</summary>
-    private static Task NoSandboxLeftAsync(RunningOverseer overseer) =>
+    internal static Task NoSandboxLeftAsync(RunningOverseer overseer) =>
         EventuallyAsync(async () =>
         {
             await using var database = overseer.OpenDatabase();

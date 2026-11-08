@@ -24,13 +24,18 @@ public static class IntentPortal
     /// </summary>
     /// <param name="environment">Overrides the test defaults, as for <see cref="RunningOverseer.StartAsync"/>.</param>
     /// <param name="logs">Also receives everything the server logs.</param>
+    /// <param name="sandboxes">Scripts the fake Sandbox Provider before the server starts, as for <see cref="RunningOverseer.StartAsync"/>.</param>
     public static async Task<RunningOverseer> StartWithRepositoriesAsync(
         string connectionString, string[] repositories, TimeProvider? time = null, IReadOnlyDictionary<string, string?>? environment = null,
-        ILoggerProvider? logs = null)
+        ILoggerProvider? logs = null, Action<FakeSandboxProvider>? sandboxes = null)
     {
-        var overseer = await RunningOverseer.StartAsync(connectionString, environment, logs, time);
-        // A started Intent's Analyst works until the test scripts it otherwise, such as to hand in a Round.
-        AnalystKeepsWorking(overseer);
+        var overseer = await RunningOverseer.StartAsync(connectionString, environment, logs, time, provider =>
+        {
+            // A started Intent's Analyst works until the test scripts it otherwise, such as to hand in a Round; so does the Analyst of a
+            // Refinement that continues after a restart.
+            provider.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(FakeAgentTurn.Endless()));
+            sandboxes?.Invoke(provider);
+        });
         await overseer.LogInAsync();
         overseer.GitHub.AcceptToken(Token, "octocat");
         using var saved = await overseer.SubmitFormAsync("/settings", "github-token", new Dictionary<string, string> { ["GitHubToken"] = Token });
@@ -53,12 +58,19 @@ public static class IntentPortal
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(FakeAgentTurn.Endless()));
 
     /// <summary>Saves this maximum of Active Intents on the Settings page, with the other limits at their defaults.</summary>
-    public static async Task SetMaxActiveIntentsAsync(RunningOverseer overseer, int maximum)
+    public static Task SetMaxActiveIntentsAsync(RunningOverseer overseer, int maximum) =>
+        SetOperatingLimitsAsync(overseer, maximum, OperatingLimit.RefinementIdleTimeout.Default);
+
+    /// <summary>Saves this Refinement idle timeout on the Settings page, with the other limits at their defaults.</summary>
+    public static Task SetRefinementIdleTimeoutAsync(RunningOverseer overseer, TimeSpan timeout) =>
+        SetOperatingLimitsAsync(overseer, OperatingLimit.MaxActiveIntents.Default, (int)timeout.TotalMinutes);
+
+    private static async Task SetOperatingLimitsAsync(RunningOverseer overseer, int maxActiveIntents, int refinementIdleTimeoutMinutes)
     {
         using var response = await overseer.SubmitFormAsync("/settings", "operating-limits", new Dictionary<string, string>
         {
-            ["MaxActiveIntents"] = maximum.ToString(CultureInfo.InvariantCulture),
-            ["RefinementIdleTimeout"] = OperatingLimit.RefinementIdleTimeout.Default.ToString(CultureInfo.InvariantCulture),
+            ["MaxActiveIntents"] = maxActiveIntents.ToString(CultureInfo.InvariantCulture),
+            ["RefinementIdleTimeout"] = refinementIdleTimeoutMinutes.ToString(CultureInfo.InvariantCulture),
             ["VerificationAttemptsPerTask"] = OperatingLimit.VerificationAttemptsPerTask.Default.ToString(CultureInfo.InvariantCulture),
             ["MaxSandboxLifetime"] = OperatingLimit.MaxSandboxLifetime.Default.ToString(CultureInfo.InvariantCulture),
         });

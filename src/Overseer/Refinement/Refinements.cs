@@ -5,6 +5,7 @@ using Overseer.GitHub;
 using Overseer.Intents;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
+using Overseer.Settings;
 using Overseer.Specs;
 using HandedRound = Overseer.Sandboxes.HandedIn<System.Collections.Generic.IReadOnlyList<Overseer.Refinement.HandedInQuestion>>;
 
@@ -16,11 +17,18 @@ namespace Overseer.Refinement;
 /// session, until the Analyst decides it has enough and hands in the Spec instead, which ends the Refinement: the Intent Lifecycle
 /// stores it and moves the Intent to AwaitingSpecApproval, and the session and Sandbox go. Where each Refinement stands, and its
 /// transcript of Rounds, is kept in PostgreSQL. It sets an Intent's state only through the Intent Lifecycle: a Refinement that
-/// fails leaves the Intent Refining, in its slot, and red until a Retry.
+/// fails leaves the Intent Refining, in its slot, and red until a Retry, and a Round left unanswered for longer than the
+/// Refinement idle timeout pauses the Intent, which stops the session and destroys the Sandbox.
+/// <para>
+/// Every Analyst session starts afresh from the transcript, so that a Refinement goes on where it was whatever stopped its last
+/// session: its first message holds the Intent's text and every Round so far, with its answers, and a Round still open stays
+/// open, for the human to answer once the Analyst has caught up. So the Refinement continues when its Intent resumes, after a
+/// Retry, and after a restart of serve.
+/// </para>
 /// </summary>
 public sealed class Refinements(
     IntentLifecycle lifecycle, SandboxRegistry sandboxes, IGitHubGateway gitHub, IDbContextFactory<OverseerDbContext> databases,
-    TimeProvider time, ILogger<Refinements> logger)
+    SettingsStore settings, TimeProvider time, ILogger<Refinements> logger)
     : IHostedService
 {
     /// <summary>
@@ -41,40 +49,36 @@ public sealed class Refinements(
     public event Action? Changed;
 
     /// <summary>
-    /// Marks the Refinements that a stop of serve interrupted as failed, so they can be retried, destroys the Sandboxes they
-    /// left behind, and from then on launches the Analyst for each Intent that moves to Refining. Runs as serve starts, before
-    /// the Portal takes requests, so no Start or Retry comes first.
+    /// Destroys the Sandboxes that the Refinements a stop of serve interrupted left behind, and continues each of them in a fresh
+    /// Sandbox from its transcript; from then on launches the Analyst for each Intent that moves to Refining. Runs as serve starts,
+    /// before the Portal takes requests, and sets them to provision their Sandbox before it does, so that no answers come for a
+    /// Round whose Analyst session is gone.
     /// </summary>
     async Task IHostedService.StartAsync(CancellationToken cancellationToken)
     {
-        // A stopgap until Refinement resumes from its transcript (ticket 05): an interrupted Refinement fails, with Retry.
+        List<Guid> interrupted;
         await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
-            // Also a Refining Intent without a Refinement: one started before Refinement existed, or as serve stopped.
-            var interrupted = await database.Intents
-                .Where(intent => intent.State == IntentState.Refining)
-                .Select(intent => new
-                {
-                    intent.Id,
-                    Phase = database.Refinements.Where(refinement => refinement.IntentId == intent.Id).Select(refinement => (RefinementPhase?)refinement.Phase).SingleOrDefault(),
-                })
-                .Where(intent => intent.Phase != RefinementPhase.Failed)
+            // Also a Refining Intent without a Refinement: one started before Refinement existed, or as serve stopped. A failed one
+            // waits for its Retry.
+            interrupted = await database.Intents
+                .Where(intent => intent.State == IntentState.Refining
+                    && !database.Refinements.Any(refinement => refinement.IntentId == intent.Id && refinement.Phase == RefinementPhase.Failed))
+                .Select(intent => intent.Id)
                 .ToListAsync(cancellationToken);
-            foreach (var intent in interrupted)
+            foreach (var intentId in interrupted)
             {
-                await EnterPhaseAsync(database, intent.Id, RefinementPhase.Failed, intent.Phase switch
-                {
-                    RefinementPhase.AnalystWorking => "Overseer restarted while the Analyst was working. Retry to start the Analyst again.",
-                    RefinementPhase.AwaitingAnswers =>
-                        "Overseer restarted while the Analyst waited for your answers, so it can no longer take them. Retry to start the Analyst again.",
-                    _ => "Overseer restarted while a Sandbox was being provisioned for the Analyst. Retry to start the Analyst again.",
-                }, cancellationToken);
+                await EnterPhaseAsync(database, intentId, RefinementPhase.ProvisioningSandbox, error: null, cancellationToken);
             }
         }
 
         // No Refinement runs yet, so every Sandbox an Intent owns is left over.
         await _work.DestroyLeftOverAsync(cancellationToken);
         lifecycle.Transitioned += OnTransitioned;
+        foreach (var intentId in interrupted)
+        {
+            Run(intentId);
+        }
     }
 
     Task IHostedService.StopAsync(CancellationToken cancellationToken)
@@ -85,7 +89,7 @@ public sealed class Refinements(
 
     /// <summary>
     /// Where the Refinement of <paramref name="intent"/> stands; <c>null</c> unless it is Refining. A Refining Intent whose
-    /// Refinement hasn't recorded anything yet is about to provision its Sandbox.
+    /// Refinement hasn't recorded anything yet, or is still recorded paused, as just after Resume, is about to provision its Sandbox.
     /// </summary>
     public async Task<RefinementProgress?> ProgressOfAsync(Intent intent, CancellationToken cancellationToken)
     {
@@ -97,7 +101,7 @@ public sealed class Refinements(
         return await database.Refinements
             .Where(refinement => refinement.IntentId == intent.Id)
             .Select(refinement => new RefinementProgress(
-                refinement.Phase,
+                refinement.Phase == RefinementPhase.Paused ? RefinementPhase.ProvisioningSandbox : refinement.Phase,
                 refinement.Error,
                 refinement.Phase == RefinementPhase.AwaitingAnswers
                     ? database.Rounds.Where(round => round.IntentId == intent.Id).Max(round => (int?)round.Number)
@@ -176,10 +180,12 @@ public sealed class Refinements(
             .Where(round => round.IntentId == intentId && round.Number == roundNumber)
             .Select(round => new { round.AnsweredAt })
             .SingleOrDefaultAsync(cancellationToken);
+        var paused = await database.Intents.AnyAsync(intent => intent.Id == intentId && intent.State == IntentState.Paused, cancellationToken);
         return round switch
         {
             null => $"The Analyst asked no Round {roundNumber}.",
             { AnsweredAt: not null } => $"Round {roundNumber} is already answered.",
+            _ when paused => $"This Intent is Paused. Resume it to answer Round {roundNumber}.",
             _ => $"Round {roundNumber} no longer awaits answers.",
         };
     }
@@ -265,8 +271,33 @@ public sealed class Refinements(
             await using var session = started;
             // Before the Analyst's first turn, also when a Refinement starts again, as the manifests may have changed meanwhile.
             var manifests = await ManifestCheck.RunAsync(gitHub, intent.RepositoriesInScope, cancellationToken);
-            var message = AnalystInstructions.FirstMessage(intent, manifests);
+            // The session starts afresh from the transcript, which is empty when the Refinement has just started.
+            var transcript = await TranscriptOfAsync(intentId, cancellationToken);
+            var message = AnalystInstructions.FirstMessage(intent, manifests, transcript);
             var specHandIn = new SpecHandIn(intent.RepositoriesInScope, manifests.Lacking);
+            if (transcript is [.., { IsAnswered: false } open])
+            {
+                // The Analyst catches up on the transcript first, and then the human answers the Round still open, rather than a new one.
+                try
+                {
+                    await TakeTurnAsync(session, message, cancellationToken);
+                }
+                catch (AgentSessionFailedException exception)
+                {
+                    return $"The Analyst's session failed: {exception.Message}";
+                }
+                // Taken away, so that the next turn doesn't hand it in: it was told to hand in nothing this turn.
+                if ((await RoundHandIn.Instance.TakeAsync(sandboxes, sandbox, cancellationToken), await specHandIn.TakeAsync(sandboxes, sandbox, cancellationToken))
+                    is not (HandedRound.Nothing, HandedIn<Spec>.Nothing))
+                {
+                    logger.LogWarning("The Analyst of the Intent {IntentId} handed something in while Round {Round} was open; it is ignored.", intentId, open.Number);
+                }
+                if (await AskAsync(intentId, (_, _) => Task.FromResult(open.Number), cancellationToken) is not { } answered)
+                {
+                    return null;
+                }
+                message = AnalystInstructions.Answers(answered);
+            }
             var failedHandIns = 0;
             while (true)
             {
@@ -286,7 +317,12 @@ public sealed class Refinements(
                 {
                     case (HandedRound.Valid(var questions), HandedIn<Spec>.Nothing):
                         failedHandIns = 0;
-                        message = AnalystInstructions.Answers(await AskAsync(intentId, questions, cancellationToken));
+                        if (await AskAsync(intentId, (database, stopping) => AddRoundAsync(database, intentId, questions, stopping), cancellationToken)
+                            is not { } answered)
+                        {
+                            return null;
+                        }
+                        message = AnalystInstructions.Answers(answered);
                         continue;
                     case (HandedRound.Nothing, HandedIn<Spec>.Valid(var written)):
                         // The Refinement ends here: the Intent is no longer Refining, and the session and Sandbox go. Should it have
@@ -337,10 +373,15 @@ public sealed class Refinements(
     }
 
     /// <summary>
-    /// Records a Round of these questions as the Intent's next, puts it to the human and waits for their answers.
+    /// Puts a Round to the human and waits for their answers, for as long as the Refinement idle timeout lets it: once the Round has
+    /// waited longer, the Intent is paused instead. Only the time it waits counts, not the time the Analyst worked before it.
     /// </summary>
-    /// <returns>The Round, answered.</returns>
-    private async Task<Round> AskAsync(Guid intentId, IReadOnlyList<HandedInQuestion> questions, CancellationToken cancellationToken)
+    /// <param name="putRound">
+    /// Records the Round in the database it is given, without saving, and gives its number: a new Round, or the one still open.
+    /// </param>
+    /// <returns>The Round, answered; <c>null</c> when the Intent was paused, and the Refinement is no longer the Intent's to run.</returns>
+    private async Task<Round?> AskAsync(
+        Guid intentId, Func<OverseerDbContext, CancellationToken, Task<int>> putRound, CancellationToken cancellationToken)
     {
         var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         // Ahead of the Round, so that no answer comes before there is something to tell.
@@ -351,29 +392,18 @@ public sealed class Refinements(
             await using (var database = await databases.CreateDbContextAsync(cancellationToken))
             {
                 await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-                // One Refinement runs per Intent at a time, so no other Round is added meanwhile.
-                number = 1 + (await database.Rounds.Where(round => round.IntentId == intentId).MaxAsync(round => (int?)round.Number, cancellationToken) ?? 0);
-                database.Rounds.Add(new RoundRecord
-                {
-                    IntentId = intentId,
-                    Number = number,
-                    AskedAt = time.GetUtcNow(),
-                    Questions = [.. questions.Select((question, index) => new RoundQuestionRecord
-                    {
-                        IntentId = intentId,
-                        RoundNumber = number,
-                        Number = index + 1,
-                        Text = question.Text,
-                        SuggestedAnswer = question.SuggestedAnswer,
-                    })],
-                });
+                number = await putRound(database, cancellationToken);
                 await database.SaveChangesAsync(cancellationToken);
                 await EnterPhaseAsync(database, intentId, RefinementPhase.AwaitingAnswers, error: null, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
             }
+            var idleSince = time.GetUtcNow();
             Changed?.Invoke();
 
-            await answered.Task.WaitAsync(cancellationToken);
+            if (!await AwaitAnswersAsync(intentId, answered.Task, idleSince, cancellationToken))
+            {
+                return null;
+            }
             await using (var database = await databases.CreateDbContextAsync(cancellationToken))
             {
                 return (await TranscriptAsync(database, intentId, number, cancellationToken)).Single();
@@ -383,6 +413,102 @@ public sealed class Refinements(
         {
             _awaitingAnswers.TryRemove(KeyValuePair.Create(intentId, answered));
         }
+    }
+
+    /// <summary>Adds a Round of these questions as the Intent's next, without saving.</summary>
+    /// <returns>Its number.</returns>
+    private async Task<int> AddRoundAsync(
+        OverseerDbContext database, Guid intentId, IReadOnlyList<HandedInQuestion> questions, CancellationToken cancellationToken)
+    {
+        // One Refinement runs per Intent at a time, so no other Round is added meanwhile.
+        var number = 1 + (await database.Rounds.Where(round => round.IntentId == intentId).MaxAsync(round => (int?)round.Number, cancellationToken) ?? 0);
+        database.Rounds.Add(new RoundRecord
+        {
+            IntentId = intentId,
+            Number = number,
+            AskedAt = time.GetUtcNow(),
+            Questions = [.. questions.Select((question, index) => new RoundQuestionRecord
+            {
+                IntentId = intentId,
+                RoundNumber = number,
+                Number = index + 1,
+                Text = question.Text,
+                SuggestedAnswer = question.SuggestedAnswer,
+            })],
+        });
+        return number;
+    }
+
+    /// <summary>
+    /// Waits for the human's answers until the Refinement has been idle since <paramref name="idleSince"/> for longer than the
+    /// Refinement idle timeout, and then pauses the Intent, unless the answers came first. The timeout is read again whenever it is
+    /// saved, so that a change applies to a Round already waiting.
+    /// </summary>
+    /// <param name="answered">Completes once the answers are recorded.</param>
+    /// <returns>Whether the answers came; <c>false</c> when the Intent was paused instead.</returns>
+    private async Task<bool> AwaitAnswersAsync(Guid intentId, Task answered, DateTimeOffset idleSince, CancellationToken cancellationToken)
+    {
+        while (!answered.IsCompleted)
+        {
+            var limitsSaved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnLimitsSaved() => limitsSaved.TrySetResult();
+            // Ahead of reading the timeout, so that no change falls between them.
+            settings.OperatingLimitsSaved += OnLimitsSaved;
+            try
+            {
+                var idleUntil = idleSince + (await settings.GetOperatingLimitsAsync(cancellationToken)).RefinementIdleTimeout;
+                using var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var timedOut = Task.Delay(TimeSpan.FromTicks(Math.Max(0, (idleUntil - time.GetUtcNow()).Ticks)), time, waiting.Token);
+                // Should the clock pass the moment while the delay is set, the delay would end later than it.
+                if (time.GetUtcNow() < idleUntil)
+                {
+                    await Task.WhenAny(answered, timedOut, limitsSaved.Task);
+                    await waiting.CancelAsync();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                if (answered.IsCompleted)
+                {
+                    return true;
+                }
+                if (time.GetUtcNow() >= idleUntil)
+                {
+                    if (await PauseAsync(intentId, cancellationToken))
+                    {
+                        return false;
+                    }
+                    // Answers took the Refinement first, while the Intent is Refining nothing else does, and they are told once recorded.
+                    await answered.WaitAsync(cancellationToken);
+                }
+            }
+            finally
+            {
+                settings.OperatingLimitsSaved -= OnLimitsSaved;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Pauses the Intent through the Intent Lifecycle, as its Refinement has waited for answers for longer than the idle timeout, and
+    /// records the Refinement paused, so that answers no longer go through.
+    /// </summary>
+    /// <returns>Whether it paused; not when answers came first.</returns>
+    private async Task<bool> PauseAsync(Guid intentId, CancellationToken cancellationToken)
+    {
+        var paused = await lifecycle.PauseAsync(
+            intentId,
+            // Of the pause and answers given at the same moment, the one that takes the Refinement's row first goes through.
+            async (database, stopping) => await database.Refinements
+                .Where(refinement => refinement.IntentId == intentId && refinement.Phase == RefinementPhase.AwaitingAnswers)
+                .ExecuteUpdateAsync(refinement => refinement.SetProperty(r => r.Phase, RefinementPhase.Paused), stopping) > 0,
+            cancellationToken);
+        if (paused is IntentChange.Refused refused)
+        {
+            logger.LogInformation("The idle Refinement of the Intent {IntentId} was not paused: {Reason}", intentId, refused.Error);
+            return false;
+        }
+        logger.LogInformation("The Intent {IntentId} is paused: its Refinement waited for answers for longer than the idle timeout.", intentId);
+        return true;
     }
 
     /// <summary>The Intent's Rounds in order, or only the one numbered <paramref name="roundNumber"/>.</summary>
@@ -486,6 +612,12 @@ public enum RefinementPhase
 
     /// <summary>The Refinement failed; it can be retried.</summary>
     Failed,
+
+    /// <summary>
+    /// The Intent was paused, as the Refinement waited for answers for longer than the idle timeout; it goes on from its transcript
+    /// when the Intent resumes.
+    /// </summary>
+    Paused,
 }
 
 /// <summary>Where an Intent's Refinement stands, and why it failed when it did.</summary>

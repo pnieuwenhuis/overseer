@@ -8,10 +8,40 @@ namespace Overseer.Refinement;
 internal static class AnalystInstructions
 {
     /// <summary>
-    /// The Analyst's first message: its instructions, the Intent's text as the human wrote it, and its Repositories in scope with
-    /// which of them lack a Repository Manifest.
+    /// The first message of an Analyst session: its instructions, the Intent's text as the human wrote it, and its Repositories in
+    /// scope with which of them lack a Repository Manifest, followed by the Refinement's <paramref name="transcript"/> so far when it
+    /// has one, so that a session that starts afresh goes on where the last one was.
     /// </summary>
-    public static string FirstMessage(Intent intent, ManifestCheck manifests) =>
+    public static string FirstMessage(Intent intent, ManifestCheck manifests, IReadOnlyList<Round> transcript) =>
+        transcript.Count == 0 ? Instructions(intent, manifests) : $"{Instructions(intent, manifests)}\n\n{SoFar(transcript)}";
+
+    /// <summary>The Refinement so far, for a session that starts afresh, and what the Analyst does first.</summary>
+    private static string SoFar(IReadOnlyList<Round> transcript)
+    {
+        var rounds = transcript.Select(round => round.IsAnswered
+            ? $"Round {round.Number}, answered:\n\n{AnswersTo(round)}"
+            : $"Round {round.Number}, still open:\n\n" + string.Join("\n\n", round.Questions.Select(question =>
+                $"Question {question.Number}: {question.Text}\nYour suggested answer: {question.SuggestedAnswer}")));
+        var next = transcript[^1] is { IsAnswered: false } open
+            ? $"""
+              Round {open.Number} is still open: the human hasn't answered it yet, and will answer it as it stands. Don't ask its
+              questions again, and don't hand in a Round or a Spec in this turn. Get your bearings in this Sandbox's code as far as
+              you need to, then end your turn: the human's answers to Round {open.Number} come in your next message.
+              """
+            : GoOn;
+        return $"""
+            This Refinement began before, in an earlier session of yours that has ended. You start afresh, in a new Sandbox:
+            nothing of that session is left but the transcript below, every Round you put to the human so far with their answers.
+            Don't ask again what they have answered.
+
+            {string.Join("\n\n", rounds)}
+
+            {next}
+            """;
+    }
+
+    /// <summary>The instructions every Analyst session starts with, for the Intent.</summary>
+    private static string Instructions(Intent intent, ManifestCheck manifests) =>
         $"""
         You are the Analyst of Overseer, a system in which one human directs a team of AI agents. The human captured the
         Intent below: a single change they want made to their software. Your job is Refinement: find out what exactly
@@ -130,14 +160,24 @@ internal static class AnalystInstructions
         $"""
         The human answered Round {round.Number}.
 
-        {string.Join("\n\n", round.Questions.Select(question => question.Answer switch
+        {AnswersTo(round)}
+
+        {GoOn}
+        """;
+
+    /// <summary>Each question of an answered Round with its answer, each Analyst's Choice marked as such.</summary>
+    private static string AnswersTo(Round round) =>
+        string.Join("\n\n", round.Questions.Select(question => question.Answer switch
         {
             { IsAnalystsChoice: true } choice =>
                 $"Question {question.Number}: {question.Text}\nAnalyst's Choice: the human left this to you, so your suggested answer stands: {choice.Text}",
             { } own => $"Question {question.Number}: {question.Text}\nThe human's answer: {own.Text}",
             null => throw new ArgumentException($"Question {question.Number} of Round {round.Number} has no answer.", nameof(round)),
-        }))}
+        }));
 
+    /// <summary>How the Analyst goes on once it has the human's answers.</summary>
+    private static string GoOn =>
+        $"""
         Go on with the Refinement from here, and end your turn with your next Round, handed in at {RoundHandIn.FilePath} as before,
         or with the Spec at {SpecHandIn.FilePath}, once you have enough to write it.
         """;

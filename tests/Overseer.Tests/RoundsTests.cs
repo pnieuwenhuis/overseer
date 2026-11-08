@@ -152,7 +152,7 @@ public class RoundsTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task The_transcript_is_kept_in_PostgreSQL_and_shown_after_a_restart_where_the_open_Round_can_no_longer_be_answered()
+    public async Task The_transcript_is_kept_in_PostgreSQL_and_after_a_restart_the_open_Round_is_answered_once_the_Analyst_has_caught_up()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
@@ -169,9 +169,17 @@ public class RoundsTests(PostgresServer postgres)
             await EventuallyAsync(async () => Rounds(await GetAsync(first, address)) is [_, { Open: true }] ? "" : null, "Round 2");
         }
 
-        await using var second = await StartWithRepositoriesAsync(connectionString, []);
+        var catchingUp = new TaskCompletionSource();
 
-        var page = await GetAsync(second, address);
+        // The resumed Analyst catches up on the transcript, then works on the answers.
+        await using var second = await StartWithRepositoriesAsync(connectionString, [], sandboxes: sandboxes => sandboxes.ScriptAgentSessions(AgentRole.Analyst,
+            new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = catchingUp.Task }, FakeAgentTurn.Endless())));
+
+        var catchingUpPage = await EventuallyAsync(async () => await GetAsync(second, address) is var shown && shown.Contains("data-phase=\"AnalystWorking\"") ? shown : null,
+            "the Analyst to catch up");
+        Assert.Equal("Not answered yet: you can answer it once the Analyst is back.", ElementText(catchingUpPage, "question-unanswered"));
+        catchingUp.SetResult();
+        var page = await AwaitingAnswersAsync(second, address);
         Assert.Equal(
             [
                 new ShownRound(1, Open: false,
@@ -179,17 +187,17 @@ public class RoundsTests(PostgresServer postgres)
                     new ShownQuestion(1, "Which format?", "CSV.", "Excel.", AnalystsChoice: false),
                     new ShownQuestion(2, "Which page offers it?", "The orders page.", "The orders page.", AnalystsChoice: true),
                 ]),
-                new ShownRound(2, Open: false, [new ShownQuestion(1, "Up to how many rows?", "All of them.", Answer: null, AnalystsChoice: false)]),
+                new ShownRound(2, Open: true, [new ShownQuestion(1, "Up to how many rows?", "All of them.", Answer: null, AnalystsChoice: false)]),
             ],
             Rounds(page));
-        // Not as though it were over: once the Refinement continues from its transcript (ticket 05), the Round can still be answered.
-        Assert.Equal("Awaiting your answer; the Analyst stopped before you gave it.", ElementText(page, "question-unanswered"));
-        Assert.Equal(("Red", "Failed"), LightOn(page));
-        Assert.Equal(
-            "Overseer restarted while the Analyst waited for your answers, so it can no longer take them. Retry to start the Analyst again.",
-            ElementText(page, "refinement-status"));
-        using var late = await AnswerAsync(second, address, 2, ("1", "Ten thousand."));
-        Assert.Equal("Your answers were not sent: Round 2 no longer awaits answers.", Alert(await late.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
+        Assert.Equal(("Orange", "Needs Attention"), LightOn(page));
+        Assert.Equal("The Analyst asks you the questions of Round 2 below.", ElementText(page, "refinement-status"));
+
+        using var answeredAfterTheRestart = await AnswerAsync(second, address, 2, ("1", "Ten thousand."));
+
+        var sent = await EventuallyAsync(() => Task.FromResult(second.Sandboxes.MessagesSent.ElementAtOrDefault(1)), "the answers to reach the Analyst");
+        Assert.Equal(Assert.Single(second.Sandboxes.AgentSessionsStarted).Sandbox, sent.Sandbox);
+        Assert.Contains("The human answered Round 2.\n\nQuestion 1: Up to how many rows?\nThe human's answer: Ten thousand.", sent.Message);
     }
 
     [Fact]

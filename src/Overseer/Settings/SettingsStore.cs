@@ -11,6 +11,12 @@ namespace Overseer.Settings;
 /// </summary>
 public sealed class SettingsStore(IDbContextFactory<OverseerDbContext> databases)
 {
+    /// <summary>
+    /// New operating limits were saved: raised once they are committed, for what waits on a limit, such as an idle Refinement on its
+    /// timeout, to read them again. Handlers must not throw.
+    /// </summary>
+    public event Action? OperatingLimitsSaved;
+
     public async Task<OperatingLimits> GetOperatingLimitsAsync(CancellationToken cancellationToken)
     {
         var values = await GetOperatingLimitValuesAsync(cancellationToken);
@@ -134,6 +140,7 @@ public sealed class SettingsStore(IDbContextFactory<OverseerDbContext> databases
 
         await SaveAsync(
             values.ToDictionary(pair => pair.Key.Key, pair => pair.Value.ToString(CultureInfo.InvariantCulture)), cancellationToken);
+        OperatingLimitsSaved?.Invoke();
         return errors;
     }
 

@@ -87,14 +87,15 @@ public class SpecTests(PostgresServer postgres)
         var address = await AddressAsync(overseer, "Export data");
         using var started = await StartAsync(overseer, address);
         await AwaitingAnswersAsync(overseer, address);
-        time.Advance(TimeSpan.FromMinutes(40));
+        // Within the Refinement idle timeout, after which the Intent would be paused instead.
+        time.Advance(TimeSpan.FromMinutes(25));
 
         using var answered = await AnswerAsync(overseer, address, 1, ("1", AsSuggested));
         await AwaitingSpecApprovalAsync(overseer, address);
         time.Advance(TimeSpan.FromHours(5));
 
-        Assert.Equal("40 min", ElementText(await GetAsync(overseer, address), "intent-working-time"));
-        Assert.Equal("40 min", ElementText(await GetAsync(overseer, "/"), "intent-working-time"));
+        Assert.Equal("25 min", ElementText(await GetAsync(overseer, address), "intent-working-time"));
+        Assert.Equal("25 min", ElementText(await GetAsync(overseer, "/"), "intent-working-time"));
     }
 
     [Fact]

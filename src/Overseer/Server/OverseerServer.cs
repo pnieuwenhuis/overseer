@@ -140,9 +140,12 @@ public static class OverseerServer
 
     /// <summary>Builds the server, brings the database schema up to date, and starts listening.</summary>
     /// <inheritdoc cref="Build"/>
+    /// <param name="prepare">
+    /// Runs on the built server's services just before it starts, such as to script a fake for the work that resumes as it starts.
+    /// </param>
     public static async Task<WebApplication> StartAsync(
         IReadOnlyDictionary<string, string?> environment, CancellationToken cancellationToken, ILoggerProvider? logs = null,
-        TimeProvider? time = null, Func<IServiceProvider, IGitHubGateway>? gitHub = null)
+        TimeProvider? time = null, Func<IServiceProvider, IGitHubGateway>? gitHub = null, Action<IServiceProvider>? prepare = null)
     {
         var app = Build(environment, logs, time, gitHub);
         try
@@ -154,6 +157,7 @@ public static class OverseerServer
                 await database.Database.MigrateAsync(cancellationToken);
             }
             await app.Services.GetRequiredService<IntentLifecycle>().RecordStartsBeforeTransitionsAsync(cancellationToken);
+            prepare?.Invoke(app.Services);
             await app.StartAsync(cancellationToken);
             switch (app.Services.GetRequiredService<ISandboxProvider>())
             {
