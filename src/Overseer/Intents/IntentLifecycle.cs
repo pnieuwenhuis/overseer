@@ -129,8 +129,9 @@ public sealed class IntentLifecycle(
     public static string? WhyNotDeletable(IntentState? state) => WhyNotADraft(state, shownAs => $"This Intent is {shownAs}, and only a Draft can be deleted.");
 
     /// <summary>
-    /// Starts work on a Draft: it moves to Refining, and its text and Repositories in scope are locked from then on. Whether it may is
-    /// decided as the Intent is at this moment rather than as the user's page showed it.
+    /// Starts work on a Draft: it moves to Refining, and its text and Repositories in scope are locked from then on. Starts the
+    /// implementation of an Approved Intent: it moves to Implementing. Either takes a slot. Whether it may is decided as the Intent is at
+    /// this moment rather than as the user's page showed it.
     /// </summary>
     public async Task<IntentChange> StartAsync(Guid id, CancellationToken cancellationToken)
     {
@@ -141,8 +142,66 @@ public sealed class IntentLifecycle(
             await HoldActiveIntentSlotsAsync(database, stopping);
             return await WhyNotStartableAsync(database, id, state, limits.MaxActiveIntents, stopping) is { } notStartable
                 ? new Decision.Refuse(notStartable)
-                : new Decision.MoveTo(IntentState.Refining);
+                : new Decision.MoveTo(state is IntentState.Approved ? IntentState.Implementing : IntentState.Refining);
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Approves the Spec of an Intent awaiting its approval: <paramref name="approve"/> records which version is the Approved Spec in
+    /// the same transaction, and the Intent moves to Implementing when <paramref name="start"/> and a slot is free, taking it, or to
+    /// Approved, which takes none. Refused unless the Intent awaits Spec approval at this moment, or when <paramref name="approve"/>
+    /// refuses; with <paramref name="start"/> also unless a slot is free. Then nothing is approved.
+    /// </summary>
+    /// <param name="start">Whether approving also starts the implementation, as "Approve &amp; start" does.</param>
+    /// <param name="approve">
+    /// Under the lock on the Intent's row, records the Approved Spec in the database it is given, without saving, and gives <c>null</c>;
+    /// or records nothing, and gives its refusal.
+    /// </param>
+    public async Task<IntentChange> ApproveSpecAsync(
+        Guid id, bool start, Func<OverseerDbContext, CancellationToken, Task<string?>> approve, CancellationToken cancellationToken)
+    {
+        // Ahead of the transaction, as for Start.
+        var limits = await settings.GetOperatingLimitsAsync(cancellationToken);
+        return await ChangeStateAsync(id, async (database, state, stopping) =>
+        {
+            if (start)
+            {
+                await HoldActiveIntentSlotsAsync(database, stopping);
+            }
+            if (WhyNotApprovable(state) is { } notApprovable)
+            {
+                return new Decision.Refuse(notApprovable);
+            }
+            if (start && await WhyNoFreeSlotAsync(database, limits.MaxActiveIntents, stopping) is { } noFreeSlot)
+            {
+                return new Decision.Refuse(noFreeSlot);
+            }
+            return await approve(database, stopping) is { } notApproved
+                ? new Decision.Refuse(notApproved)
+                : new Decision.MoveTo(start ? IntentState.Implementing : IntentState.Approved);
+        }, cancellationToken);
+    }
+
+    /// <summary>Why an Intent in <paramref name="state"/> can't have its Spec approved, or <c>null</c> when it can.</summary>
+    /// <param name="state">The Intent's state; <c>null</c> when there is no such Intent.</param>
+    // Names AwaitingSpecApproval rather than the states it refuses, so that a state added later is refused.
+    private static string? WhyNotApprovable(IntentState? state) => state switch
+    {
+        null => NoSuchIntent,
+        IntentState.AwaitingSpecApproval => null,
+        { } other => $"This Intent is {other.InWords()}, and only a Spec awaiting approval can be approved.",
+    };
+
+    /// <summary>
+    /// Why approving the Spec of the Intent with this id can't also start it at the moment, with what a refused "Approve &amp; start"
+    /// says, or <c>null</c> when it can. Approving alone needs no slot.
+    /// </summary>
+    public async Task<string?> WhyNotApprovedAndStartedAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var limits = await settings.GetOperatingLimitsAsync(cancellationToken);
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        var state = await database.Intents.Where(intent => intent.Id == id).Select(intent => (IntentState?)intent.State).SingleOrDefaultAsync(cancellationToken);
+        return WhyNotApprovable(state) ?? await WhyNoFreeSlotAsync(database, limits.MaxActiveIntents, cancellationToken);
     }
 
     /// <summary>
@@ -488,7 +547,11 @@ public sealed class IntentLifecycle(
     private static async Task<string?> WhyNotStartableAsync(
         OverseerDbContext database, Guid id, IntentState? state, int maxActiveIntents, CancellationToken cancellationToken)
     {
-        if (WhyNotADraft(state, shownAs => $"This Intent is {shownAs}, and Start moves a Draft to Refining.") is { } notADraft)
+        if (state is IntentState.Approved)
+        {
+            return await WhyNoFreeSlotAsync(database, maxActiveIntents, cancellationToken);
+        }
+        if (WhyNotADraft(state, shownAs => $"This Intent is {shownAs}, and Start moves a Draft to Refining, or an Approved Intent to Implementing.") is { } notADraft)
         {
             return notADraft;
         }
@@ -582,6 +645,7 @@ public sealed class IntentLifecycle(
                 intent.Id,
                 intent.Text,
                 intent.State,
+                intent.ApprovedSpecVersion,
                 Repositories = intent.RepositoriesInScope.Select(repository => repository.FullName).ToList(),
                 // In the order they were made, as two can be made at the same moment.
                 Transitions = intent.Transitions.OrderBy(transition => transition.Id).Select(transition => new Transition(transition.From, transition.To, transition.At)).ToList(),
@@ -599,6 +663,7 @@ public sealed class IntentLifecycle(
             intent.NeedsAttention)
         {
             ResumesTo = ResumesToOf(intent.State, intent.Transitions),
+            ApprovedSpecVersion = intent.ApprovedSpecVersion,
         })];
     }
 
@@ -723,6 +788,9 @@ public sealed partial record Intent(
     /// </summary>
     public IntentState? ResumesTo { get; init; }
 
+    /// <summary>The number of the Spec version the human approved, the Approved Spec; <c>null</c> until they do.</summary>
+    public int? ApprovedSpecVersion { get; init; }
+
     /// <summary>The Repositories in scope, in a line of their own.</summary>
     public string RepositoriesInScopeLine =>
         RepositoriesInScope.Count == 0 ? "No Repositories in scope" : $"Repositories in scope: {string.Join(", ", RepositoriesInScope)}";
@@ -755,8 +823,11 @@ public enum IntentState
     /// <summary>The Analyst has written the Spec, which awaits the human's approval.</summary>
     AwaitingSpecApproval,
 
-    // Nothing reaches these yet but Paused, except by an update of the database in tests. The transitions to and from them come with their triggers.
+    /// <summary>The human approved the Spec but has not started the implementation; it holds no slot.</summary>
     Approved,
+
+    // Nothing reaches these yet but Paused, except by an update of the database in tests. The transitions to and from them come with their triggers.
+    // Implementing is reached from Approved; the Task Runner hooks into that transition later.
     Implementing,
     InReview,
 
@@ -781,6 +852,9 @@ public sealed class IntentRecord
     public required IntentState State { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
     public List<RepositoryInScopeRecord> RepositoriesInScope { get; init; } = [];
+
+    /// <summary>The number of the Spec version the human approved, which is the Approved Spec; <c>null</c> until they do.</summary>
+    public int? ApprovedSpecVersion { get; init; }
 
     /// <summary>Every change of the Intent's state, from its capture as a Draft on.</summary>
     public List<IntentTransitionRecord> Transitions { get; init; } = [];

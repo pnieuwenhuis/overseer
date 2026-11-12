@@ -34,12 +34,11 @@ public class StartingIntentsTests(PostgresServer postgres)
         Assert.Equal("Refining", ElementText(await GetAsync(second, address), "intent-state"));
     }
 
-    // What Start does here is move a Draft to Refining. The v1 spec's other ways into Refining, from AwaitingSpecApproval and Paused, are
-    // triggers of their own, and its Approved -> Implementing on "User starts" takes Approved off this list when it arrives.
+    // What Start does here is move a Draft to Refining (and an Approved Intent to Implementing, tested with approval). The v1 spec's other
+    // ways into Refining, from AwaitingSpecApproval and Paused, are triggers of their own.
     [Theory]
     [InlineData(IntentState.Refining, "Refining")]
     [InlineData(IntentState.AwaitingSpecApproval, "Awaiting Spec Approval")]
-    [InlineData(IntentState.Approved, "Approved")]
     [InlineData(IntentState.Implementing, "Implementing")]
     [InlineData(IntentState.InReview, "In Review")]
     [InlineData(IntentState.Paused, "Paused")]
@@ -56,7 +55,7 @@ public class StartingIntentsTests(PostgresServer postgres)
         using var response = await detailPage.SubmitFormAsync("start-intent", []);
 
         var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Equal($"This Intent is {shownAs}, and Start moves a Draft to Refining.", Alert(page));
+        Assert.Equal($"This Intent is {shownAs}, and Start moves a Draft to Refining, or an Approved Intent to Implementing.", Alert(page));
         Assert.Equal(shownAs, ElementText(page, "intent-state"));
         Assert.DoesNotContain(">Start<", page);
         var opened = await GetAsync(overseer, address);
@@ -439,7 +438,7 @@ public class StartingIntentsTests(PostgresServer postgres)
             () => otherTab.SubmitFormAsync("start-intent", []));
 
         Assert.Equal("Refining", await ShownStateAsync(first));
-        Assert.Equal("This Intent is Refining, and Start moves a Draft to Refining.", Alert(await second.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
+        Assert.Equal("This Intent is Refining, and Start moves a Draft to Refining, or an Approved Intent to Implementing.", Alert(await second.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
         // The other of the default two slots is still free.
         Assert.False(StartIsDisabled(await GetAsync(overseer, await AddressAsync(overseer, "Import data"))));
     }

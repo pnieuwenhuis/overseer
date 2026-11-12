@@ -13,6 +13,10 @@
 {
     <p role="alert" class="callout-warning mb-4">Your answers were not sent: @refused</p>
 }
+@if (ApprovalRefused is { } notApproved)
+{
+    <p role="alert" class="callout-warning mb-4">The Spec was not approved: @notApproved</p>
+}
 @if (CommentsRefused is { } notSent)
 {
     <p role="alert" class="callout-warning mb-4">Your comments were not sent: @notSent</p>
@@ -32,6 +36,17 @@
                     <a href="intents/@Id/delete" class="btn">Delete</a>
                     <a href="intents/@Id/edit" class="btn">Edit</a>
                     @* A plain form, posted by the browser, so Start works the same with or without the live connection. The static page handles it, under this name. *@
+                    <form method="post" action="intents/@Id">
+                        <input type="hidden" name="_handler" value="@Pages.IntentDetail.StartFormName" />
+                        <AntiforgeryToken />
+                        <button type="submit" class="btn-primary" disabled="@(Shown.WhyNot is not null)">Start</button>
+                    </form>
+                </div>
+            }
+            else if (intent.State == IntentState.Approved)
+            {
+                <div class="intent-actions">
+                    @* A plain form, like Start's of a Draft, which the static page handles under the same name. *@
                     <form method="post" action="intents/@Id">
                         <input type="hidden" name="_handler" value="@Pages.IntentDetail.StartFormName" />
                         <AntiforgeryToken />
@@ -69,12 +84,29 @@
         @if (Shown.Spec is { } spec)
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
-                @* The latest version, which is the one awaiting approval and the one an edit starts from. *@
+                @* The latest version, which is the one awaiting approval and the one an edit starts from; once approved, the Approved Spec. *@
                 <SpecView Version="spec" IntentId="Id" Versions="Shown.SpecVersions" AwaitsApproval="@(intent.State == IntentState.AwaitingSpecApproval)"
+                          IsApproved="@(intent.ApprovedSpecVersion == spec.Number)"
                           Editable="@(IntentLifecycle.WhyNotSpecEditable(intent.State) is null)" />
                 @if (intent.State == IntentState.AwaitingSpecApproval)
                 {
                     @* A plain form, posted by the browser, so sending back works the same with or without the live connection. The static page handles it, under this name. *@
+                    <form method="post" action="intents/@Id" class="form approve-form">
+                        <input type="hidden" name="_handler" value="@Pages.IntentDetail.ApproveFormName" />
+                        <input type="hidden" name="@Pages.IntentDetail.ApprovedVersionField" value="@spec.Number" />
+                        @if (Shown.WhyNotApprovedAndStarted is not { } cannotStart)
+                        {
+                            <input type="hidden" name="@Pages.IntentDetail.StartField" value="true" />
+                            <p class="form-note">Approving locks version @spec.Number as the Approved Spec and starts the implementation, which takes an Active Intent slot.</p>
+                            <button type="submit" class="btn-primary">Approve &amp; start</button>
+                        }
+                        else
+                        {
+                            <p class="form-note approve-not-started">@cannotStart Approving locks version @spec.Number as the Approved Spec and leaves the Intent Approved; start it from its page when a slot is free.</p>
+                            <button type="submit" class="btn-primary">Approve</button>
+                        }
+                        <AntiforgeryToken />
+                    </form>
                     <form method="post" action="intents/@Id" class="form send-back-form">
                         <input type="hidden" name="_handler" value="@Pages.IntentDetail.SendBackFormName" />
                         <input type="hidden" name="@Pages.IntentDetail.SpecVersionField" value="@spec.Number" />
@@ -122,6 +154,10 @@
     [Parameter]
     public string? CommentsRefused { get; set; }
 
+    /// <summary>Why the Spec was just not approved, for a reason of the version rather than the Intent; <c>null</c> unless it wasn't.</summary>
+    [Parameter]
+    public string? ApprovalRefused { get; set; }
+
     /// <summary>The comments that were just not sent, as the user wrote them, to fill in again; <c>null</c> unless there are.</summary>
     [Parameter]
     public string? CommentsDraft { get; set; }
@@ -138,6 +174,7 @@
         {
             null or { State: IntentState.Draft } => StateChange.Start,
             { ResumesTo: not null } => StateChange.Resume,
+            { State: IntentState.Approved } => StateChange.Start,
             { State: IntentState.AwaitingSpecApproval } => StateChange.SendBack,
             _ => (StateChange?)null,
         };
@@ -148,13 +185,19 @@
                 StateChange.Start => await Lifecycle.WhyNotStartableAsync(Id, cancellationToken),
                 StateChange.Resume => await Lifecycle.WhyNotResumableAsync(Id, cancellationToken),
                 StateChange.SendBack => await Lifecycle.WhyNotSentBackAsync(Id, cancellationToken),
+                StateChange.Approve => await Lifecycle.WhyNotApprovedAndStartedAsync(Id, cancellationToken),
                 _ => null,
             },
             intent is null ? null : await Refinements.ProgressOfAsync(intent, cancellationToken),
             intent is null ? [] : await Refinements.TranscriptOfAsync(intent.Id, cancellationToken),
-            intent is null ? null : await Specs.LatestOfAsync(intent.Id, cancellationToken),
+            // The Approved Spec once there is one to show, else the latest version.
+            intent is null ? null
+                : intent is { State: IntentState.Approved or IntentState.Implementing, ApprovedSpecVersion: { } approved }
+                    ? await Specs.VersionOfAsync(intent.Id, approved, cancellationToken)
+                    : await Specs.LatestOfAsync(intent.Id, cancellationToken),
             intent is null ? [] : await Specs.VersionsOfAsync(intent.Id, cancellationToken),
-            intent is null ? [] : await Specs.CommentsOfAsync(intent.Id, cancellationToken));
+            intent is null ? [] : await Specs.CommentsOfAsync(intent.Id, cancellationToken),
+            intent is { State: IntentState.AwaitingSpecApproval } ? await Lifecycle.WhyNotApprovedAndStartedAsync(Id, cancellationToken) : null);
     }
 
     /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
@@ -167,9 +210,13 @@
     /// <param name="Spec">The latest version of its Spec; <c>null</c> when it has none.</param>
     /// <param name="SpecVersions">Every version of its Spec, in order; empty when it has none.</param>
     /// <param name="Comments">The comments with which the Spec was sent back, in order; empty when it wasn't.</param>
+    /// <param name="WhyNotApprovedAndStarted">
+    /// Why approving the Spec awaiting approval can't also start the Intent, as the page explains next to its Approve button; <c>null</c>
+    /// when it can, or no Spec awaits approval.
+    /// </param>
     public sealed record Detail(
         Intent? Intent, string? WhyNot, RefinementProgress? Refinement, IReadOnlyList<Round> Transcript, SpecVersion? Spec,
-        IReadOnlyList<SpecVersionHeading> SpecVersions, IReadOnlyList<SpecComment> Comments);
+        IReadOnlyList<SpecVersionHeading> SpecVersions, IReadOnlyList<SpecComment> Comments, string? WhyNotApprovedAndStarted);
 
     /// <summary>A change of an Intent's state that the page offers with a button, disabled while it can't be made.</summary>
     public enum StateChange
@@ -177,5 +224,6 @@
         Start,
         Resume,
         SendBack,
+        Approve,
     }
 }

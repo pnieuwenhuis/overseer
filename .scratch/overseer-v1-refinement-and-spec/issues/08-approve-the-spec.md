@@ -8,12 +8,12 @@ Decided: only the latest Spec version can be approved. Approving an earlier vers
 
 **Blocked by:** 06 (Edit the Spec and reorder its Tasks)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] An Intent awaiting Spec approval offers "Approve & start" when a slot is free and "Approve" when none is, with an explanation of why it can't start
-- [ ] Approving records the latest Spec version as the Approved Spec; afterwards the server refuses any edit to it, and Send back is no longer offered
-- [ ] "Approve & start" moves the Intent to Implementing through the Intent Lifecycle; if the last slot was taken in the meantime, it is refused and nothing is approved
-- [ ] "Approve" moves the Intent to Approved, which takes no slot (new test for story 42) and has no light
-- [ ] An Approved Intent offers Start, disabled with the usual explanation when all slots are taken; Start moves it to Implementing
-- [ ] The detail page of an Approved or Implementing Intent shows the Approved Spec and which version it is
-- [ ] Covered by tests through the application
+- [x] An Intent awaiting Spec approval offers "Approve & start" when a slot is free and "Approve" when none is, with an explanation of why it can't start
+- [x] Approving records the latest Spec version as the Approved Spec; afterwards the server refuses any edit to it, and Send back is no longer offered
+- [x] "Approve & start" moves the Intent to Implementing through the Intent Lifecycle; if the last slot was taken in the meantime, it is refused and nothing is approved
+- [x] "Approve" moves the Intent to Approved, which takes no slot (new test for story 42) and has no light
+- [x] An Approved Intent offers Start, disabled with the usual explanation when all slots are taken; Start moves it to Implementing
+- [x] The detail page of an Approved or Implementing Intent shows the Approved Spec and which version it is
+- [x] Covered by tests through the application

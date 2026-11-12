@@ -1199,6 +1199,23 @@
         font-size: 0.875rem;
     }
 
+    /* Approving the Spec, below it; the send back form that follows is set off from it. */
+    .approve-form {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+        margin-top: 1.5rem;
+        border-top: 1px solid var(--color-line);
+        padding-top: 1.25rem;
+    }
+
+    .spec-approved {
+        color: var(--color-success, var(--color-muted));
+        font-size: 0.875rem;
+        font-weight: 500;
+    }
+
     /* Sending the Spec back with comments, below the Spec. */
     .send-back-form {
         margin-top: 1.5rem;

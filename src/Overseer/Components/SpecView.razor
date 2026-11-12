@@ -15,6 +15,10 @@
         {
             <p class="spec-status">It awaits your approval.</p>
         }
+        @if (IsApproved)
+        {
+            <p class="spec-approved">Approved Spec, version @Version.Number</p>
+        }
         @if (Versions.Count > 1)
         {
             <nav aria-label="Spec versions">
@@ -109,6 +113,10 @@
     /// <summary>Whether the Intent awaits the user's approval of this Spec.</summary>
     [Parameter]
     public bool AwaitsApproval { get; set; }
+
+    /// <summary>Whether this version is the Approved Spec.</summary>
+    [Parameter]
+    public bool IsApproved { get; set; }
 
     /// <summary>Whether it offers to edit the Spec, starting from this version.</summary>
     [Parameter]

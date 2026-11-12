@@ -157,7 +157,7 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
 
         // Setting a state directly announces nothing, so the Backlog still shows Draft and reads Paused only when something announces a change.
         await SetStateAsync(overseer, "Export data", IntentState.Paused);
-        await AssertRefusedAsync("This Intent is Paused, and Start moves a Draft to Refining.", detailTab.SubmitFormAsync("start-intent", []));
+        await AssertRefusedAsync("This Intent is Paused, and Start moves a Draft to Refining, or an Approved Intent to Implementing.", detailTab.SubmitFormAsync("start-intent", []));
         await AssertRefusedAsync("This Intent is Paused, and only a Draft can be edited.", editor.SubmitFormAsync("edit-intent", EditorFields("Import data", "save", "acme/web")));
         await AssertRefusedAsync("This Intent is Paused, and only a Draft can be deleted.", deletePage.SubmitFormAsync("delete-intent", Confirmed));
         await AssertRefusedAsync("An Intent needs text: write what you want changed.", SaveAsync(overseer, " ", "acme/web"));

@@ -110,7 +110,7 @@ A decision in a Spec that the human left to the Analyst by accepting its suggest
 _Avoid_: Assumption, default
 
 **Approved Spec**:
-The Spec version the human has accepted; the contract Tasks are created from and review is held against.
+The Spec version the human has accepted, always the latest at that moment; the contract Tasks are created from and review is held against. Once approved it can no longer be edited.
 
 **Approved**:
 An Intent whose Spec has been approved but whose implementation the human has not yet started; it holds no concurrency slot.

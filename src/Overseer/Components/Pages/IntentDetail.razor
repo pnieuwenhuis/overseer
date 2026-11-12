@@ -7,6 +7,7 @@
 @inject IntentLifecycle Lifecycle
 @inject Refinements Refinements
 @inject SpecSendBack SpecSendBack
+@inject SpecApproval SpecApproval
 @inject NavigationManager Navigation
 
 <PageTitle>@(_intent?.FirstLine ?? "Intent") · Overseer</PageTitle>
@@ -18,7 +19,7 @@
 @if (_intent is not null || IsSubmitted)
 {
     <LiveIntent Id="Id" Refused="_refused" AnswersRefused="@_answersRefused" RefusedAnswers="_refusedAnswers"
-                CommentsRefused="@_commentsRefused" CommentsDraft="@_commentsDraft"
+                CommentsRefused="@_commentsRefused" CommentsDraft="@_commentsDraft" ApprovalRefused="@_approvalRefused"
                 @rendermode="InteractiveServer" />
 }
 @* Blazor handles a submitted form only when the page has a form of its name. The Start, Resume and answer forms the user sees are LiveIntent's, which come and go as the Intent changes. *@
@@ -28,6 +29,7 @@
     <form method="post" @formname="@ResumeFormName" @onsubmit="ResumeAsync"></form>
     <form method="post" @formname="@AnswerFormName" @onsubmit="AnswerAsync"></form>
     <form method="post" @formname="@SendBackFormName" @onsubmit="SendBackAsync"></form>
+    <form method="post" @formname="@ApproveFormName" @onsubmit="ApproveAsync"></form>
 }
 
 @code {
@@ -42,6 +44,15 @@
 
     /// <summary>The name that a form submitted to this page sends the Spec back under.</summary>
     public const string SendBackFormName = "send-back-spec";
+
+    /// <summary>The name that a form submitted to this page approves the Spec under.</summary>
+    public const string ApproveFormName = "approve-spec";
+
+    /// <summary>The field of the approve form that holds the number of the Spec version approved; the send back form's <see cref="SpecVersionField"/> too.</summary>
+    public const string ApprovedVersionField = SpecVersionField;
+
+    /// <summary>The field of the approve form that is present, with any value, when approving also starts the implementation.</summary>
+    public const string StartField = "Start";
 
     /// <summary>The field of the send back form that holds the user's comments.</summary>
     public const string CommentsField = "Comments";
@@ -72,6 +83,7 @@
     private RefinementRounds.Draft? _refusedAnswers;
     private string? _commentsRefused;
     private string? _commentsDraft;
+    private string? _approvalRefused;
 
     private bool IsSubmitted => HttpMethods.IsPost(HttpContext.Request.Method);
 
@@ -98,6 +110,27 @@
             case IntentChange.Refused:
                 // LiveIntent then reads the Intent again, and says why as it is now.
                 _refused = change;
+                break;
+        }
+    }
+
+    private async Task ApproveAsync()
+    {
+        var form = HttpContext.Request.Form;
+        var approved = int.TryParse(form[ApprovedVersionField], NumberStyles.None, CultureInfo.InvariantCulture, out var version)
+            ? await SpecApproval.ApproveAsync(Id, version, form.ContainsKey(StartField), HttpContext.RequestAborted)
+            : new SpecApproved.NotApproved("They didn't say which version of the Spec is approved.");
+        switch (approved)
+        {
+            case SpecApproved.Approved:
+                Navigation.NavigateTo($"/intents/{Id}");
+                break;
+            case SpecApproved.NotApproved notApproved:
+                _approvalRefused = notApproved.Reason;
+                break;
+            case SpecApproved.Refused:
+                // LiveIntent then reads the Intent again, and says why as it is now.
+                _refused = LiveIntent.StateChange.Approve;
                 break;
         }
     }

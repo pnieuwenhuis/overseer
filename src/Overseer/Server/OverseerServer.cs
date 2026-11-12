@@ -66,6 +66,7 @@ public static class OverseerServer
         builder.Services.AddSingleton<SpecStore>();
         builder.Services.AddSingleton<SpecEdits>();
         builder.Services.AddSingleton<SpecSendBack>();
+        builder.Services.AddSingleton<SpecApproval>();
         builder.Services.AddSingleton<Refinements>();
         builder.Services.AddHostedService(services => services.GetRequiredService<Refinements>());
 
