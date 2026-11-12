@@ -10,34 +10,95 @@ internal static class AnalystInstructions
     /// <summary>
     /// The first message of an Analyst session: its instructions, the Intent's text as the human wrote it, and its Repositories in
     /// scope with which of them lack a Repository Manifest, followed by the Refinement's <paramref name="transcript"/> so far when it
-    /// has one, so that a session that starts afresh goes on where the last one was.
+    /// has one, so that a session that starts afresh goes on where the last one was. The transcript includes the
+    /// <paramref name="comments"/> with which the human sent the Spec back, each after the Round it follows, and then the
+    /// <paramref name="sentBack"/> Spec those were about, the latest version, as the human last read it.
     /// </summary>
-    public static string FirstMessage(Intent intent, ManifestCheck manifests, IReadOnlyList<Round> transcript) =>
-        transcript.Count == 0 ? Instructions(intent, manifests) : $"{Instructions(intent, manifests)}\n\n{SoFar(transcript)}";
+    /// <param name="sentBack">The latest version of the Spec; <c>null</c> unless <paramref name="comments"/> has any.</param>
+    public static string FirstMessage(
+        Intent intent, ManifestCheck manifests, IReadOnlyList<Round> transcript, IReadOnlyList<SpecComment> comments, SpecVersion? sentBack) =>
+        transcript.Count == 0 && comments.Count == 0
+            ? Instructions(intent, manifests)
+            : $"{Instructions(intent, manifests)}\n\n{SoFar(transcript, comments, sentBack)}";
 
     /// <summary>The Refinement so far, for a session that starts afresh, and what the Analyst does first.</summary>
-    private static string SoFar(IReadOnlyList<Round> transcript)
+    private static string SoFar(IReadOnlyList<Round> transcript, IReadOnlyList<SpecComment> comments, SpecVersion? sentBack)
     {
-        var rounds = transcript.Select(round => round.IsAnswered
-            ? $"Round {round.Number}, answered:\n\n{AnswersTo(round)}"
-            : $"Round {round.Number}, still open:\n\n" + string.Join("\n\n", round.Questions.Select(question =>
-                $"Question {question.Number}: {question.Text}\nYour suggested answer: {question.SuggestedAnswer}")));
-        var next = transcript[^1] is { IsAnswered: false } open
+        List<string> entries = [.. CommentsAfter(comments, 0)];
+        foreach (var round in transcript)
+        {
+            entries.Add(round.IsAnswered
+                ? $"Round {round.Number}, answered:\n\n{AnswersTo(round)}"
+                : $"Round {round.Number}, still open:\n\n" + string.Join("\n\n", round.Questions.Select(question =>
+                    $"Question {question.Number}: {question.Text}\nYour suggested answer: {question.SuggestedAnswer}")));
+            entries.AddRange(CommentsAfter(comments, round.Number));
+        }
+        var next = transcript is [.., { IsAnswered: false } open]
             ? $"""
               Round {open.Number} is still open: the human hasn't answered it yet, and will answer it as it stands. Don't ask its
               questions again, and don't hand in a Round or a Spec in this turn. Get your bearings in this Sandbox's code as far as
               you need to, then end your turn: the human's answers to Round {open.Number} come in your next message.
               """
-            : GoOn;
+            : comments.Count > 0 && comments[^1].AfterRound == (transcript.Count == 0 ? 0 : transcript[^1].Number)
+                ? SentBackGoOn
+                : GoOn;
+        var latest = sentBack is null
+            ? ""
+            : $"\n\nThe latest version of the Spec, version {sentBack.Number}, as the human read it when they sent it back "
+                + $"({(sentBack.WrittenBy == SpecAuthor.User ? "they edited it themselves" : "you wrote it")}):\n\n{SpecAsText(sentBack.Spec)}";
+        var andComments = comments.Count > 0 ? " and the comments with which they sent your Spec back" : "";
         return $"""
             This Refinement began before, in an earlier session of yours that has ended. You start afresh, in a new Sandbox:
-            nothing of that session is left but the transcript below, every Round you put to the human so far with their answers.
+            nothing of that session is left but the transcript below, every Round you put to the human so far with their answers{andComments}.
             Don't ask again what they have answered.
 
-            {string.Join("\n\n", rounds)}
+            {string.Join("\n\n", entries)}{latest}
 
             {next}
             """;
+    }
+
+    /// <summary>The human's comments that follow the Round numbered <paramref name="round"/> in the transcript, as the Analyst reads them.</summary>
+    private static IEnumerable<string> CommentsAfter(IReadOnlyList<SpecComment> comments, int round) =>
+        comments.Where(comment => comment.AfterRound == round).Select(comment =>
+            $"The human sent your Spec version {comment.SpecVersion} back with these comments:\n\n{comment.Text}");
+
+    /// <summary>What the Analyst does first when the human sent its Spec back and nothing has come since.</summary>
+    private static string SentBackGoOn =>
+        $"""
+        The human sent your Spec back: it isn't right yet. Take their last comments into account, which may call for the Spec as it stands to
+        change, and go on with the Refinement from here. End your turn with a Round, handed in at {RoundHandIn.FilePath} as before, if you
+        need to ask them something first, or with the new Spec, the whole Spec and not only what changed, handed in at {SpecHandIn.FilePath}.
+        Keep what the human edited themselves unless their comments say otherwise.
+        """;
+
+    /// <summary>A Spec version as Markdown, for the Analyst to read.</summary>
+    private static string SpecAsText(Spec spec)
+    {
+        List<string> sections =
+        [
+            $"## {SpecLabels.Summary}\n\n{spec.Summary}",
+            $"## {SpecLabels.Approach}\n\n{spec.Approach}",
+            $"## {SpecLabels.Decisions}\n\n" + (spec.Decisions.Count == 0
+                ? "None."
+                : string.Join("\n\n", spec.Decisions.Select((decision, index) =>
+                    $"{index + 1}. {(decision.IsAnalystsChoice ? "(Analyst's Choice) " : "")}{decision.Text}"))),
+            $"## {SpecLabels.AcceptanceCriteria}\n\n{spec.AcceptanceCriteria}",
+            $"## {SpecLabels.Dependencies}\n\n{spec.Dependencies}",
+        ];
+        foreach (var (label, text) in new (string, string?)[]
+        {
+            (SpecLabels.ApiEndpointChanges, spec.ApiEndpointChanges), (SpecLabels.DataModelChanges, spec.DataModelChanges), (SpecLabels.UiChanges, spec.UiChanges),
+        })
+        {
+            if (text is not null)
+            {
+                sections.Add($"## {label}\n\n{text}");
+            }
+        }
+        sections.Add($"## {SpecLabels.Tasks}\n\n" + string.Join("\n\n", spec.Tasks.Select(task =>
+            $"### Task {task.Number}: {task.Title}\n\nRole: {task.Role}. Repositories: {string.Join(", ", task.Repositories)}.\n\n{task.Description}")));
+        return string.Join("\n\n", sections);
     }
 
     /// <summary>The instructions every Analyst session starts with, for the Intent.</summary>
@@ -96,7 +157,8 @@ internal static class AnalystInstructions
         question blank, your suggested answer as an Analyst's Choice: a decision the human left to you.
 
         How you end the Refinement: with the Spec. You alone decide when you know enough to write it, and that ends your
-        work: the human then reviews the Spec, and you get no further turns. The Spec says how the Intent will be
+        work for now: the human then reviews the Spec. They may send it back with comments, and you then start again in a new session
+        that gets the transcript, the latest version of the Spec and their comments. The Spec says how the Intent will be
         implemented. Its prose, in Markdown, is what a Reviewer will check the work against; its Tasks, in order, are what
         Designers and Developers will carry out one at a time, each in a fresh session that gets the Spec and its Task.
 

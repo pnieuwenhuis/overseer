@@ -1199,6 +1199,27 @@
         font-size: 0.875rem;
     }
 
+    /* Sending the Spec back with comments, below the Spec. */
+    .send-back-form {
+        margin-top: 1.5rem;
+        border-top: 1px solid var(--color-line);
+        padding-top: 1.25rem;
+    }
+
+    /* The user's comments in the transcript, between the Rounds before and after them. */
+    .spec-comment {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        border-left: 3px solid var(--color-line);
+        padding-left: 1rem;
+    }
+
+    .spec-comment-text {
+        white-space: pre-line;
+        overflow-wrap: anywhere;
+    }
+
     .spec-status {
         color: var(--color-warning);
         font-size: 0.875rem;

@@ -13,6 +13,10 @@
 {
     <p role="alert" class="callout-warning mb-4">Your answers were not sent: @refused</p>
 }
+@if (CommentsRefused is { } notSent)
+{
+    <p role="alert" class="callout-warning mb-4">Your comments were not sent: @notSent</p>
+}
 @if (Shown?.Intent is { } intent)
 {
     <article class="panel overflow-hidden">
@@ -68,12 +72,30 @@
                 @* The latest version, which is the one awaiting approval and the one an edit starts from. *@
                 <SpecView Version="spec" IntentId="Id" Versions="Shown.SpecVersions" AwaitsApproval="@(intent.State == IntentState.AwaitingSpecApproval)"
                           Editable="@(IntentLifecycle.WhyNotSpecEditable(intent.State) is null)" />
+                @if (intent.State == IntentState.AwaitingSpecApproval)
+                {
+                    @* A plain form, posted by the browser, so sending back works the same with or without the live connection. The static page handles it, under this name. *@
+                    <form method="post" action="intents/@Id" class="form send-back-form">
+                        <input type="hidden" name="_handler" value="@Pages.IntentDetail.SendBackFormName" />
+                        <input type="hidden" name="@Pages.IntentDetail.SpecVersionField" value="@spec.Number" />
+                        <AntiforgeryToken />
+                        <label>
+                            <span>Not right yet? Say what should change</span>
+                            <textarea name="@Pages.IntentDetail.CommentsField" rows="3" required value="@CommentsDraft"></textarea>
+                        </label>
+                        <p class="form-note">
+                            Sending the Spec back moves the Intent to Refining, which takes an Active Intent slot. The Analyst goes on in a fresh Sandbox from the
+                            transcript, this Spec and your comments, and may ask further Rounds.
+                        </p>
+                        <button type="submit" class="btn" disabled="@(Shown.WhyNot is not null)">Send back</button>
+                    </form>
+                }
             </div>
         }
-        @if (Shown.Transcript.Count > 0)
+        @if (Shown.Transcript.Count > 0 || Shown.Comments.Count > 0)
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
-                <RefinementRounds IntentId="Id" Transcript="Shown.Transcript" OpenRound="Shown.Refinement?.OpenRound" Paused="@(intent.State == IntentState.Paused)"
+                <RefinementRounds IntentId="Id" Transcript="Shown.Transcript" Comments="Shown.Comments" OpenRound="Shown.Refinement?.OpenRound" Paused="@(intent.State == IntentState.Paused)"
                                   RefusedAnswers="RefusedAnswers" />
             </div>
         }
@@ -96,6 +118,14 @@
     [Parameter]
     public string? AnswersRefused { get; set; }
 
+    /// <summary>Why comments sending the Spec back were just not sent; <c>null</c> unless they weren't.</summary>
+    [Parameter]
+    public string? CommentsRefused { get; set; }
+
+    /// <summary>The comments that were just not sent, as the user wrote them, to fill in again; <c>null</c> unless there are.</summary>
+    [Parameter]
+    public string? CommentsDraft { get; set; }
+
     /// <summary>The answers that were just refused, as the user gave them, to fill in again; <c>null</c> unless they were.</summary>
     [Parameter]
     public RefinementRounds.Draft? RefusedAnswers { get; set; }
@@ -108,6 +138,7 @@
         {
             null or { State: IntentState.Draft } => StateChange.Start,
             { ResumesTo: not null } => StateChange.Resume,
+            { State: IntentState.AwaitingSpecApproval } => StateChange.SendBack,
             _ => (StateChange?)null,
         };
         return new(
@@ -116,31 +147,35 @@
             {
                 StateChange.Start => await Lifecycle.WhyNotStartableAsync(Id, cancellationToken),
                 StateChange.Resume => await Lifecycle.WhyNotResumableAsync(Id, cancellationToken),
+                StateChange.SendBack => await Lifecycle.WhyNotSentBackAsync(Id, cancellationToken),
                 _ => null,
             },
             intent is null ? null : await Refinements.ProgressOfAsync(intent, cancellationToken),
             intent is null ? [] : await Refinements.TranscriptOfAsync(intent.Id, cancellationToken),
             intent is null ? null : await Specs.LatestOfAsync(intent.Id, cancellationToken),
-            intent is null ? [] : await Specs.VersionsOfAsync(intent.Id, cancellationToken));
+            intent is null ? [] : await Specs.VersionsOfAsync(intent.Id, cancellationToken),
+            intent is null ? [] : await Specs.CommentsOfAsync(intent.Id, cancellationToken));
     }
 
     /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
     /// <param name="WhyNot">
-    /// Why the Start or Resume the page offers, or the one just refused, can't be made at the moment, as the page explains next to its
+    /// Why the Start, Resume or Send back the page offers, or the one just refused, can't be made at the moment, as the page explains next to its
     /// button and a refusal says; <c>null</c> when it can, or there is none.
     /// </param>
     /// <param name="Refinement">Where its Refinement stands; <c>null</c> unless it is Refining.</param>
     /// <param name="Transcript">The Rounds of its Refinement, in order; empty when it has none.</param>
     /// <param name="Spec">The latest version of its Spec; <c>null</c> when it has none.</param>
     /// <param name="SpecVersions">Every version of its Spec, in order; empty when it has none.</param>
+    /// <param name="Comments">The comments with which the Spec was sent back, in order; empty when it wasn't.</param>
     public sealed record Detail(
         Intent? Intent, string? WhyNot, RefinementProgress? Refinement, IReadOnlyList<Round> Transcript, SpecVersion? Spec,
-        IReadOnlyList<SpecVersionHeading> SpecVersions);
+        IReadOnlyList<SpecVersionHeading> SpecVersions, IReadOnlyList<SpecComment> Comments);
 
     /// <summary>A change of an Intent's state that the page offers with a button, disabled while it can't be made.</summary>
     public enum StateChange
     {
         Start,
         Resume,
+        SendBack,
     }
 }

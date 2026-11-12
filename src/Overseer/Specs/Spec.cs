@@ -66,6 +66,22 @@ public enum SpecAuthor
     User,
 }
 
+/// <summary>The comments with which the user sent a Spec version back to Refinement, numbered in the order they were sent, from 1.</summary>
+/// <param name="SpecVersion">The version of the Spec they were about.</param>
+/// <param name="AfterRound">The number of the last Round of the transcript when they were sent, so where in it they belong; 0 when it had none.</param>
+public sealed record SpecComment(int Number, int SpecVersion, int AfterRound, string Text);
+
+/// <summary>A user's comments on a Spec version, as PostgreSQL holds them.</summary>
+public sealed class SpecCommentRecord
+{
+    public required Guid IntentId { get; init; }
+    public required int Number { get; init; }
+    public required int SpecVersion { get; init; }
+    public required int AfterRound { get; init; }
+    public required string Text { get; init; }
+    public required DateTimeOffset SentAt { get; init; }
+}
+
 /// <summary>A version of an Intent's Spec, as PostgreSQL holds it.</summary>
 public sealed class SpecVersionRecord
 {

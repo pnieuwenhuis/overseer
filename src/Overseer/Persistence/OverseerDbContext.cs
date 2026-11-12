@@ -19,6 +19,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<RefinementRecord> Refinements => Set<RefinementRecord>();
     public DbSet<RoundRecord> Rounds => Set<RoundRecord>();
     public DbSet<SpecVersionRecord> SpecVersions => Set<SpecVersionRecord>();
+    public DbSet<SpecCommentRecord> SpecComments => Set<SpecCommentRecord>();
 
     private const string CaseInsensitive = "case_insensitive";
 
@@ -73,6 +74,12 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             version.HasOne<IntentRecord>().WithMany().HasForeignKey(record => record.IntentId);
             version.HasMany(record => record.Decisions).WithOne().HasForeignKey(decision => new { decision.IntentId, decision.SpecVersion });
             version.HasMany(record => record.Tasks).WithOne().HasForeignKey(task => new { task.IntentId, task.SpecVersion });
+        });
+        modelBuilder.Entity<SpecCommentRecord>(comment =>
+        {
+            comment.ToTable("SpecComments");
+            comment.HasKey(record => new { record.IntentId, record.Number });
+            comment.HasOne<IntentRecord>().WithMany().HasForeignKey(record => record.IntentId);
         });
         modelBuilder.Entity<SpecDecisionRecord>(decision =>
         {

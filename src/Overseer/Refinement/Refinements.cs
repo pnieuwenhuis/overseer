@@ -23,12 +23,14 @@ namespace Overseer.Refinement;
 /// Every Analyst session starts afresh from the transcript, so that a Refinement goes on where it was whatever stopped its last
 /// session: its first message holds the Intent's text and every Round so far, with its answers, and a Round still open stays
 /// open, for the human to answer once the Analyst has caught up. So the Refinement continues when its Intent resumes, after a
-/// Retry, and after a restart of serve.
+/// Retry, and after a restart of serve. The same when the human sends the Spec back: the Intent moves to Refining again, and the
+/// session also gets their comments, in the transcript after the Round they follow, and the latest Spec version, with their own
+/// edits. Its next Spec is a new version.
 /// </para>
 /// </summary>
 public sealed class Refinements(
     IntentLifecycle lifecycle, SandboxRegistry sandboxes, IGitHubGateway gitHub, IDbContextFactory<OverseerDbContext> databases,
-    SettingsStore settings, TimeProvider time, ILogger<Refinements> logger)
+    SpecStore specs, SettingsStore settings, TimeProvider time, ILogger<Refinements> logger)
     : IHostedService
 {
     /// <summary>
@@ -273,7 +275,10 @@ public sealed class Refinements(
             var manifests = await ManifestCheck.RunAsync(gitHub, intent.RepositoriesInScope, cancellationToken);
             // The session starts afresh from the transcript, which is empty when the Refinement has just started.
             var transcript = await TranscriptOfAsync(intentId, cancellationToken);
-            var message = AnalystInstructions.FirstMessage(intent, manifests, transcript);
+            // Also when the Spec was sent back: its latest version and the comments are what the Analyst goes on from.
+            var comments = await specs.CommentsOfAsync(intentId, cancellationToken);
+            var sentBack = comments.Count == 0 ? null : await specs.LatestOfAsync(intentId, cancellationToken);
+            var message = AnalystInstructions.FirstMessage(intent, manifests, transcript, comments, sentBack);
             var specHandIn = new SpecHandIn(intent.RepositoriesInScope, manifests.Lacking);
             if (transcript is [.., { IsAnswered: false } open])
             {

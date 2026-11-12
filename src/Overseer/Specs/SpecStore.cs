@@ -41,6 +41,37 @@ public sealed class SpecStore(IDbContextFactory<OverseerDbContext> databases)
             .ToListAsync(cancellationToken);
     }
 
+    /// <summary>Every comment with which the user sent the Intent's Spec back, in the order they were sent; empty when there is none.</summary>
+    public async Task<IReadOnlyList<SpecComment>> CommentsOfAsync(Guid intentId, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        return await database.SpecComments
+            .Where(comment => comment.IntentId == intentId)
+            .OrderBy(comment => comment.Number)
+            .Select(comment => new SpecComment(comment.Number, comment.SpecVersion, comment.AfterRound, comment.Text))
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Adds the user's comments on version <paramref name="specVersion"/> in <paramref name="database"/>, to be saved with its
+    /// transaction, after the Round numbered <paramref name="afterRound"/>. Under the lock on the Intent's row, which whoever adds
+    /// one holds.
+    /// </summary>
+    internal static async Task AddCommentAsync(
+        OverseerDbContext database, Guid intentId, int specVersion, int afterRound, string text, DateTimeOffset sentAt, CancellationToken cancellationToken)
+    {
+        var number = 1 + (await database.SpecComments.Where(comment => comment.IntentId == intentId).MaxAsync(comment => (int?)comment.Number, cancellationToken) ?? 0);
+        database.SpecComments.Add(new SpecCommentRecord
+        {
+            IntentId = intentId,
+            Number = number,
+            SpecVersion = specVersion,
+            AfterRound = afterRound,
+            Text = text,
+            SentAt = sentAt,
+        });
+    }
+
     /// <summary>The number of the latest version of the Intent's Spec, as <paramref name="database"/> sees it; <c>null</c> when it has none.</summary>
     internal static Task<int?> LatestNumberAsync(OverseerDbContext database, Guid intentId, CancellationToken cancellationToken) =>
         database.SpecVersions.Where(version => version.IntentId == intentId).MaxAsync(version => (int?)version.Number, cancellationToken);

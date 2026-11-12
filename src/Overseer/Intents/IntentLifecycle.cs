@@ -209,6 +209,51 @@ public sealed class IntentLifecycle(
     };
 
     /// <summary>
+    /// Sends the Spec of an Intent awaiting its approval back to Refinement: the Intent moves to Refining, taking an Active Intent slot
+    /// again, and Refinement goes on in a fresh Sandbox. Whether it may is decided as the Intent is at this moment rather than as the
+    /// user's page showed it. Refused unless the Intent awaits Spec approval, a slot is free, and <paramref name="record"/> doesn't
+    /// refuse; then nothing is stored.
+    /// </summary>
+    /// <param name="record">
+    /// Under the lock on the Intent's row, adds what goes with sending it back (the comments) to the database it is given, without
+    /// saving, and gives <c>null</c>; or adds nothing, and gives its refusal.
+    /// </param>
+    public async Task<IntentChange> SendSpecBackAsync(
+        Guid id, Func<OverseerDbContext, CancellationToken, Task<string?>> record, CancellationToken cancellationToken)
+    {
+        // Ahead of the transaction, as for Start.
+        var limits = await settings.GetOperatingLimitsAsync(cancellationToken);
+        return await ChangeStateAsync(id, async (database, state, stopping) =>
+        {
+            await HoldActiveIntentSlotsAsync(database, stopping);
+            if (await WhyNotSentBackAsync(database, state, limits.MaxActiveIntents, stopping) is { } notSentBack)
+            {
+                return new Decision.Refuse(notSentBack);
+            }
+            return await record(database, stopping) is { } refusal ? new Decision.Refuse(refusal) : new Decision.MoveTo(IntentState.Refining);
+        }, cancellationToken);
+    }
+
+    /// <summary>Why the Spec of the Intent with this id can't be sent back at the moment, with what a refused send back says, or <c>null</c> when it can.</summary>
+    public async Task<string?> WhyNotSentBackAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var limits = await settings.GetOperatingLimitsAsync(cancellationToken);
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        var state = await database.Intents.Where(intent => intent.Id == id).Select(intent => (IntentState?)intent.State).SingleOrDefaultAsync(cancellationToken);
+        return await WhyNotSentBackAsync(database, state, limits.MaxActiveIntents, cancellationToken);
+    }
+
+    // Names AwaitingSpecApproval rather than the states it refuses, so that a state added later is refused.
+    private static async Task<string?> WhyNotSentBackAsync(
+        OverseerDbContext database, IntentState? state, int maxActiveIntents, CancellationToken cancellationToken) =>
+        state switch
+        {
+            null => NoSuchIntent,
+            IntentState.AwaitingSpecApproval => await WhyNoFreeSlotAsync(database, maxActiveIntents, cancellationToken),
+            { } other => $"This Intent is {other.InWords()}, and only a Spec awaiting approval can be sent back.",
+        };
+
+    /// <summary>
     /// Pauses an Intent agents are working on: it leaves its Active Intent slot, its Working Time stops, and it keeps the state it was
     /// paused from, which Resume returns it to. Refused unless the Intent is Refining, Implementing or In Review at this moment, or when
     /// <paramref name="confirm"/> says the reason to pause no longer holds.
@@ -471,7 +516,7 @@ public sealed class IntentLifecycle(
 
     /// <summary>
     /// Why no Intent can become Active at the moment, naming the Intents that hold the slots and the way out; <c>null</c> when a slot is
-    /// free. The same for Start and Resume.
+    /// free. The same for Start, Resume and sending a Spec back.
     /// </summary>
     private static async Task<string?> WhyNoFreeSlotAsync(OverseerDbContext database, int maxActiveIntents, CancellationToken cancellationToken)
     {

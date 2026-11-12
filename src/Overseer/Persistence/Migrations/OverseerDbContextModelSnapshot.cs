@@ -243,6 +243,32 @@ namespace Overseer.Persistence.Migrations
                     b.ToTable("Settings");
                 });
 
+            modelBuilder.Entity("Overseer.Specs.SpecCommentRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("AfterRound")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("SentAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("SpecVersion")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("IntentId", "Number");
+
+                    b.ToTable("SpecComments", (string)null);
+                });
+
             modelBuilder.Entity("Overseer.Specs.SpecDecisionRecord", b =>
                 {
                     b.Property<Guid>("IntentId")
@@ -380,6 +406,15 @@ namespace Overseer.Persistence.Migrations
                 });
 
             modelBuilder.Entity("Overseer.Refinement.RoundRecord", b =>
+                {
+                    b.HasOne("Overseer.Intents.IntentRecord", null)
+                        .WithMany()
+                        .HasForeignKey("IntentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Overseer.Specs.SpecCommentRecord", b =>
                 {
                     b.HasOne("Overseer.Intents.IntentRecord", null)
                         .WithMany()

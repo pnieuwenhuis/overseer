@@ -1,7 +1,9 @@
 @* The Refinement transcript: every Round the Analyst put to the user, with the answers given, and the open Round as a form to answer it. *@
 @using Overseer.Refinement
+@using Overseer.Specs
 
 <section class="rounds" aria-label="Rounds">
+    @CommentsAfter(0)
     @foreach (var round in Transcript)
     {
         var open = round.Number == OpenRound;
@@ -43,6 +45,7 @@
                     : @<p class="question-unanswered">@(Paused ? "Not answered yet: Resume the Intent to answer it." : "Not answered yet: you can answer it once the Analyst is back.")</p>)
             }
         </article>
+        @CommentsAfter(round.Number)
     }
 </section>
 
@@ -52,6 +55,10 @@
 
     [Parameter, EditorRequired]
     public required IReadOnlyList<Round> Transcript { get; set; }
+
+    /// <summary>The comments with which the user sent the Spec back, each shown after the Round it follows.</summary>
+    [Parameter]
+    public IReadOnlyList<SpecComment> Comments { get; set; } = [];
 
     /// <summary>The number of the Round that awaits the user's answers; <c>null</c> when none does.</summary>
     [Parameter]
@@ -64,6 +71,18 @@
     /// <summary>Answers to a Round that were just refused, to fill its form in again with; <c>null</c> unless there are.</summary>
     [Parameter]
     public Draft? RefusedAnswers { get; set; }
+
+    /// <summary>The user's comments that follow the Round numbered <paramref name="round"/>, between the Spec version they were about and what came next.</summary>
+    private RenderFragment CommentsAfter(int round) =>
+        @<text>
+            @foreach (var comment in Comments.Where(comment => comment.AfterRound == round))
+            {
+                <article class="spec-comment" data-spec-version="@comment.SpecVersion" data-after-round="@comment.AfterRound">
+                    <h2>Your comments on Spec version @comment.SpecVersion</h2>
+                    <p class="spec-comment-text">@comment.Text</p>
+                </article>
+            }
+        </text>;
 
     /// <summary>The Round's questions in order, each followed by what <paramref name="after"/> renders for it.</summary>
     private static RenderFragment Questions(Round round, Func<RoundQuestion, RenderFragment> after) =>

@@ -3,8 +3,10 @@
 @using System.Globalization
 @using Overseer.Intents
 @using Overseer.Refinement
+@using Overseer.Specs
 @inject IntentLifecycle Lifecycle
 @inject Refinements Refinements
+@inject SpecSendBack SpecSendBack
 @inject NavigationManager Navigation
 
 <PageTitle>@(_intent?.FirstLine ?? "Intent") · Overseer</PageTitle>
@@ -16,6 +18,7 @@
 @if (_intent is not null || IsSubmitted)
 {
     <LiveIntent Id="Id" Refused="_refused" AnswersRefused="@_answersRefused" RefusedAnswers="_refusedAnswers"
+                CommentsRefused="@_commentsRefused" CommentsDraft="@_commentsDraft"
                 @rendermode="InteractiveServer" />
 }
 @* Blazor handles a submitted form only when the page has a form of its name. The Start, Resume and answer forms the user sees are LiveIntent's, which come and go as the Intent changes. *@
@@ -24,6 +27,7 @@
     <form method="post" @formname="@StartFormName" @onsubmit="StartAsync"></form>
     <form method="post" @formname="@ResumeFormName" @onsubmit="ResumeAsync"></form>
     <form method="post" @formname="@AnswerFormName" @onsubmit="AnswerAsync"></form>
+    <form method="post" @formname="@SendBackFormName" @onsubmit="SendBackAsync"></form>
 }
 
 @code {
@@ -35,6 +39,15 @@
 
     /// <summary>The name that a form submitted to this page answers a Round under.</summary>
     public const string AnswerFormName = "answer-round";
+
+    /// <summary>The name that a form submitted to this page sends the Spec back under.</summary>
+    public const string SendBackFormName = "send-back-spec";
+
+    /// <summary>The field of the send back form that holds the user's comments.</summary>
+    public const string CommentsField = "Comments";
+
+    /// <summary>The field of the send back form that holds the number of the Spec version the comments are about.</summary>
+    public const string SpecVersionField = "SpecVersion";
 
     /// <summary>The field of the answer form that holds the number of the Round answered.</summary>
     public const string RoundField = "Round";
@@ -57,6 +70,8 @@
     private LiveIntent.StateChange? _refused;
     private string? _answersRefused;
     private RefinementRounds.Draft? _refusedAnswers;
+    private string? _commentsRefused;
+    private string? _commentsDraft;
 
     private bool IsSubmitted => HttpMethods.IsPost(HttpContext.Request.Method);
 
@@ -83,6 +98,30 @@
             case IntentChange.Refused:
                 // LiveIntent then reads the Intent again, and says why as it is now.
                 _refused = change;
+                break;
+        }
+    }
+
+    private async Task SendBackAsync()
+    {
+        var form = HttpContext.Request.Form;
+        var comments = form[CommentsField].ToString();
+        var sent = int.TryParse(form[SpecVersionField], NumberStyles.None, CultureInfo.InvariantCulture, out var version)
+            ? await SpecSendBack.SendAsync(Id, version, comments, HttpContext.RequestAborted)
+            : new SpecSentBack.NotSent("They didn't say which version of the Spec the comments are about.");
+        switch (sent)
+        {
+            case SpecSentBack.Sent:
+                Navigation.NavigateTo($"/intents/{Id}");
+                break;
+            case SpecSentBack.NotSent notSent:
+                _commentsRefused = notSent.Reason;
+                _commentsDraft = comments;
+                break;
+            case SpecSentBack.Refused:
+                // LiveIntent then reads the Intent again, and says why as it is now.
+                _refused = LiveIntent.StateChange.SendBack;
+                _commentsDraft = comments;
                 break;
         }
     }

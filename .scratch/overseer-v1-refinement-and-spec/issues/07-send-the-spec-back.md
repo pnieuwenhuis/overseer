@@ -6,11 +6,11 @@ Decided: sending back needs a free slot, because Refining is an Active state. Wh
 
 **Blocked by:** 05 (Idle Refinement pauses; Resume continues from the transcript), 03 (The Analyst writes the Spec)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] An Intent awaiting Spec approval offers "Send back" with a required comments field
-- [ ] Sending back moves the Intent to Refining through the Intent Lifecycle, takes a slot, creates a fresh Sandbox and starts an Analyst session whose first message holds the transcript, the latest Spec version and the comments
-- [ ] "Send back" is disabled, with an explanation, when all slots are taken; the server refuses it too
-- [ ] The comments become part of the transcript, shown on the detail page between the Spec version they were about and what followed
-- [ ] The Analyst's next Spec is stored as a new version after the existing ones, and the Intent moves to AwaitingSpecApproval again
-- [ ] Covered by tests through the application with the fake Sandbox Provider
+- [x] An Intent awaiting Spec approval offers "Send back" with a required comments field
+- [x] Sending back moves the Intent to Refining through the Intent Lifecycle, takes a slot, creates a fresh Sandbox and starts an Analyst session whose first message holds the transcript, the latest Spec version and the comments
+- [x] "Send back" is disabled, with an explanation, when all slots are taken; the server refuses it too
+- [x] The comments become part of the transcript, shown on the detail page between the Spec version they were about and what followed
+- [x] The Analyst's next Spec is stored as a new version after the existing ones, and the Intent moves to AwaitingSpecApproval again
+- [x] Covered by tests through the application with the fake Sandbox Provider
