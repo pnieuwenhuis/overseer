@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Time.Testing;
 using Overseer.Sandboxes;
@@ -169,6 +170,38 @@ public sealed class AzureSandboxProviderTests : IDisposable
         Assert.Equal(clientId, FakeAzureCli.Value(login, "--client-id"));
         Assert.All(_az.ConfigDirectories, directory => Assert.Equal(_az.ConfigDirectories[0], directory));
         Assert.NotNull(_az.ConfigDirectories[0]);
+    }
+
+    [Fact]
+    public async Task An_agent_runs_opencode_acp_over_ssh_and_the_tokens_reach_it_only_over_standard_input()
+    {
+        var agent = new ScriptedAgentProcess();
+        _ssh.Started = (_, _) => agent;
+        var provider = Provider();
+        var sandbox = await CreateAsync(provider);
+
+        await using var session = await provider.StartAgentSessionAsync(
+            sandbox, AgentRole.Reviewer, AgentHarnessConfiguration.Default, new Dictionary<string, string> { ["ANTHROPIC_API_KEY"] = "sk-secret" },
+            TestContext.Current.CancellationToken);
+
+        var (_, command) = _ssh.Runs[^1];
+        Assert.Contains("opencode acp", command);
+        Assert.DoesNotContain("sk-secret", command);
+        Assert.Equal("reviewer", (string)agent.Requests[^1]["params"]!["modeId"]!);
+        var sent = Encoding.UTF8.GetString(Convert.FromBase64String(agent.Input[0]));
+        Assert.Contains("sk-secret", sent);
+        Assert.Contains("OPENCODE_CONFIG_CONTENT", sent);
+    }
+
+    [Fact]
+    public async Task An_environment_variable_that_isnt_a_name_is_refused_before_anything_starts()
+    {
+        var provider = Provider();
+        var sandbox = await CreateAsync(provider);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => provider.StartAgentSessionAsync(
+            sandbox, AgentRole.Developer, AgentHarnessConfiguration.Default, new Dictionary<string, string> { ["A;rm -rf /"] = "x" },
+            TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -603,5 +636,15 @@ public sealed class FakeSandboxSsh : ISandboxSsh
             await Task.Delay(Timeout.Infinite, cancellationToken);
         }
         return Answer(target, command);
+    }
+
+    /// <summary>Starts what <see cref="Started"/> makes of a command; by default there is none to start.</summary>
+    public Func<SshTarget, string, ISshProcess> Started { get; set; } =
+        (_, _) => throw new NotSupportedException("No process is scripted.");
+
+    public Task<ISshProcess> StartAsync(SshTarget target, string command, CancellationToken cancellationToken)
+    {
+        _runs.Enqueue((target, command));
+        return Task.FromResult(Started(target, command));
     }
 }

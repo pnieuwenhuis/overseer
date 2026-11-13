@@ -296,8 +296,6 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
         return sandbox;
     }
 
-    protected override string? AgentSessionsSkipReason => "Agent sessions in Azure Sandboxes come with the Agent Session module.";
-
     protected override async Task GivenFileAsync(Sandbox sandbox, string path, string content)
     {
         var written = await _azure.RunCommandAsync(

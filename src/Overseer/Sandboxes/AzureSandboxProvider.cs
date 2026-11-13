@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Text;
 using System.Text.RegularExpressions;
 using Overseer.GitHub;
 using Overseer.Secrets;
@@ -226,11 +227,77 @@ public sealed partial class AzureSandboxProvider(
     public async Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken) =>
         await ssh.RunAsync(await TargetAsync(VirtualMachine(sandbox), cancellationToken), command, cancellationToken);
 
-    /// <exception cref="NotSupportedException">Always, for now: agents run in Azure Sandboxes once the Agent Session module is built.</exception>
-    public Task<IAgentSession> StartAgentSessionAsync(
+    /// <summary>
+    /// Runs <c>opencode acp</c> over SSH, with the Sandbox's own key, as <see cref="AcpAgentSession"/> talks to it. The harness
+    /// configuration and the environment reach the process over its standard input, not in the command: a command line shows
+    /// to everyone on the Sandbox, and the environment holds model provider tokens.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The Sandbox does not exist, or its key is gone; or a variable's name is not one.</exception>
+    /// <exception cref="SandboxUnreachableException">The Sandbox does not accept SSH, for instance from a new public IP of the developer's.</exception>
+    /// <exception cref="AgentSessionFailedException">The agent did not start.</exception>
+    public async Task<IAgentSession> StartAgentSessionAsync(
         Sandbox sandbox, AgentRole role, AgentHarnessConfiguration harness, IReadOnlyDictionary<string, string> environment,
-        CancellationToken cancellationToken) =>
-        throw new NotSupportedException("Agent sessions in Azure Sandboxes are not built yet: they come with the Agent Session module.");
+        CancellationToken cancellationToken)
+    {
+        var variables = new Dictionary<string, string>(environment) { ["OPENCODE_CONFIG_CONTENT"] = harness.Json };
+        foreach (var name in variables.Keys.Where(name => !EnvironmentVariableName().IsMatch(name)))
+        {
+            throw new InvalidOperationException($"'{name}' is not a name an environment variable can have.");
+        }
+
+        var exports = string.Concat(variables.Select(variable => $"export {variable.Key}='{variable.Value.Replace("'", "'\\''")}'\n"));
+        var setup = Convert.ToBase64String(Encoding.UTF8.GetBytes(exports));
+        var target = await TargetAsync(VirtualMachine(sandbox), cancellationToken);
+        var pidFile = $"$HOME/.overseer/agent-{Guid.NewGuid():N}.pid";
+        var process = await ssh.StartAsync(target, $$"""
+            set -e
+            IFS= read -r setup
+            eval "$(printf '%s' "$setup" | base64 -d)"
+            unset setup
+            mkdir -p "$HOME/.overseer" '{{AgentDirectory}}'
+            echo $$ > "{{pidFile}}"
+            cd '{{AgentDirectory}}'
+            exec opencode acp
+            """, cancellationToken);
+        try
+        {
+            await process.WriteLineAsync(setup, cancellationToken);
+            return await AcpAgentSession.StartAsync(
+                process, AgentDirectory, AgentHarnessConfiguration.AgentName(role),
+                [.. environment.Values.Where(value => value.Length > 0)], () => EndAgentAsync(target, pidFile), cancellationToken);
+        }
+        catch (IOException exception)
+        {
+            await process.DisposeAsync();
+            throw new AgentSessionFailedException($"The agent did not start: {exception.Message}");
+        }
+        catch
+        {
+            await process.DisposeAsync();
+            throw;
+        }
+    }
+
+    /// <summary>Where agents work in a Sandbox: above the Repositories in scope, which are cloned below it.</summary>
+    private static string AgentDirectory => $"/home/{Username}/repositories";
+
+    /// <summary>
+    /// Ends the agent process and what it started, should closing the connection not have: OpenCode's launcher starts the
+    /// program that does the work, which a signal to the launcher alone leaves running.
+    /// </summary>
+    private async Task EndAgentAsync(SshTarget target, string pidFile)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await ssh.RunAsync(target, $$"""
+            end() { for child in $(pgrep -P "$1"); do end "$child"; done; kill -TERM "$1" 2>/dev/null || true; }
+            [ -f "{{pidFile}}" ] && end "$(cat "{{pidFile}}")"
+            rm -f "{{pidFile}}"
+            exit 0
+            """, timeout.Token);
+    }
+
+    [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$")]
+    private static partial Regex EnvironmentVariableName();
 
     /// <inheritdoc cref="ISandboxProvider.TakeFileAsync"/>
     /// <exception cref="InvalidOperationException">

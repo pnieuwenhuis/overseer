@@ -22,6 +22,39 @@ public class SandboxSshTests(OpenSshServer server) : IClassFixture<OpenSshServer
     }
 
     [Fact]
+    public async Task A_started_command_talks_over_its_input_and_output_and_keeps_errors_apart()
+    {
+        await using var process = await _ssh.StartAsync(server.Target, "read name; echo \"hello $name\"; echo oops >&2; exit 5", TestContext.Current.CancellationToken);
+
+        await process.WriteLineAsync("Ada", TestContext.Current.CancellationToken);
+
+        Assert.Equal("hello Ada", await process.ReadLineAsync(TestContext.Current.CancellationToken));
+        Assert.Null(await process.ReadLineAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(5, await process.ExitCode);
+        Assert.Equal("oops", process.StandardErrorTail);
+    }
+
+    [Fact]
+    public async Task Disposing_a_started_command_in_the_middle_of_its_work_ends_it_in_the_Sandbox()
+    {
+        var process = await _ssh.StartAsync(server.Target, "echo started; exec sleep 3001", TestContext.Current.CancellationToken);
+        Assert.Equal("started", await process.ReadLineAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(0, (await _ssh.RunAsync(server.Target, "pgrep -f '[s]leep 3001'", TestContext.Current.CancellationToken)).ExitCode);
+
+        await process.DisposeAsync();
+
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        CommandResult running;
+        do
+        {
+            await Task.Delay(250, TestContext.Current.CancellationToken);
+            running = await _ssh.RunAsync(server.Target, "pgrep -f '[s]leep 3001'", TestContext.Current.CancellationToken);
+        }
+        while (running.ExitCode == 0 && DateTime.UtcNow < deadline);
+        Assert.NotEqual(0, running.ExitCode);
+    }
+
+    [Fact]
     public async Task A_host_presenting_another_host_key_is_refused()
     {
         var expected = SshKeyPair.Generate().Fingerprint;

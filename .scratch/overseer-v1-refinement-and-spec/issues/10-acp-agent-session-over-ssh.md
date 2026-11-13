@@ -6,12 +6,12 @@ How an agent asks the user a question over ACP is for the implementer to settle 
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** implemented, awaiting the opt-in run against a real Azure subscription (last box)
 
-- [ ] Starting an agent session in an Azure Sandbox runs `opencode acp` over SSH with the given harness configuration and environment, in the given role's agent
-- [ ] Sending a message starts a turn; the agent's updates stream as they happen, and the turn ends with Done or AskedQuestion
-- [ ] An answer sent to the same session continues the conversation where it left off
-- [ ] A dropped SSH connection or exited process ends the turn with `AgentSessionFailedException` and a message saying what happened
-- [ ] Disposing the session stops the agent process, also in the middle of a turn
-- [ ] Provider tokens are never logged or written to PostgreSQL
+- [x] Starting an agent session in an Azure Sandbox runs `opencode acp` over SSH with the given harness configuration and environment, in the given role's agent
+- [x] Sending a message starts a turn; the agent's updates stream as they happen, and the turn ends with Done or AskedQuestion
+- [x] An answer sent to the same session continues the conversation where it left off
+- [x] A dropped SSH connection or exited process ends the turn with `AgentSessionFailedException` and a message saying what happened
+- [x] Disposing the session stops the agent process, also in the middle of a turn
+- [x] Provider tokens are never logged or written to PostgreSQL
 - [ ] The agent-session part of the Sandbox Provider contract suite, skipped for Azure until now, passes against a real subscription as an opt-in test
