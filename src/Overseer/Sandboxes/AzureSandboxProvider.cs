@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Text.RegularExpressions;
+using Overseer.GitHub;
 using Overseer.Secrets;
 
 namespace Overseer.Sandboxes;
@@ -24,7 +26,7 @@ public sealed record AzureSandboxSettings(
 /// Sandbox VNet, which only Overseer's subnet reaches. Each Sandbox has its own SSH key, kept in the secret store so
 /// that Overseer still reaches it after a restart.
 /// </summary>
-public sealed class AzureSandboxProvider(
+public sealed partial class AzureSandboxProvider(
     AzureSandboxSettings settings,
     IReadOnlyDictionary<string, string?> environment,
     ISecretStore secrets,
@@ -68,12 +70,12 @@ public sealed class AzureSandboxProvider(
     public Sandbox Name(SandboxOwner owner) => new(ResourceId($"sandbox-{Guid.NewGuid():N}"), owner);
 
     public async Task CreateAsync(
-        Sandbox sandbox, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
+        Sandbox sandbox, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, bool mayPush, CancellationToken cancellationToken)
     {
         var name = VirtualMachine(sandbox);
         try
         {
-            await ProvisionAsync(name, sandbox.Owner, machine, cancellationToken);
+            await ProvisionAsync(name, sandbox.Owner, machine, repositoriesInScope, mayPush, cancellationToken);
         }
         catch (Exception exception)
         {
@@ -96,8 +98,13 @@ public sealed class AzureSandboxProvider(
     }
 
     /// <summary>Creates the Sandbox's VM and what it needs, and waits until it is set up.</summary>
-    private async Task ProvisionAsync(string name, SandboxOwner owner, SandboxMachine machine, CancellationToken cancellationToken)
+    private async Task ProvisionAsync(
+        string name, SandboxOwner owner, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, bool mayPush,
+        CancellationToken cancellationToken)
     {
+        // Checked before anything is created: a Sandbox that can't clone shouldn't cost a VM.
+        var token = repositoriesInScope.Count == 0 ? null : await TokenForCloningAsync(repositoriesInScope, cancellationToken);
+
         var userKey = SshKeyPair.Generate();
         var hostKey = SshKeyPair.Generate();
         await secrets.SetAsync(KeySecret(name), userKey.PrivateKey, cancellationToken);
@@ -135,7 +142,83 @@ public sealed class AzureSandboxProvider(
 
         var target = new SshTarget(address, SshPort, Username, userKey.PrivateKey, hostKey.Fingerprint);
         await WaitForSetupAsync(target, cancellationToken);
+        if (token is not null)
+        {
+            await CloneAsync(target, token, repositoriesInScope, mayPush, cancellationToken);
+        }
         _targets[name] = target;
+    }
+
+    /// <summary>Where each Repository in scope is cloned in a Sandbox: <c>/home/overseer/repositories/owner/name</c>.</summary>
+    public static string CloneDirectory(string repository) => $"/home/{Username}/repositories/{repository}";
+
+    [GeneratedRegex(@"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")]
+    private static partial Regex RepositoryNamePattern();
+
+    private async Task<string> TokenForCloningAsync(IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
+    {
+        foreach (var repository in repositoriesInScope)
+        {
+            if (!RepositoryNamePattern().IsMatch(repository) || repository.Split('/').Any(part => part is "." or ".."))
+            {
+                throw new SandboxCreationFailedException($"{repository} is not a GitHub repository as owner/name, so it can't be cloned into the Sandbox.");
+            }
+        }
+        var token = await secretReader.ReadAsync(GitHubToken.SecretName, cancellationToken);
+        return token is { Length: > 0 } && GitHubToken.IsWellFormed(token)
+            ? token
+            : throw new SandboxCreationFailedException("Set a GitHub token first: Overseer clones the Repositories in scope with it.");
+    }
+
+    /// <summary>
+    /// Clones the Repositories in scope on their default branches, with the token from a git credential helper and from
+    /// <c>gh</c>'s login, never in a remote URL. Without push access, the token and both logins are removed afterwards.
+    /// </summary>
+    private async Task CloneAsync(
+        SshTarget target, string token, IReadOnlyCollection<string> repositoriesInScope, bool mayPush, CancellationToken cancellationToken)
+    {
+        // The token reaches the Sandbox in this one command over SSH, which nothing logs; it goes in a file only its user may read.
+        await RunStepAsync(target, token, "Giving the Sandbox the GitHub token failed", $$"""
+            set -e
+            umask 077
+            mkdir -p "$HOME/.overseer"
+            printf '%s' '{{token}}' > "$HOME/.overseer/github-token"
+            git config --global credential.helper '!f() { test "$1" = get && printf "username=x-access-token\npassword=%s\n" "$(cat "$HOME/.overseer/github-token")"; }; f'
+            gh auth login --hostname github.com --with-token < "$HOME/.overseer/github-token"
+            """, cancellationToken);
+
+        foreach (var repository in repositoriesInScope)
+        {
+            var directory = CloneDirectory(repository);
+            await RunStepAsync(target, token, $"Cloning {repository} failed", $"""
+                set -e
+                export GIT_TERMINAL_PROMPT=0
+                mkdir -p '{directory}'
+                git clone --quiet 'https://github.com/{repository}.git' '{directory}'
+                """, cancellationToken);
+        }
+
+        if (!mayPush)
+        {
+            // Without the token file, the helper has nothing to give, and gh has no login: nothing in the Sandbox can write to GitHub.
+            await RunStepAsync(target, token, "Taking the GitHub credentials away from the Sandbox failed", """
+                rm -f "$HOME/.overseer/github-token"
+                gh auth logout --hostname github.com || true
+                rm -rf "$HOME/.config/gh"
+                git config --global --unset-all credential.helper || true
+                ! git config --global --get-all credential.helper
+                """, cancellationToken);
+        }
+    }
+
+    /// <summary>Runs one step of cloning, failing the creation with <paramref name="failure"/> and the step's output, without the token, when it fails.</summary>
+    private async Task RunStepAsync(SshTarget target, string token, string failure, string command, CancellationToken cancellationToken)
+    {
+        var result = await ssh.RunAsync(target, command, cancellationToken);
+        if (result.ExitCode != 0)
+        {
+            throw new SandboxCreationFailedException($"{failure}: {result.Output.Replace(token, "***").Trim()}");
+        }
     }
 
     /// <exception cref="InvalidOperationException">The Sandbox does not exist, or its key is gone.</exception>

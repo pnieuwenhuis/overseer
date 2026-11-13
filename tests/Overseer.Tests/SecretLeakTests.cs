@@ -86,7 +86,7 @@ public class SecretLeakTests(PostgresServer postgres)
         (await SaveProviderTokenAsync(overseer, "gateway", kept)).Dispose();
         (await SaveProviderTokenAsync(overseer, "azure-foundry", removed)).Dispose();
         var sandboxes = overseer.Services.GetRequiredService<SandboxRegistry>();
-        var sandbox = await sandboxes.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), [], TestContext.Current.CancellationToken);
+        var sandbox = await sandboxes.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), [], mayPush: false, TestContext.Current.CancellationToken);
         await (await sandboxes.StartAgentSessionAsync(sandbox, AgentRole.Developer, TestContext.Current.CancellationToken)).DisposeAsync();
         (await overseer.SubmitFormAsync("/settings", "provider-token-remove", new Dictionary<string, string> { ["RemoveProviderToken"] = "azure-foundry" })).Dispose();
         await (await sandboxes.StartAgentSessionAsync(sandbox, AgentRole.Developer, TestContext.Current.CancellationToken)).DisposeAsync();

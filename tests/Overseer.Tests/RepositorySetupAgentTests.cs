@@ -24,6 +24,7 @@ public class RepositorySetupAgentTests(PostgresServer postgres)
         var setup = Assert.Single(await overseer.Services.GetRequiredService<RepositorySetups>().ListAsync(TestContext.Current.CancellationToken));
         Assert.Equal(new SandboxOwner(SandboxOwnerKind.RepositorySetup, setup.Id), started.Sandbox.Owner);
         Assert.Equal(["acme/web"], overseer.Sandboxes.RepositoriesInScopeOf(started.Sandbox));
+        Assert.True(overseer.Sandboxes.MayPushOf(started.Sandbox));
     }
 
     [Fact]

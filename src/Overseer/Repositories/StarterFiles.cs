@@ -21,7 +21,7 @@ public sealed class StarterFiles(SandboxRegistry sandboxes, IGitHubGateway gitHu
         Sandbox sandbox;
         try
         {
-            sandbox = await sandboxes.CreateAsync(owner, [setup.Repository.ToString()], cancellationToken);
+            sandbox = await sandboxes.CreateAsync(owner, [setup.Repository.ToString()], mayPush: true, cancellationToken);
         }
         catch (SandboxCreationFailedException exception)
         {

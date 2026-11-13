@@ -8,11 +8,11 @@ How push is prevented is up to the implementer. One option is to remove the cred
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Creating an Azure Sandbox clones each Repository in scope into a known place, on its default branch, and only reports ready once cloning has finished
-- [ ] A clone failure (bad token, missing repository) fails the creation with a message naming the repository and GitHub's error
-- [ ] The token never appears in a remote URL, in the command output Overseer logs, or in PostgreSQL
-- [ ] In a Sandbox created without push access, `git push` and `gh` write operations fail for lack of credentials; fetching what was cloned still works
-- [ ] The fake Sandbox Provider records whether each Sandbox was created with push access, and Refinement (01) asks for none
-- [ ] The opt-in Azure provider contract test covers cloning and the denied push
+- [x] Creating an Azure Sandbox clones each Repository in scope into a known place, on its default branch, and only reports ready once cloning has finished
+- [x] A clone failure (bad token, missing repository) fails the creation with a message naming the repository and GitHub's error
+- [x] The token never appears in a remote URL, in the command output Overseer logs, or in PostgreSQL
+- [x] In a Sandbox created without push access, `git push` and `gh` write operations fail for lack of credentials; fetching what was cloned still works
+- [x] The fake Sandbox Provider records whether each Sandbox was created with push access, and Refinement (01) asks for none
+- [x] The opt-in Azure provider contract test covers cloning and the denied push

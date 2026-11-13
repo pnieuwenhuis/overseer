@@ -119,7 +119,7 @@ public class SandboxMachineSettingsTests(PostgresServer postgres)
 
     private static Task<Sandbox> CreateSandboxAsync(RunningOverseer overseer) =>
         overseer.Services.GetRequiredService<SandboxRegistry>()
-            .CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), [], TestContext.Current.CancellationToken);
+            .CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), [], mayPush: false, TestContext.Current.CancellationToken);
 
     private static FakeSandboxProvider Fake(RunningOverseer overseer) =>
         (FakeSandboxProvider)overseer.Services.GetRequiredService<ISandboxProvider>();

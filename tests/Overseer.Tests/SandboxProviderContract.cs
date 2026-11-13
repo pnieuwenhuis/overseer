@@ -1,4 +1,5 @@
 using Overseer.Cli;
+using Overseer.GitHub;
 using Overseer.Sandboxes;
 using Overseer.Secrets;
 
@@ -12,7 +13,7 @@ public abstract class SandboxProviderContract : IAsyncDisposable
 {
     private static readonly Dictionary<string, string> NoEnvironment = [];
 
-    private readonly List<Sandbox> _created = [];
+    private protected readonly List<Sandbox> _created = [];
 
     protected abstract ISandboxProvider Provider { get; }
 
@@ -221,12 +222,15 @@ public sealed class FakeSandboxProviderContract : SandboxProviderContract
 /// <summary>
 /// Opt-in: creates real Sandboxes, through your Azure CLI login, when <c>TEST_SANDBOX_SUBSCRIPTION_ID</c> and
 /// <c>TEST_SANDBOX_RESOURCE_GROUP</c> name an existing resource group to create them in. Each VM takes several minutes
-/// to set up and costs a little; every test destroys its own.
+/// to set up and costs a little; every test destroys its own. Cloning needs <c>TEST_GITHUB_TOKEN</c>, a GitHub token that
+/// reaches the repository the Sandboxes hold (<c>pnieuwenhuis/overseer</c>, or <c>TEST_SANDBOX_REPOSITORY</c>).
 /// </summary>
 public sealed class AzureSandboxProviderContract : SandboxProviderContract
 {
     private const string SubscriptionVariable = "TEST_SANDBOX_SUBSCRIPTION_ID";
     private const string ResourceGroupVariable = "TEST_SANDBOX_RESOURCE_GROUP";
+    private const string TokenVariable = "TEST_GITHUB_TOKEN";
+    private static readonly string Repository = Environment.GetEnvironmentVariable("TEST_SANDBOX_REPOSITORY") ?? "pnieuwenhuis/overseer";
 
     private readonly string _directory = Directory.CreateTempSubdirectory("overseer-azure-sandboxes-").FullName;
     private readonly AzureSandboxProvider _azure;
@@ -237,7 +241,10 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
         var resourceGroup = Environment.GetEnvironmentVariable(ResourceGroupVariable);
         Assert.SkipWhen(string.IsNullOrEmpty(subscription) || string.IsNullOrEmpty(resourceGroup),
             $"Set {SubscriptionVariable} and {ResourceGroupVariable} to an existing resource group to run the Azure Sandbox Provider contract.");
+        var token = Environment.GetEnvironmentVariable(TokenVariable);
+        Assert.SkipWhen(string.IsNullOrEmpty(token), $"Set {TokenVariable} to a GitHub token that reaches {Repository} to run the Azure Sandbox Provider contract.");
         var secrets = new FileSecretStore(Path.Combine(_directory, "secrets.json"));
+        secrets.SetAsync(GitHubToken.SecretName, token, CancellationToken.None).GetAwaiter().GetResult();
         _azure = new AzureSandboxProvider(
             new AzureSandboxSettings(subscription, resourceGroup),
             OverseerCli.ProcessEnvironment(),
@@ -249,6 +256,45 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
     }
 
     protected override ISandboxProvider Provider => _azure;
+
+    [Fact]
+    public async Task A_Sandbox_holds_each_Repository_in_scope_cloned_on_its_default_branch_without_the_token_in_its_remote()
+    {
+        var sandbox = await CreateWithPushAsync(mayPush: true);
+        var directory = AzureSandboxProvider.CloneDirectory(Repository);
+
+        var branch = await _azure.RunCommandAsync(sandbox, $"git -C '{directory}' symbolic-ref --short HEAD", TestContext.Current.CancellationToken);
+        var remote = await _azure.RunCommandAsync(sandbox, $"git -C '{directory}' remote get-url origin", TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, branch.ExitCode);
+        Assert.Equal(0, remote.ExitCode);
+        Assert.Equal($"https://github.com/{Repository}.git", remote.Output.Trim());
+    }
+
+    [Fact]
+    public async Task In_a_Sandbox_without_push_access_git_push_and_gh_fail_for_lack_of_credentials()
+    {
+        var sandbox = await CreateWithPushAsync(mayPush: false);
+        var directory = AzureSandboxProvider.CloneDirectory(Repository);
+
+        var push = await _azure.RunCommandAsync(sandbox, $"cd '{directory}' && GIT_TERMINAL_PROMPT=0 git push origin HEAD", TestContext.Current.CancellationToken);
+        var gh = await _azure.RunCommandAsync(sandbox, "gh auth status", TestContext.Current.CancellationToken);
+        var write = await _azure.RunCommandAsync(sandbox, $"gh api -X POST repos/{Repository}/issues -f title=denied", TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(0, push.ExitCode);
+        Assert.NotEqual(0, gh.ExitCode);
+        Assert.NotEqual(0, write.ExitCode);
+        var cloned = await _azure.RunCommandAsync(sandbox, $"git -C '{directory}' log -1 --format=%H", TestContext.Current.CancellationToken);
+        Assert.Equal(0, cloned.ExitCode);
+    }
+
+    private async Task<Sandbox> CreateWithPushAsync(bool mayPush)
+    {
+        var sandbox = await _azure.NameAndCreateAsync(
+            new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), SandboxMachine.Default, [Repository], TestContext.Current.CancellationToken, mayPush);
+        _created.Add(sandbox);
+        return sandbox;
+    }
 
     protected override string? AgentSessionsSkipReason => "Agent sessions in Azure Sandboxes come with the Agent Session module.";
 
@@ -271,10 +317,10 @@ public static class SandboxProviders
     /// <summary>Names a new Sandbox for <paramref name="owner"/> and creates it, as the Sandbox registry does without recording it.</summary>
     public static async Task<Sandbox> NameAndCreateAsync(
         this ISandboxProvider provider, SandboxOwner owner, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool mayPush = false)
     {
         var sandbox = provider.Name(owner);
-        await provider.CreateAsync(sandbox, machine, repositoriesInScope, cancellationToken);
+        await provider.CreateAsync(sandbox, machine, repositoriesInScope, mayPush, cancellationToken);
         return sandbox;
     }
 }

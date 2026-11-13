@@ -35,6 +35,19 @@ public class RefinementTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task The_Analyst_s_Sandbox_is_created_without_push_access()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+
+        using var started = await StartAsync(overseer, address);
+
+        var sandbox = await EventuallyAsync(async () => (await overseer.Sandboxes.ListAsync(TestContext.Current.CancellationToken)).SingleOrDefault(), "the Sandbox");
+        Assert.False(overseer.Sandboxes.MayPushOf(sandbox));
+    }
+
+    [Fact]
     public async Task Once_the_Sandbox_is_ready_an_Analyst_session_starts_in_it_told_the_Intents_text_its_Repositories_in_scope_and_what_it_may_do()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web", "acme/api");

@@ -32,7 +32,7 @@ public sealed class AzureSandboxProviderTests : IDisposable
     {
         var owner = new SandboxOwner(SandboxOwnerKind.RepositorySetup, Guid.NewGuid());
 
-        var sandbox = await Provider().NameAndCreateAsync(owner, SandboxMachine.Default, ["pnieuwenhuis/overseer"], TestContext.Current.CancellationToken);
+        var sandbox = await Provider().NameAndCreateAsync(owner, SandboxMachine.Default, [], TestContext.Current.CancellationToken);
 
         var vm = _az.CallTo("vm", "create");
         Assert.Equal(Subscription, FakeAzureCli.Value(vm, "--subscription"));
@@ -442,9 +442,108 @@ public sealed class AzureSandboxProviderTests : IDisposable
         return await task;
     }
 
+    private const string Token = "github_pat_11ABCDEF0_secretvalue";
+
+    [Fact]
+    public async Task Each_Repository_in_scope_is_cloned_after_the_Sandbox_is_set_up_and_creation_completes_only_then()
+    {
+        await GivenTokenAsync();
+
+        var sandbox = await CloneAsync(["acme/web", "acme/api"], mayPush: true);
+
+        var commands = _ssh.Runs.Select(run => run.Command).ToList();
+        var web = commands.FindIndex(command => command.Contains("git clone") && command.Contains("acme/web"));
+        var api = commands.FindIndex(command => command.Contains("git clone") && command.Contains("acme/api"));
+        Assert.True(web > commands.FindIndex(command => command.Contains("cloud-init status")));
+        Assert.True(api > web);
+        Assert.NotNull(sandbox);
+    }
+
+    [Fact]
+    public async Task The_token_is_in_no_remote_URL_and_no_clone_command()
+    {
+        await GivenTokenAsync();
+
+        await CloneAsync(["acme/web"], mayPush: true);
+
+        var clones = _ssh.Runs.Select(run => run.Command).Where(command => command.Contains("git clone")).ToList();
+        Assert.NotEmpty(clones);
+        Assert.All(clones, command => Assert.DoesNotContain(Token, command));
+        Assert.All(clones, command => Assert.DoesNotContain("x-access-token", command));
+        Assert.All(clones, command => Assert.DoesNotMatch(@"https://[^/\s]*@", command));
+        Assert.Single(_ssh.Runs.Select(run => run.Command), command => command.Contains(Token));
+    }
+
+    [Fact]
+    public async Task A_clone_that_fails_fails_the_creation_naming_the_Repository_and_GitHubs_error_without_the_token_and_removes_the_Sandbox()
+    {
+        await GivenTokenAsync();
+        _ssh.Answer = (_, command) => command.Contains("git clone") && command.Contains("acme/missing")
+            ? new CommandResult(128, $"fatal: unable to access 'https://github.com/acme/missing/': The requested URL returned error: 404 {Token}\n")
+            : new CommandResult(0, "");
+
+        var failure = await Assert.ThrowsAsync<SandboxCreationFailedException>(() => CloneAsync(["acme/web", "acme/missing"], mayPush: false));
+
+        Assert.Contains("acme/missing", failure.Message);
+        Assert.Contains("returned error: 404", failure.Message);
+        Assert.DoesNotContain(Token, failure.Message);
+        await AssertRemovedAsync(FakeAzureCli.Value(_az.CallTo("vm", "create"), "--name"));
+    }
+
+    [Fact]
+    public async Task Without_a_GitHub_token_a_Sandbox_with_Repositories_cannot_be_created()
+    {
+        var failure = await Assert.ThrowsAsync<SandboxCreationFailedException>(() => CloneAsync(["acme/web"], mayPush: false));
+
+        Assert.Contains("GitHub token", failure.Message);
+        Assert.DoesNotContain(_ssh.Runs, run => run.Command.Contains("git clone"));
+    }
+
+    [Fact]
+    public async Task A_Sandbox_without_push_access_has_its_credentials_taken_away_once_cloning_is_done()
+    {
+        await GivenTokenAsync();
+
+        await CloneAsync(["acme/web"], mayPush: false);
+
+        var commands = _ssh.Runs.Select(run => run.Command).ToList();
+        var clone = commands.FindLastIndex(command => command.Contains("git clone"));
+        var removal = commands.FindIndex(command => command.Contains(".overseer/github-token") && command.Contains("rm -f") && !command.Contains(Token));
+        Assert.True(removal > clone);
+        Assert.Contains("gh auth logout", commands[removal]);
+        Assert.Contains("credential.helper", commands[removal]);
+    }
+
+    [Fact]
+    public async Task A_Sandbox_with_push_access_keeps_its_credentials()
+    {
+        await GivenTokenAsync();
+
+        await CloneAsync(["acme/web"], mayPush: true);
+
+        Assert.DoesNotContain(_ssh.Runs, run => run.Command.Contains("gh auth logout"));
+    }
+
+    [Fact]
+    public async Task A_Repository_name_that_is_not_owner_slash_name_is_refused_before_it_reaches_a_shell()
+    {
+        await GivenTokenAsync();
+
+        var failure = await Assert.ThrowsAsync<SandboxCreationFailedException>(() => CloneAsync(["acme/web; rm -rf ~"], mayPush: false));
+
+        Assert.Contains("acme/web; rm -rf ~", failure.Message);
+        Assert.DoesNotContain(_ssh.Runs, run => run.Command.Contains("rm -rf ~"));
+    }
+
+    private Task GivenTokenAsync() => _secrets.SetAsync("github-token", Token, TestContext.Current.CancellationToken);
+
+    private Task<Sandbox> CloneAsync(string[] repositories, bool mayPush) =>
+        Provider().NameAndCreateAsync(
+            new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), SandboxMachine.Default, repositories, TestContext.Current.CancellationToken, mayPush);
+
     private Task<Sandbox> CreateAsync(AzureSandboxProvider provider, SandboxMachine? machine = null) =>
         provider.NameAndCreateAsync(
-            new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), machine ?? SandboxMachine.Default, ["pnieuwenhuis/overseer"],
+            new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), machine ?? SandboxMachine.Default, [],
             TestContext.Current.CancellationToken);
 
     private static string VirtualMachine(Sandbox sandbox) => sandbox.ResourceId.Split('/').Last();

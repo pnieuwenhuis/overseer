@@ -24,7 +24,7 @@ public sealed class SandboxRegistry(
     /// Completes once the Sandbox is ready for use.
     /// </summary>
     /// <inheritdoc cref="ISandboxProvider.CreateAsync"/>
-    public async Task<Sandbox> CreateAsync(SandboxOwner owner, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
+    public async Task<Sandbox> CreateAsync(SandboxOwner owner, IReadOnlyCollection<string> repositoriesInScope, bool mayPush, CancellationToken cancellationToken)
     {
         var machine = await settings.GetSandboxMachineAsync(cancellationToken);
         // Recorded before the provider is asked, so that whatever stops Overseer while the Sandbox is provisioned, a crash
@@ -43,7 +43,7 @@ public sealed class SandboxRegistry(
         }
         try
         {
-            await provider.CreateAsync(sandbox, machine, repositoriesInScope, cancellationToken);
+            await provider.CreateAsync(sandbox, machine, repositoriesInScope, mayPush, cancellationToken);
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {

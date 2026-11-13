@@ -111,7 +111,7 @@ public sealed class RunningOverseer : IAsyncDisposable
     public async Task<AgentSessionStart> StartAgentSessionAsync(AgentRole role)
     {
         var sandboxes = _app.Services.GetRequiredService<SandboxRegistry>();
-        var sandbox = await sandboxes.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), [], TestContext.Current.CancellationToken);
+        var sandbox = await sandboxes.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), [], mayPush: false, TestContext.Current.CancellationToken);
         await using var session = await sandboxes.StartAgentSessionAsync(sandbox, role, TestContext.Current.CancellationToken);
         return Sandboxes.AgentSessionsStarted.Last();
     }

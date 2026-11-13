@@ -19,8 +19,12 @@ public interface ISandboxProvider
     /// machine. Completes once the Sandbox is ready for use.
     /// </summary>
     /// <param name="repositoriesInScope">GitHub repositories as <c>owner/name</c>.</param>
+    /// <param name="mayPush">
+    /// Whether the Sandbox may push to the Repositories in scope. When not, the credentials it cloned with are gone once
+    /// cloning is done, so that nothing in it, whatever it is told, can push or write to GitHub.
+    /// </param>
     /// <exception cref="SandboxCreationFailedException">The Sandbox could not be created; the message says why.</exception>
-    Task CreateAsync(Sandbox sandbox, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken);
+    Task CreateAsync(Sandbox sandbox, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, bool mayPush, CancellationToken cancellationToken);
 
     /// <summary>Runs a shell command in the Sandbox and waits for it to finish.</summary>
     Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken);

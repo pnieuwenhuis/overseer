@@ -251,7 +251,7 @@ public sealed class Refinements(
         {
             sandbox = await sandboxes.CreateAsync(
                 new SandboxOwner(SandboxOwnerKind.Intent, intent.Id), [.. intent.RepositoriesInScope.Select(repository => repository.ToString())],
-                cancellationToken);
+                mayPush: false, cancellationToken);
         }
         catch (SandboxCreationFailedException exception)
         {

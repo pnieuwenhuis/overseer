@@ -193,6 +193,17 @@ public class FakeSandboxProviderTests
         Assert.Equal([new AgentMessage(sandbox, AgentRole.Developer, "Start")], _provider.MessagesSent);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Whether_a_Sandbox_may_push_is_recorded_with_it(bool mayPush)
+    {
+        var sandbox = await _provider.NameAndCreateAsync(
+            new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), SandboxMachine.Default, ["acme/web"], TestContext.Current.CancellationToken, mayPush);
+
+        Assert.Equal(mayPush, _provider.MayPushOf(sandbox));
+    }
+
     [Fact]
     public async Task Destruction_can_fail_leaving_the_Sandbox_and_succeed_on_retry()
     {

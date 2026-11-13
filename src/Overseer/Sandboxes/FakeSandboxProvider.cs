@@ -8,6 +8,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     private readonly ConcurrentDictionary<string, Sandbox> _sandboxes = new();
     private readonly ConcurrentDictionary<string, SandboxMachine> _machines = new();
     private readonly ConcurrentDictionary<string, IReadOnlyList<string>> _repositoriesInScope = new();
+    private readonly ConcurrentDictionary<string, bool> _mayPush = new();
     private readonly ConcurrentDictionary<string, Sequence<CommandResult>> _commands = new();
     private readonly ConcurrentDictionary<AgentRole, Sequence<FakeAgentSession>> _agentSessions = new();
     private readonly ConcurrentQueue<string> _creationFailures = new();
@@ -64,10 +65,17 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
             ? repositories
             : throw new InvalidOperationException($"Sandbox {sandbox.ResourceId} was never created.");
 
+    /// <summary>Whether the Sandbox was created with push access, also after it has been destroyed.</summary>
+    /// <exception cref="InvalidOperationException">This provider never created the Sandbox.</exception>
+    public bool MayPushOf(Sandbox sandbox) =>
+        _mayPush.TryGetValue(sandbox.ResourceId, out var mayPush)
+            ? mayPush
+            : throw new InvalidOperationException($"Sandbox {sandbox.ResourceId} was never created.");
+
     public Sandbox Name(SandboxOwner owner) => new($"fake-sandbox-{Guid.NewGuid():N}", owner);
 
     public async Task CreateAsync(
-        Sandbox sandbox, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
+        Sandbox sandbox, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, bool mayPush, CancellationToken cancellationToken)
     {
         await Task.Delay(ProvisioningDelay, time, cancellationToken);
         if (_creationFailures.TryDequeue(out var error))
@@ -77,6 +85,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
 
         _machines[sandbox.ResourceId] = machine;
         _repositoriesInScope[sandbox.ResourceId] = [.. repositoriesInScope];
+        _mayPush[sandbox.ResourceId] = mayPush;
         _sandboxes[sandbox.ResourceId] = sandbox;
     }
 

@@ -51,7 +51,7 @@ internal sealed class SmokeTestSandboxes(
         _sandboxes[id] = new SmokeTestSandbox("Creating");
         InBackground(id, async cancellationToken =>
         {
-            var sandbox = await registry.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, id), [], cancellationToken);
+            var sandbox = await registry.CreateAsync(new SandboxOwner(SandboxOwnerKind.Intent, id), [], mayPush: false, cancellationToken);
             _created[id] = sandbox;
             return new SmokeTestSandbox("Ready", sandbox.ResourceId);
         });
