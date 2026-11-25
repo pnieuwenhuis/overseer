@@ -52,6 +52,18 @@
                             case SessionEntryKind.ToolCall:
                                 <li class="session-tool-call"><span class="session-tool-label">Tool call</span> <code class="session-tool-title">@entry.Text</code></li>
                                 break;
+                            case SessionEntryKind.Question:
+                                <li class="session-question">
+                                    <span class="session-question-label">The agent asked</span>
+                                    <span class="session-question-text">@entry.Text</span>
+                                </li>
+                                break;
+                            case SessionEntryKind.Answer:
+                                <li class="session-answer">
+                                    <span class="session-answer-label">Your answer</span>
+                                    <span class="session-answer-text">@entry.Text</span>
+                                </li>
+                                break;
                             case SessionEntryKind.UserMessage:
                                 <li class="session-user-message" data-delivery="Delivered">
                                     <span class="session-user-label">You</span>

@@ -139,8 +139,11 @@ public sealed class SessionLog : IAsyncDisposable
     /// <summary>Told what the session's agent is doing whenever the log grows, and <c>null</c> once the session has ended.</summary>
     private readonly Action<SessionActivity?> _report;
 
-    /// <summary>Told whenever the session's messages change, or it stops taking them.</summary>
-    private readonly Action _messagesChanged;
+    /// <summary>
+    /// Told whenever the session's messages change, or it stops taking them, and as its agent's question and the answer to it are
+    /// written to the log.
+    /// </summary>
+    private readonly Action _changed;
 
     private readonly Action<SessionLog> _closed;
 
@@ -170,13 +173,16 @@ public sealed class SessionLog : IAsyncDisposable
     /// <summary>The entry the agent reported last.</summary>
     private Entry? _latest;
 
+    /// <summary>The entry the agent began last in the turn; <c>null</c> when it has begun none.</summary>
+    private Entry? _lastBegun;
+
     private SessionActivity? _activity;
 
     private int _entries;
 
     internal SessionLog(
         SandboxRegistry sandboxes, IDbContextFactory<OverseerDbContext> databases, Guid intentId, int taskNumber, int number,
-        Action<SessionActivity?> report, Action messagesChanged, Action<SessionLog> closed)
+        Action<SessionActivity?> report, Action changed, Action<SessionLog> closed)
     {
         _sandboxes = sandboxes;
         _databases = databases;
@@ -184,7 +190,7 @@ public sealed class SessionLog : IAsyncDisposable
         _taskNumber = taskNumber;
         Number = number;
         _report = report;
-        _messagesChanged = messagesChanged;
+        _changed = changed;
         _closed = closed;
     }
 
@@ -229,7 +235,7 @@ public sealed class SessionLog : IAsyncDisposable
         {
             _inbox.Release();
         }
-        _messagesChanged();
+        _changed();
         return true;
     }
 
@@ -263,7 +269,7 @@ public sealed class SessionLog : IAsyncDisposable
         {
             _inbox.Release();
         }
-        _messagesChanged();
+        _changed();
         return null;
     }
 
@@ -291,6 +297,7 @@ public sealed class SessionLog : IAsyncDisposable
         var arrived = Channel.CreateUnbounded<AgentUpdate>();
         var reading = ReadAsync(turn.Updates, arrived.Writer, cancellationToken);
         _calls.Clear();
+        _lastBegun = null;
         var ended = false;
         try
         {
@@ -333,17 +340,59 @@ public sealed class SessionLog : IAsyncDisposable
                 .Where(stored => stored.IntentId == _intentId && stored.TaskNumber == _taskNumber
                     && stored.SessionNumber == Number && stored.Number == message.Number)
                 .ExecuteDeleteAsync(CancellationToken.None);
-            database.AgentSessionEntries.Add(new AgentSessionEntryRecord
-            {
-                IntentId = _intentId, TaskNumber = _taskNumber, SessionNumber = Number, Number = ++_entries,
-                Kind = SessionEntryKind.UserMessage, Text = message.Text,
-            });
+            database.AgentSessionEntries.Add(Record(++_entries, SessionEntryKind.UserMessage, message.Text));
             await database.SaveChangesAsync(CancellationToken.None);
             await transaction.CommitAsync(CancellationToken.None);
         }
         _waiting.TryDequeue(out _);
-        _messagesChanged();
+        _changed();
     }
+
+    /// <summary>
+    /// Writes the question the turn just taken ended with to the log. Where the agent asked it in the last thing it said, that
+    /// message is the question's entry from now on, so that the log doesn't hold it twice.
+    /// </summary>
+    /// <param name="question">As <see cref="SandboxRegistry.WithoutSecretsAsync"/> gives it.</param>
+    // Not cancelled, like every write of the log.
+    public async Task AskedAsync(string question)
+    {
+        if (_lastBegun is { Kind: SessionEntryKind.Message } said && said.Stored == question.Trim())
+        {
+            await using var database = await _databases.CreateDbContextAsync(CancellationToken.None);
+            await Stored(database, said.Number).ExecuteUpdateAsync(
+                stored => stored.SetProperty(record => record.Kind, SessionEntryKind.Question), CancellationToken.None);
+        }
+        else
+        {
+            await AddAsync(SessionEntryKind.Question, question);
+        }
+        _changed();
+    }
+
+    /// <summary>Writes the human's answer to the question asked last to the log.</summary>
+    /// <param name="answer">As <see cref="TaskQuestions.AskAsync"/> gave it.</param>
+    public async Task AnsweredAsync(string answer)
+    {
+        await AddAsync(SessionEntryKind.Answer, answer);
+        _changed();
+    }
+
+    private async Task AddAsync(SessionEntryKind kind, string text)
+    {
+        await using var database = await _databases.CreateDbContextAsync(CancellationToken.None);
+        database.AgentSessionEntries.Add(Record(++_entries, kind, text));
+        await database.SaveChangesAsync(CancellationToken.None);
+    }
+
+    private AgentSessionEntryRecord Record(int number, SessionEntryKind kind, string text) => new()
+    {
+        IntentId = _intentId, TaskNumber = _taskNumber, SessionNumber = Number, Number = number, Kind = kind, Text = text,
+    };
+
+    /// <summary>The session's entry with this number, as stored.</summary>
+    private IQueryable<AgentSessionEntryRecord> Stored(OverseerDbContext database, int number) =>
+        database.AgentSessionEntries.Where(stored => stored.IntentId == _intentId && stored.TaskNumber == _taskNumber
+            && stored.SessionNumber == Number && stored.Number == number);
 
     private static async Task ReadAsync(
         IAsyncEnumerable<AgentUpdate> updates, ChannelWriter<AgentUpdate> arrived, CancellationToken cancellationToken)
@@ -371,7 +420,7 @@ public sealed class SessionLog : IAsyncDisposable
             switch (update)
             {
                 case AgentUpdate.Message said:
-                    _message ??= new Entry(++_entries, SessionEntryKind.Message);
+                    _message ??= _lastBegun = new Entry(++_entries, SessionEntryKind.Message);
                     _message.Reported.Append(said.Text);
                     _unsaved.Add(_message);
                     _latest = _message;
@@ -380,7 +429,7 @@ public sealed class SessionLog : IAsyncDisposable
                     if (!_calls.TryGetValue(call.Id, out var entry))
                     {
                         EndMessage();
-                        _calls[call.Id] = entry = new Entry(++_entries, SessionEntryKind.ToolCall) { Whole = true };
+                        _calls[call.Id] = entry = _lastBegun = new Entry(++_entries, SessionEntryKind.ToolCall) { Whole = true };
                     }
                     entry.Reported.Clear().Append(call.Title);
                     _unsaved.Add(entry);
@@ -417,17 +466,11 @@ public sealed class SessionLog : IAsyncDisposable
             {
                 if (entry.Stored is null)
                 {
-                    database.AgentSessionEntries.Add(new AgentSessionEntryRecord
-                    {
-                        IntentId = _intentId, TaskNumber = _taskNumber, SessionNumber = Number, Number = entry.Number,
-                        Kind = entry.Kind, Text = text,
-                    });
+                    database.AgentSessionEntries.Add(Record(entry.Number, entry.Kind, text));
                 }
                 else
                 {
-                    await database.AgentSessionEntries
-                        .Where(stored => stored.IntentId == _intentId && stored.TaskNumber == _taskNumber
-                            && stored.SessionNumber == Number && stored.Number == entry.Number)
+                    await Stored(database, entry.Number)
                         .ExecuteUpdateAsync(stored => stored.SetProperty(record => record.Text, text), CancellationToken.None);
                 }
             }
@@ -495,7 +538,9 @@ public sealed record SessionActivity(SessionEntryKind Kind, string Line)
 }
 
 /// <summary>The log of one agent session on a Task: the <paramref name="Number"/>th on it, from 1.</summary>
-/// <param name="Entries">What the agent said, the tools it called and the messages delivered to it, in order.</param>
+/// <param name="Entries">
+/// What the agent said, the tools it called, the messages delivered to it, and the questions it asked with the answers, in order.
+/// </param>
 /// <param name="Undelivered">
 /// The human's messages to its agent that aren't delivered, in the order they were sent: waiting while the session takes messages,
 /// and otherwise never delivered.
@@ -504,8 +549,11 @@ public sealed record SessionActivity(SessionEntryKind Kind, string Line)
 public sealed record LoggedSession(
     int Number, AgentRole Role, IReadOnlyList<LoggedEntry> Entries, IReadOnlyList<string> Undelivered, bool TakesMessages);
 
-/// <summary>One thing in a session's log: a whole message of the agent's, a tool it called, or a message delivered to it.</summary>
-/// <param name="Text">The agent's Markdown, the tool and what it was called on, or what the human wrote.</param>
+/// <summary>
+/// One thing in a session's log: a whole message of the agent's, a tool it called, a message delivered to it, a question it asked,
+/// or the answer it was given.
+/// </summary>
+/// <param name="Text">The agent's Markdown or question, the tool and what it was called on, or what the human wrote.</param>
 public sealed record LoggedEntry(SessionEntryKind Kind, string Text);
 
 public enum SessionEntryKind
@@ -518,6 +566,12 @@ public enum SessionEntryKind
 
     /// <summary>A message of the human's, delivered to the agent.</summary>
     UserMessage,
+
+    /// <summary>A question the agent ended a turn with.</summary>
+    Question,
+
+    /// <summary>The human's answer to the agent's question.</summary>
+    Answer,
 }
 
 /// <summary>An agent session on a Task, as PostgreSQL holds it.</summary>

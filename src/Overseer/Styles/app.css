@@ -1610,8 +1610,11 @@
         white-space: pre-wrap;
     }
 
-    /* The human's messages in a log, set apart from what the agent says; dashed while waiting to be delivered. */
-    .session-user-message {
+    /* The human's messages and answers, and the agent's questions, set apart from what else the agent says; a message is dashed
+       while waiting to be delivered. */
+    .session-user-message,
+    .session-question,
+    .session-answer {
         display: flex;
         flex-direction: column;
         gap: 0.25rem;
@@ -1625,12 +1628,15 @@
         border-style: dashed;
     }
 
+    .session-question,
     .session-user-message[data-delivery="NotDelivered"] {
         background: var(--color-warning-soft);
         border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
     }
 
     .session-user-label,
+    .session-question-label,
+    .session-answer-label,
     .agent-message-unsent-label {
         color: var(--color-muted);
         font-size: 0.6875rem;
@@ -1639,11 +1645,14 @@
         text-transform: uppercase;
     }
 
+    .session-question-label,
     .session-user-message[data-delivery="NotDelivered"] .session-user-label {
         color: var(--color-warning);
     }
 
     .session-user-text,
+    .session-question-text,
+    .session-answer-text,
     .agent-message-unsent {
         overflow-wrap: anywhere;
         white-space: pre-wrap;

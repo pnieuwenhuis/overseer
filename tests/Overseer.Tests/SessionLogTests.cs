@@ -98,6 +98,58 @@ public class SessionLogTests(PostgresServer postgres)
         Assert.Equal([Message("Added it."), Message("Fixed it.")], session.Entries);
     }
 
+    [Fact]
+    public async Task The_Tasks_stream_shows_the_agents_question_and_your_answer_where_they_came_and_keeps_them_with_the_log()
+    {
+        var connectionString = await postgres.CreateEmptyDatabaseAsync();
+        string address;
+        IReadOnlyList<ShownEntry> followed;
+        await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"]))
+        {
+            // As a question asked with the agent's own tool for it, which is no update of the turn.
+            first.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(
+                new FakeAgentTurn([Says("Reading the code.")], new AgentOutcome.AskedQuestion("Which port,\n<80> or <8080>?")),
+                new FakeAgentTurn([Says("Added.")], new AgentOutcome.Done())));
+            address = await ImplementationTests.ImplementingAsync(first, "Export data", "acme/web");
+            await TaskQuestionTests.AskedAsync(first, address);
+            Assert.Equal(
+                [Message("Reading the code."), Question("Which port,\n<80> or <8080>?")],
+                Assert.Single(SessionsOn(await GetAsync(first, address + "/tasks/1"))).Entries);
+
+            using var answered = await TaskQuestionTests.AnswerAsync(first, address, 1, "<8080>.");
+
+            await TaskTests.StatesAsync(first, address, "Done");
+            followed = Assert.Single(SessionsOn(await GetAsync(first, address + "/tasks/1"))).Entries;
+        }
+
+        await using var second = await StartWithRepositoriesAsync(connectionString, []);
+        var restarted = Assert.Single(SessionsOn(await GetAsync(second, address + "/tasks/1"))).Entries;
+
+        foreach (var entries in new[] { followed, restarted })
+        {
+            Assert.Equal(
+                [Message("Reading the code."), Question("Which port,\n<80> or <8080>?"), Answer("<8080>."), Message("Added.")],
+                entries);
+        }
+    }
+
+    [Fact]
+    public async Task A_question_the_agent_asked_in_its_last_message_shows_in_the_stream_once_as_its_question()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(new FakeAgentTurn(
+            [Says("Reading the code."), Calls("1", "read: src/server.ts"), Says($"\n\nIs {Token} the "), Says("right key?\n")],
+            new AgentOutcome.AskedQuestion($"Is {Token} the right key?"))));
+
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+
+        await TaskQuestionTests.AskedAsync(overseer, address);
+        Assert.Equal(
+            [Message("Reading the code."), ToolCall("read: src/server.ts"), Question("Is *** the right key?")],
+            Assert.Single(SessionsOn(await GetAsync(overseer, address + "/tasks/1"))).Entries);
+        await AssertNowhereAsync(overseer, Token);
+    }
+
     [Theory]
     [InlineData("model provider token", ProviderToken)]
     [InlineData("GitHub token", Token)]
@@ -300,6 +352,10 @@ public class SessionLogTests(PostgresServer postgres)
 
     private static ShownEntry ToolCall(string title) => new("tool-call", title);
 
+    private static ShownEntry Question(string text) => new("question", text);
+
+    private static ShownEntry Answer(string text) => new("answer", text);
+
     /// <summary>Waits for the Task's page to show its sessions as <paramref name="expected"/> wants them.</summary>
     private static Task<string> TaskPageAsync(
         RunningOverseer overseer, string address, Func<IReadOnlyList<ShownSession>, bool> expected) =>
@@ -317,10 +373,13 @@ public class SessionLogTests(PostgresServer postgres)
     private static IReadOnlyList<ShownSession> SessionsOn(string page) =>
         [.. Regex.Matches(page, "<section class=\"agent-session\"[^>]*>(.*?)</section>", RegexOptions.Singleline).Select(session => new ShownSession(
             ElementText(session.Groups[1].Value, "agent-session-heading"),
-            [.. Regex.Matches(session.Groups[1].Value, "<li class=\"session-(message|tool-call)\"[^>]*>(.*?)</li>", RegexOptions.Singleline)
-                .Select(entry => new ShownEntry(entry.Groups[1].Value, entry.Groups[1].Value == "message"
-                    ? WebUtility.HtmlDecode(entry.Groups[2].Value)
-                    : ElementText(entry.Groups[2].Value, "session-tool-title")))]))];
+            [.. Regex.Matches(session.Groups[1].Value, "<li class=\"session-(message|tool-call|question|answer)\"[^>]*>(.*?)</li>", RegexOptions.Singleline)
+                .Select(entry => new ShownEntry(entry.Groups[1].Value, entry.Groups[1].Value switch
+                {
+                    "message" => WebUtility.HtmlDecode(entry.Groups[2].Value),
+                    "tool-call" => ElementText(entry.Groups[2].Value, "session-tool-title"),
+                    var kind => ElementText(entry.Groups[2].Value, $"session-{kind}-text"),
+                }))]))];
 
     private sealed record ShownSession(string Heading, IReadOnlyList<ShownEntry> Entries);
 

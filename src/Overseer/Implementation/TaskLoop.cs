@@ -181,7 +181,10 @@ public sealed class TaskLoop(
             {
                 // The agent has tokens to work with, so it can say one; a secret never goes into PostgreSQL.
                 var question = await sandboxes.WithoutSecretsAsync(asked.Question, cancellationToken);
+                // Ahead of the question that turns the Intent orange, so that the stream shows it by then.
+                await log.AskedAsync(question);
                 var answer = await questions.AskAsync(intent.Id, task.Number, question, changed, cancellationToken);
+                await log.AnsweredAsync(answer);
                 // The answer may be a long time coming, and the token replaced meanwhile.
                 if (await RefreshGitHubTokenAsync(intent, sandbox, cancellationToken) is { } notRefreshedSince)
                 {
