@@ -10,7 +10,8 @@ namespace Overseer.Implementation;
 
 /// <summary>
 /// Each Intent's own Task list, which the Task Runner carries out, kept in PostgreSQL. It starts as the Approved Spec's Tasks and
-/// is kept apart from them, as the Approved Spec stays locked; a failing final verification adds a fix-up Task to it.
+/// is kept apart from them, as the Approved Spec stays locked: the human can change a Failed Task of this list, and a failing
+/// final verification adds a fix-up Task to it.
 /// </summary>
 public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, SpecStore specs)
 {
@@ -162,6 +163,25 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
         database.IntentTasks
             .Where(task => task.IntentId == intentId && task.State == IntentTaskState.Running)
             .ExecuteUpdateAsync(task => task.SetProperty(record => record.State, IntentTaskState.Pending), cancellationToken);
+
+    /// <summary>
+    /// Puts the Intent's Failed Task with this number back to Pending in <paramref name="database"/>'s transaction, to be carried
+    /// out again, changed as <paramref name="edit"/> has it when there is one. The Approved Spec's Task stays as it is.
+    /// </summary>
+    internal static async Task ReopenAsync(
+        OverseerDbContext database, Guid intentId, int number, SpecTask? edit, CancellationToken cancellationToken)
+    {
+        var task = await database.IntentTasks.SingleAsync(task => task.IntentId == intentId && task.Number == number, cancellationToken);
+        task.State = IntentTaskState.Pending;
+        if (edit is not null)
+        {
+            task.Title = edit.Title;
+            task.Description = edit.Description;
+            task.Role = edit.Role;
+            task.Repositories = [.. edit.Repositories.Select(repository => repository.ToString())];
+        }
+        await database.SaveChangesAsync(cancellationToken);
+    }
 
     private static IntentTask Read(IntentTaskRecord task) => new(
         task.Number, task.Title, task.Description, task.Role, [.. task.Repositories.Select(RepositoryName.Parse)], task.State,

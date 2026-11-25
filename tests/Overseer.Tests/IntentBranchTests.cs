@@ -125,6 +125,66 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         Assert.Empty(ChangedFiles(clone, commands));
     }
 
+    [Fact]
+    public async Task The_Intent_branch_changes_the_default_branch_once_work_it_doesnt_have_is_pushed_whatever_the_default_branch_gains()
+    {
+        var commands = await CommandsOverseerRunsAsync();
+        var clone = Clone();
+        Run(clone, commands.CheckOut);
+        // The default branch moves on, which changes nothing of the Intent's.
+        var seed = Path.Combine(_directory, "seed");
+        Write(seed, "elsewhere.txt", "by someone else");
+        Git(seed, "add --all");
+        Git(seed, "commit --quiet -m 'By someone else'");
+        Git(seed, $"push --quiet '{Path.Combine(_directory, "origin.git")}' trunk");
+        Git(clone, "fetch --quiet origin");
+        Assert.Empty(Files(clone, commands.Differs));
+        Assert.Empty(Files(clone, commands.IntentBranchChanges));
+
+        Write(clone, "untracked.txt", "new");
+        Write(clone, "ignored.log", "noise");
+        File.Delete(Path.Combine(clone, "deleted.txt"));
+
+        Assert.Equal(["deleted.txt", "untracked.txt"], Files(clone, commands.Differs).Order(StringComparer.Ordinal));
+        // Not on GitHub yet.
+        Assert.Empty(Files(clone, commands.IntentBranchChanges));
+
+        Run(clone, commands.Commit);
+        Run(clone, commands.Push);
+        // As a build leaves behind where .gitignore doesn't cover it: no part of the Intent branch.
+        Write(clone, "build.out", "built");
+
+        Assert.Equal(["deleted.txt", "untracked.txt"], Files(clone, commands.IntentBranchChanges).Order(StringComparer.Ordinal));
+
+        // Taken back again: nothing is left for a pull request, though the branch has commits of its own.
+        File.Delete(Path.Combine(clone, "build.out"));
+        File.Delete(Path.Combine(clone, "untracked.txt"));
+        Git(clone, "checkout --quiet origin/trunk -- deleted.txt");
+        Assert.Empty(Files(clone, commands.Differs));
+        Run(clone, commands.Commit);
+        Run(clone, commands.Push);
+        Assert.Empty(Files(clone, commands.IntentBranchChanges));
+    }
+
+    [Fact]
+    public async Task An_empty_repository_changes_nothing_until_something_is_pushed_to_it()
+    {
+        var commands = await CommandsOverseerRunsAsync();
+        var clone = Path.Combine(_directory, "clone");
+        Git(_directory, "init --quiet --bare --initial-branch=trunk origin.git");
+        Git(_directory, "clone --quiet origin.git clone");
+        Run(clone, commands.CheckOut);
+        Assert.Empty(Files(clone, commands.Differs));
+        Assert.Empty(Files(clone, commands.IntentBranchChanges));
+
+        Write(clone, "README.md", "# New");
+        Assert.Equal(["README.md"], Files(clone, commands.Differs));
+        Run(clone, commands.Commit);
+        Run(clone, commands.Push);
+
+        Assert.Equal(["README.md"], Files(clone, commands.IntentBranchChanges));
+    }
+
     /// <summary>
     /// A clone, on its default branch, of a repository on "GitHub" holding one commit, with no git identity of its own.
     /// </summary>
@@ -147,12 +207,14 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done())));
-        overseer.Sandboxes.ScriptCommandsContaining("git ls-files", new CommandResult(0, "a.txt\0"));
+        const string changedFilesAsked = "base=$(git rev-parse --verify --quiet refs/overseer/verified";
+        overseer.Sandboxes.ScriptCommandsContaining(changedFilesAsked, new CommandResult(0, "a.txt\0"));
         var spec = SpecTests.Spec();
         spec["tasks"] = new System.Text.Json.Nodes.JsonArray(SpecTests.TaskJson(Title, "Every order as CSV.", ["acme/web"]));
         var address = await ImplementationTests.AwaitingApprovalAsync(overseer, spec, "Export data", "acme/web");
         using var approved = await ImplementationTests.ApproveAsync(overseer, address, start: true);
-        await TaskTests.StatesAsync(overseer, address, "Done");
+        // Once the final verification has compared the repository, which has no manifest here, with its default branch.
+        await FinalVerificationTests.InReviewAsync(overseer, address);
 
         var clone = Path.Combine(_directory, "clone");
         string Command(string holding) =>
@@ -160,11 +222,15 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
                 .Replace(Sandbox.CloneDirectory(new RepositoryName("acme", "web")), clone);
         return new Commands(
             $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}",
-            Command("git config user.name"), Command("git ls-files"), Command("git commit"), Command("git push"));
+            Command("git config user.name"), Command(changedFilesAsked), Command("git commit"), Command("git push"),
+            Command("base=$(git merge-base refs/remotes/origin/HEAD HEAD"), Command("if git rev-parse --verify --quiet refs/overseer/verified"));
     }
 
-    private IReadOnlyList<string> ChangedFiles(string clone, Commands commands) =>
-        Run(clone, commands.ChangedFiles).Split('\0', StringSplitOptions.RemoveEmptyEntries);
+    private IReadOnlyList<string> ChangedFiles(string clone, Commands commands) => Files(clone, commands.ChangedFiles);
+
+    /// <summary>The files a command that asks git for some prints.</summary>
+    private IReadOnlyList<string> Files(string clone, string command) =>
+        Run(clone, command).Split('\0', StringSplitOptions.RemoveEmptyEntries);
 
     private static void Write(string directory, string path, string content)
     {
@@ -211,5 +277,8 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
     }
 
     /// <param name="Branch">The Intent branch.</param>
-    private sealed record Commands(string Branch, string CheckOut, string ChangedFiles, string Commit, string Push);
+    /// <param name="Differs">Asks what the clone holds differently from the default branch.</param>
+    /// <param name="IntentBranchChanges">Asks what the Intent branch changes of the default branch.</param>
+    private sealed record Commands(
+        string Branch, string CheckOut, string ChangedFiles, string Commit, string Push, string Differs, string IntentBranchChanges);
 }

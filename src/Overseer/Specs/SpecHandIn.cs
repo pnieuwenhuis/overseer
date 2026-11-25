@@ -67,14 +67,30 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
         ["apiEndpointChanges"] = edit.ApiEndpointChanges,
         ["dataModelChanges"] = edit.DataModelChanges,
         ["uiChanges"] = edit.UiChanges,
-        ["tasks"] = new JsonArray([.. edit.Tasks.Select(task => new JsonObject
-        {
-            ["title"] = task.Title,
-            ["description"] = task.Description,
-            ["role"] = task.Role,
-            ["repositories"] = new JsonArray([.. task.Repositories.Select(repository => JsonValue.Create(repository))]),
-        })]),
+        ["tasks"] = new JsonArray([.. edit.Tasks.Select(InFormat)]),
     }.ToJsonString(), SpecWording.Editor);
+
+    /// <summary>
+    /// Checks the user's edit of one Task, number <paramref name="number"/>, as <see cref="Check"/> checks each Task of an edited
+    /// Spec: the Task it makes, or every reason it isn't valid, in the words of the editor. What a Spec's Tasks must be together,
+    /// such as creating each missing Repository Manifest, isn't asked of one Task.
+    /// </summary>
+    public HandedIn<SpecTask> CheckTask(int number, EditedTask edit)
+    {
+        var errors = new List<string>();
+        var task = ReadTask(
+            JsonSerializer.SerializeToElement(InFormat(edit)), number, SpecWording.Editor, errors, new HashSet<RepositoryName>());
+        return task is null ? new HandedIn<SpecTask>.Invalid(errors) : new HandedIn<SpecTask>.Valid(task);
+    }
+
+    /// <summary>An edited Task in the Analyst's format.</summary>
+    private static JsonObject InFormat(EditedTask task) => new()
+    {
+        ["title"] = task.Title,
+        ["description"] = task.Description,
+        ["role"] = task.Role,
+        ["repositories"] = new JsonArray([.. task.Repositories.Select(repository => JsonValue.Create(repository))]),
+    };
 
     protected override HandedIn<Spec> Validate(string content) => Validate(content, SpecWording.Analyst);
 
@@ -179,24 +195,32 @@ internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInSco
             errors.Add(wording.NoTasks());
             return [];
         }
-        return ReadEach(tasks, "Task", ["title", "description", "role", "repositories"], errors, (task, number) =>
+        return ReadEach(
+            tasks, "Task", ["title", "description", "role", "repositories"], errors,
+            (task, number) => ReadTask(task, number, wording, errors, created));
+    }
+
+    /// <summary>Task <paramref name="number"/>; <c>null</c>, with every error, when it is wrong.</summary>
+    /// <param name="manifestsCreated">Gains the repositories whose Repository Manifest it creates, also when it is wrong.</param>
+    private SpecTask? ReadTask(
+        JsonElement task, int number, SpecWording wording, List<string> errors, ISet<RepositoryName> manifestsCreated)
+    {
+        var before = errors.Count;
+        var title = TextOf(task, "title");
+        if (title is null)
         {
-            var before = errors.Count;
-            var title = TextOf(task, "title");
-            if (title is null)
-            {
-                errors.Add(wording.NoTitle(number));
-            }
-            var description = TextOf(task, "description");
-            if (description is null)
-            {
-                errors.Add(wording.NoDescription(number));
-            }
-            var role = ReadRole(task, number, wording, errors);
-            var repositories = ReadRepositories(task, number, wording, errors);
-            created.UnionWith(repositories.Where(repository => SpecTask.CreatesManifestOf(repository, repositories, title, description)));
-            return errors.Count == before ? new SpecTask(number, title!, description!, role!.Value, repositories) : null;
-        });
+            errors.Add(wording.NoTitle(number));
+        }
+        var description = TextOf(task, "description");
+        if (description is null)
+        {
+            errors.Add(wording.NoDescription(number));
+        }
+        var role = ReadRole(task, number, wording, errors);
+        var repositories = ReadRepositories(task, number, wording, errors);
+        manifestsCreated.UnionWith(
+            repositories.Where(repository => SpecTask.CreatesManifestOf(repository, repositories, title, description)));
+        return errors.Count == before ? new SpecTask(number, title!, description!, role!.Value, repositories) : null;
     }
 
     /// <summary>The role of Task <paramref name="number"/>, Designer or Developer; <c>null</c>, with the error, when it has neither.</summary>

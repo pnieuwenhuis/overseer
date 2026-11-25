@@ -1,5 +1,5 @@
 @* An Intent's Tasks in the order they are carried out, each with its role, the repositories it touches, its state and the verification
-   attempts on it. *@
+   attempts on it; a Failed Task also with what recovers it. *@
 @using Overseer.Implementation
 
 <section class="intent-tasks" aria-label="Tasks">
@@ -18,13 +18,40 @@
                         <span class="intent-task-push">Verified, not pushed yet</span>
                     }
                 </p>
-                <TaskAttempts Attempts="@Attempts.Where(attempt => attempt.TaskNumber == task.Number).ToList()" />
+                @{
+                    var attempts = Attempts.Where(attempt => attempt.TaskNumber == task.Number).ToList();
+                }
+                <TaskAttempts Attempts="attempts" />
+                @* Offered once the implementation has stopped at it, which comes just after the Task is a Failed Task. *@
+                @if (task.State == IntentTaskState.Failed && ImplementationFailed)
+                {
+                    <div class="buttons">
+                        @* A plain form, posted by the browser, so Retry works the same with or without the live connection. *@
+                        <form method="post" action="intents/@IntentId/tasks/@task.Number/retry">
+                            <AntiforgeryToken />
+                            @* Which failure this page shows: pressed once the Task has failed again since, it does nothing. *@
+                            <input type="hidden" name="@LastRunField" value="@(attempts.Count > 0 ? attempts[^1].Run : 0)" />
+                            <button type="submit" class="btn-primary">Retry</button>
+                        </form>
+                        <a href="intents/@IntentId/tasks/@task.Number/edit" class="btn">Edit &amp; retry</a>
+                    </div>
+                }
             </li>
         }
     </ol>
 </section>
 
 @code {
+    /// <summary>The field that holds the number of the Task's last run with a verification attempt, as the page shows it.</summary>
+    public const string LastRunField = "Run";
+
+    [Parameter, EditorRequired]
+    public required Guid IntentId { get; set; }
+
+    /// <summary>Whether the Intent is Implementing and its implementation has failed.</summary>
+    [Parameter, EditorRequired]
+    public required bool ImplementationFailed { get; set; }
+
     [Parameter, EditorRequired]
     public required IReadOnlyList<IntentTask> Tasks { get; set; }
 

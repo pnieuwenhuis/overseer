@@ -10,9 +10,9 @@ namespace Overseer.Implementation;
 /// <summary>
 /// The Squad at work: carries out an Intent's Tasks in its prepared Sandbox, one at a time (ADR 0001), in their order, each in a
 /// new agent session for the Task's role. Once the agent says it is done, Overseer verifies the work (<see cref="Verification"/>,
-/// the full one for the fix-up Task) and tells the agent what failed, for it to fix, until the work passes or the allowed attempts are used up, which makes the Task
-/// a Failed Task. Work that passes is committed and pushed to the Intent branch (<see cref="IntentBranches"/>); only then is the
-/// Task Done and the next one started.
+/// the full one for the fix-up Task) and tells the agent what failed, for it to fix, until the work passes or the allowed attempts
+/// are used up, which makes the Task a Failed Task. Work that passes is committed and pushed to the Intent branch
+/// (<see cref="IntentBranches"/>); only then is the Task Done and the next one started.
 /// </summary>
 public sealed class TaskLoop(
     IntentTasks tasks, VerificationAttempts attempts, Verification verification, IntentBranches branches, SpecStore specs,
@@ -97,7 +97,9 @@ public sealed class TaskLoop(
         var approved = await specs.VersionOfAsync(intent.Id, intent.ApprovedSpecVersion!.Value, cancellationToken)
             ?? throw new InvalidOperationException($"The Approved Spec of the Intent {intent.Id} is gone.");
         var taskCount = (await tasks.OfAsync(intent.Id, cancellationToken)).Count;
-        var message = TaskInstructions.FirstMessage(intent, approved.Spec, task, taskCount);
+        var failedLast = (await attempts.OfAsync(intent.Id, cancellationToken))
+            .LastOrDefault(attempt => attempt.TaskNumber == task.Number)?.FailedSteps ?? [];
+        var message = TaskInstructions.FirstMessage(intent, approved.Spec, task, taskCount, failedLast);
         var run = await attempts.NextRunAsync(intent.Id, task.Number, cancellationToken);
         IAgentSession session;
         try

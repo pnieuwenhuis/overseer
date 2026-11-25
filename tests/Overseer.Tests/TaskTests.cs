@@ -75,10 +75,6 @@ public class TaskTests(PostgresServer postgres)
         // Each got one message, all in the one Sandbox the implementation prepared.
         var sandbox = Assert.Single(await overseer.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
         Assert.Equal([sandbox, sandbox, sandbox], SquadMessages(overseer).Select(message => message.Sandbox));
-        // After the last Task the Intent stays Implementing, its Sandbox kept.
-        var page = await GetAsync(overseer, address);
-        Assert.Equal("Implementing", ElementText(page, "intent-state"));
-        Assert.Equal(("Ready", ("Green", "Working")), (ImplementationOn(page)!.Phase, ImplementationOn(page)!.Light));
     }
 
     [Theory]

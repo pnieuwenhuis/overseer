@@ -169,6 +169,50 @@ public class FinalVerificationTests(PostgresServer postgres)
         Assert.Empty(overseer.GitHub.PullRequests);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_Failed_fix_up_Task_is_recovered_like_any_Failed_Task_and_is_still_verified_by_the_full_verification(bool edited)
+    {
+        await using var overseer = await StartWithManifestsAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/api", "acme/web"]);
+        await SetOperatingLimitsAsync(overseer, verificationAttemptsPerTask: 1);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneOnce(Task.CompletedTask));
+        // Fails the final verification and the fix-up Task's one attempt, and passes from then on.
+        overseer.Sandboxes.ScriptCommandsContaining(
+            ManifestCommandIn("acme/api", "npm test"),
+            new CommandResult(1, "orders are gone"), new CommandResult(1, "orders are still gone"), new CommandResult(0, ""));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/api", "acme/web");
+        await ImplementationTests.FailedAsync(overseer, address);
+        await StatesAsync(overseer, address, "Done", "Failed");
+
+        // Edited to touch only the repository that passes.
+        using var retried = edited
+            ? await FailedTaskTests.EditAndRetryAsync(
+                overseer, $"{address}/tasks/2/edit",
+                new FailedTaskTests.EditedFields("Bring the orders back", "Look at the export.", "Developer", ["acme/web"]))
+            : await FailedTaskTests.RetryTaskAsync(overseer, address, 2);
+
+        var page = await InReviewAsync(overseer, address);
+        await StatesAsync(overseer, address, "Done", "Done");
+        var message = SquadMessages(overseer)[^1].Message;
+        Assert.Contains(
+            edited ? "Your Task is Task 2 of 2: Bring the orders back" : "Your Task is Task 2 of 2: Fix what fails the final verification",
+            message);
+        Assert.Contains("# What failed last time", message);
+        Assert.Contains("orders are still gone", message);
+        Assert.Contains("it runs those commands in every Repository in scope", message);
+        var attempts = VerificationTests.AttemptsOn(page, 2);
+        Assert.Equal(
+            ["Run 1, attempt 1: failed. The test command of acme/api failed with exit code 1.", "Run 2, attempt 1: passed."],
+            attempts.Select(attempt => attempt.Heading));
+        Assert.Equal(
+            [
+                "The build command of acme/api", "The test command of acme/api",
+                "The build command of acme/web", "The test command of acme/web",
+            ],
+            attempts[1].Steps.Select(step => step.Name));
+    }
+
     [Fact]
     public async Task A_final_verification_that_fails_once_the_fix_up_Task_is_Done_fails_the_implementation_with_the_output_and_Retry_runs_it_again()
     {

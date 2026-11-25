@@ -1285,7 +1285,8 @@
     }
 
     /* The Spec's editor: its sections, each decision with the button that removes it, then each Task with its fields and the buttons that move or remove it. */
-    .spec-editor-errors {
+    .spec-editor-errors,
+    .task-editor-errors {
         list-style: disc;
         margin-top: 0.25rem;
         padding-left: 1.25rem;

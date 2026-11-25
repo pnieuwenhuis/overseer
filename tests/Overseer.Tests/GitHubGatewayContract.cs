@@ -1,4 +1,6 @@
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json.Nodes;
 using Overseer.GitHub;
 using Overseer.Secrets;
 
@@ -253,8 +255,121 @@ public abstract class GitHubGatewayContract : IAsyncDisposable
         Assert.Contains("Bad credentials", fails.Error);
     }
 
+    private const string Branch = "overseer/contract";
+
+    [Fact]
+    public async Task A_pull_request_is_opened_from_the_branch_to_the_default_branch_with_its_title_and_description()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var (repository, defaultBranch) = await RepositoryWithBranchAsync(Branch, ahead: true);
+
+        var opening = await OpenPullRequestAsync(repository, Branch);
+
+        var opened = Assert.IsType<GitHubPullRequestOpening.Opened>(opening);
+        Assert.Equal($"https://github.com/{repository}/pull/{opened.Number}", opened.Url);
+        Assert.Equal(
+            new OpenPullRequest("Export data", "Orders can be exported as **CSV**.", Branch, defaultBranch),
+            await ReadPullRequestAsync(repository, opened.Number));
+    }
+
+    [Fact]
+    public async Task A_pull_request_that_is_open_for_the_branch_already_is_the_one_opened_and_stays_as_it_is()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var (repository, defaultBranch) = await RepositoryWithBranchAsync(Branch, ahead: true);
+        var first = Assert.IsType<GitHubPullRequestOpening.Opened>(await OpenPullRequestAsync(repository, Branch));
+
+        var again = await Gateway.OpenPullRequestAsync(
+            repository, Branch, "Another title", "Another description.", TestContext.Current.CancellationToken);
+
+        Assert.Equal(first, again);
+        Assert.Equal(
+            new OpenPullRequest("Export data", "Orders can be exported as **CSV**.", Branch, defaultBranch),
+            await ReadPullRequestAsync(repository, first.Number));
+    }
+
+    [Fact]
+    public async Task Opening_a_pull_request_for_a_branch_with_nothing_the_default_branch_lacks_fails_with_GitHubs_error()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var (repository, _) = await RepositoryWithBranchAsync(Branch, ahead: false);
+
+        var opening = await OpenPullRequestAsync(repository, Branch);
+
+        var fails = Assert.IsType<GitHubPullRequestOpening.Fails>(opening);
+        Assert.Contains("No commits between", fails.Error);
+    }
+
+    [Fact]
+    public async Task Opening_a_pull_request_for_a_branch_that_does_not_exist_fails_with_GitHubs_error()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var (repository, _) = await RepositoryWithBranchAsync(Branch, ahead: true);
+
+        var opening = await OpenPullRequestAsync(repository, "no-such-branch");
+
+        var fails = Assert.IsType<GitHubPullRequestOpening.Fails>(opening);
+        Assert.Contains("head", fails.Error);
+        Assert.Contains("422", fails.Error);
+    }
+
+    [Fact]
+    public async Task Opening_a_pull_request_in_a_repository_the_token_cannot_reach_fails_naming_the_repository()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var repository = new RepositoryName("octocat", $"no-such-repository-{Guid.NewGuid():N}");
+
+        var opening = await OpenPullRequestAsync(repository, Branch);
+
+        var fails = Assert.IsType<GitHubPullRequestOpening.Fails>(opening);
+        Assert.Contains(repository.ToString(), fails.Error);
+    }
+
+    [Fact]
+    public async Task Without_a_stored_token_no_pull_request_is_opened()
+    {
+        Assert.Null(await OpenPullRequestAsync(PublicRepository, Branch));
+    }
+
+    [Fact]
+    public async Task With_an_unknown_stored_token_opening_a_pull_request_fails_with_GitHubs_error()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, UnknownToken, TestContext.Current.CancellationToken);
+
+        var opening = await OpenPullRequestAsync(PublicRepository, Branch);
+
+        var fails = Assert.IsType<GitHubPullRequestOpening.Fails>(opening);
+        Assert.Contains("Bad credentials", fails.Error);
+    }
+
+    private Task<GitHubPullRequestOpening?> OpenPullRequestAsync(RepositoryName repository, string branch) =>
+        Gateway.OpenPullRequestAsync(
+            repository, branch, "Export data", "Orders can be exported as **CSV**.", TestContext.Current.CancellationToken);
+
+    /// <summary>
+    /// A new repository of the working token's user, to be deleted after the test, with a commit on its default branch and the
+    /// branch <paramref name="branch"/> from it, which has a commit of its own when <paramref name="ahead"/>.
+    /// </summary>
+    protected abstract Task<(RepositoryName Repository, string DefaultBranch)> RepositoryWithBranchAsync(string branch, bool ahead);
+
+    /// <summary>The pull request as GitHub has it.</summary>
+    protected abstract Task<OpenPullRequest> ReadPullRequestAsync(RepositoryName repository, int number);
+
+    /// <summary>A pull request as GitHub has it.</summary>
+    /// <param name="Head">The branch it comes from.</param>
+    /// <param name="Base">The branch it goes to.</param>
+    protected sealed record OpenPullRequest(string Title, string Body, string Head, string Base);
+
     /// <summary>A repository of the working token's user that doesn't exist yet.</summary>
     private RepositoryName NewRepositoryName() => new(WorkingToken.Login, $"overseer-contract-{Guid.NewGuid():N}");
+
+    /// <summary>A repository of the working token's user, created now and deleted after the test.</summary>
+    protected async Task<RepositoryName> CreatedRepositoryAsync()
+    {
+        var repository = NewRepositoryName();
+        Assert.IsType<GitHubRepositoryCreation.Created>(await CreateAsync(repository));
+        return repository;
+    }
 
     /// <summary>Creates <paramref name="repository"/>, to be deleted after the test if GitHub created it.</summary>
     private async Task<GitHubRepositoryCreation?> CreateAsync(RepositoryName repository)
@@ -299,13 +414,27 @@ public sealed class FakeGitHubGatewayContract : GitHubGatewayContract
     protected override IGitHubGateway Gateway => _gateway;
 
     protected override (string Token, string Login) WorkingToken => ("github_pat_11WORKING", "monalisa");
+
+    protected override async Task<(RepositoryName Repository, string DefaultBranch)> RepositoryWithBranchAsync(string branch, bool ahead)
+    {
+        var repository = await CreatedRepositoryAsync();
+        _gateway.AddBranch(repository.ToString(), branch, ahead);
+        return (repository, FakeGitHubGateway.DefaultBranch);
+    }
+
+    protected override Task<OpenPullRequest> ReadPullRequestAsync(RepositoryName repository, int number)
+    {
+        var found = Assert.Single(_gateway.PullRequests, open => open.Repository == repository && open.Number == number);
+        return Task.FromResult(new OpenPullRequest(found.Title, found.Body, found.Head, found.Base));
+    }
 }
 
 /// <summary>
 /// Opt-in: runs against GitHub when <c>TEST_GITHUB_TOKEN</c> holds a token GitHub accepts, and <c>TEST_GITHUB_LOGIN</c>
 /// the login it works as. Creating repositories needs a fine-grained token with "Administration: Read and write" on all
 /// of the user's repositories; the tests create private repositories named <c>overseer-contract-...</c> and delete
-/// them again, with the same permission. Checking for files needs "Contents: Read" as well.
+/// them again, with the same permission. Checking for files and opening pull requests need "Contents: Read and write" and
+/// "Pull requests: Read and write" as well: the tests commit and branch in the repositories they create.
 /// </summary>
 public sealed class GitHubGatewayContractAgainstGitHub : GitHubGatewayContract
 {
@@ -328,19 +457,75 @@ public sealed class GitHubGatewayContractAgainstGitHub : GitHubGatewayContract
 
     protected override (string Token, string Login) WorkingToken { get; }
 
-    protected override async Task DeleteRepositoryAsync(RepositoryName repository)
+    protected override async Task<(RepositoryName Repository, string DefaultBranch)> RepositoryWithBranchAsync(string branch, bool ahead)
+    {
+        var repository = await CreatedRepositoryAsync();
+        // The first commit of an empty repository makes its default branch.
+        await CommitAsync(repository, "README.md", branch: null);
+        var defaultBranch = (await SendAsync(HttpMethod.Get, PathOf(repository)))["default_branch"]!.GetValue<string>();
+        var head = (await SendAsync(HttpMethod.Get, $"{PathOf(repository)}/git/ref/heads/{defaultBranch}"))["object"]!["sha"]!
+            .GetValue<string>();
+        await SendAsync(HttpMethod.Post, $"{PathOf(repository)}/git/refs", new { @ref = $"refs/heads/{branch}", sha = head });
+        if (ahead)
+        {
+            await CommitAsync(repository, "change.txt", branch);
+        }
+        return (repository, defaultBranch);
+    }
+
+    protected override async Task<OpenPullRequest> ReadPullRequestAsync(RepositoryName repository, int number)
+    {
+        var found = await SendAsync(HttpMethod.Get, $"{PathOf(repository)}/pulls/{number}");
+        return new OpenPullRequest(
+            found["title"]!.GetValue<string>(), found["body"]!.GetValue<string>(),
+            found["head"]!["ref"]!.GetValue<string>(), found["base"]!["ref"]!.GetValue<string>());
+    }
+
+    /// <summary>Commits a new file, to the default branch when <paramref name="branch"/> is <c>null</c>.</summary>
+    private Task<JsonNode> CommitAsync(RepositoryName repository, string path, string? branch)
+    {
+        var content = new Dictionary<string, string>
+        {
+            ["message"] = $"Add {path}",
+            ["content"] = Convert.ToBase64String("contract"u8),
+        };
+        if (branch is not null)
+        {
+            content["branch"] = branch;
+        }
+        return SendAsync(HttpMethod.Put, $"{PathOf(repository)}/contents/{path}", content);
+    }
+
+    private static string PathOf(RepositoryName repository) =>
+        $"repos/{Uri.EscapeDataString(repository.Owner)}/{Uri.EscapeDataString(repository.Name)}";
+
+    /// <summary>Sends the test's own request to GitHub, which must succeed, and gives its answer.</summary>
+    private async Task<JsonNode> SendAsync(HttpMethod method, string path, object? content = null)
+    {
+        using var response = await RequestAsync(method, path, content);
+        var answer = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.True(response.IsSuccessStatusCode, $"{method} {path} failed ({(int)response.StatusCode}): {answer}");
+        return JsonNode.Parse(answer)!;
+    }
+
+    private async Task<HttpResponseMessage> RequestAsync(HttpMethod method, string path, object? content = null)
     {
         using var http = new HttpClient { BaseAddress = new Uri("https://api.github.com/") };
-        using var request = new HttpRequestMessage(
-            HttpMethod.Delete, $"repos/{Uri.EscapeDataString(repository.Owner)}/{Uri.EscapeDataString(repository.Name)}")
+        using var request = new HttpRequestMessage(method, path)
         {
             Headers =
             {
                 Authorization = new AuthenticationHeaderValue("Bearer", WorkingToken.Token),
                 UserAgent = { new ProductInfoHeaderValue("overseer-tests", "1") },
             },
+            Content = content is null ? null : JsonContent.Create(content),
         };
-        using var response = await http.SendAsync(request, CancellationToken.None);
+        return await http.SendAsync(request, CancellationToken.None);
+    }
+
+    protected override async Task DeleteRepositoryAsync(RepositoryName repository)
+    {
+        using var response = await RequestAsync(HttpMethod.Delete, PathOf(repository));
         Assert.True(
             response.IsSuccessStatusCode,
             $"Delete {repository.WebUrl} by hand: GitHub did not delete it ({(int)response.StatusCode}).");

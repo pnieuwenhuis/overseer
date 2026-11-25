@@ -39,9 +39,10 @@ public class VerificationTests(PostgresServer postgres)
         Assert.Contains("1 test failed: exports nothing", messages[1].Message);
         Assert.Contains("1 test failed: no header", messages[2].Message);
         Assert.DoesNotContain("exports nothing", messages[2].Message);
-        // Built, then tested, each time.
+        // Built, then tested, each time, and once more in the final verification.
+        await FinalVerificationTests.InReviewAsync(overseer, address);
         Assert.Equal(
-            ["build", "test", "build", "test", "build", "test"],
+            ["build", "test", "build", "test", "build", "test", "build", "test"],
             CommandsIn(overseer, "acme/web").Select(command => command.Contains("npm run build") ? "build" : command.Contains("npm test") ? "test" : null)
                 .OfType<string>());
         Assert.Equal(SquadSessionsStarted(overseer), SquadSessionsStopped(overseer));
@@ -204,7 +205,6 @@ public class VerificationTests(PostgresServer postgres)
                 "The build command of acme/web", "The test command of acme/web",
             ],
             Assert.Single(AttemptsOn(await GetAsync(overseer, address), 1)).Steps.Select(step => step.Name));
-        Assert.DoesNotContain(CommandsIn(overseer, "acme/docs"), command => command.Contains("npm run build") || command.Contains("npm test"));
     }
 
     [Fact]

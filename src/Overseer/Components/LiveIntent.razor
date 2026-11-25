@@ -100,7 +100,8 @@
         @if (Shown.Tasks.Count > 0)
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
-                <IntentTaskList Tasks="Shown.Tasks" Attempts="Shown.Attempts" />
+                <IntentTaskList IntentId="Id" Tasks="Shown.Tasks" Attempts="Shown.Attempts"
+                                ImplementationFailed="@(Shown.Implementation is { Phase: ImplementationPhase.Failed })" />
             </div>
         }
         @if (Shown.Spec is { } spec)

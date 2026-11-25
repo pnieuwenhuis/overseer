@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -88,6 +89,7 @@ public static class OverseerServer
         builder.Services.AddSingleton<PullRequests>();
         builder.Services.AddSingleton<TaskRunner>();
         builder.Services.AddHostedService(services => services.GetRequiredService<TaskRunner>());
+        builder.Services.AddSingleton<TaskEdits>();
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(options =>
@@ -139,6 +141,19 @@ public static class OverseerServer
             (services, id, stopping) => services.GetRequiredService<Refinements>().RetryAsync(id, stopping), id => $"/intents/{id}");
         MapRetry(app, "/intents/{id:guid}/implementation/retry",
             (services, id, stopping) => services.GetRequiredService<TaskRunner>().RetryAsync(id, stopping), id => $"/intents/{id}");
+        // The Retry button of a Failed Task, on the Intent's detail page: as those above, and saying which failure the page showed.
+        app.MapPost("/intents/{id:guid}/tasks/{number:int}/retry", async (Guid id, int number, HttpContext context, IAntiforgery antiforgery) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+            {
+                return Results.BadRequest();
+            }
+            // 0, older than any attempt, when the form says none.
+            _ = int.TryParse(context.Request.Form[IntentTaskList.LastRunField], NumberStyles.None, CultureInfo.InvariantCulture, out var lastRun);
+            await context.RequestServices.GetRequiredService<TaskRunner>()
+                .RetryTaskAsync(id, number, lastRun, edit: null, context.RequestAborted);
+            return Results.LocalRedirect($"/intents/{id}");
+        }).RequireAuthorization();
         // Every page requires the logged-in user; only the login page opts out with [AllowAnonymous].
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode()

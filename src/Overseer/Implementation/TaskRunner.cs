@@ -4,6 +4,7 @@ using Overseer.GitHub;
 using Overseer.Intents;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
+using Overseer.Specs;
 
 namespace Overseer.Implementation;
 
@@ -15,8 +16,8 @@ namespace Overseer.Implementation;
 /// implementation stands, and the Sandbox it was prepared in, is kept in PostgreSQL. An implementation that fails leaves the Intent
 /// Implementing, in its slot, and red until a Retry, which goes on in the prepared Sandbox when there is one, and otherwise
 /// prepares a fresh one; once the final verification has passed, a Retry only opens the pull requests still missing, which needs no
-/// Sandbox. One with a Failed Task has no such Retry. A restart of serve fails too, for now, every implementation that hadn't
-/// failed: its Sandbox goes with the restart.
+/// Sandbox. One with a Failed Task has no such Retry: the human retries that Task instead (<see cref="RetryTaskAsync"/>). A
+/// restart of serve fails too, for now, every implementation that hadn't failed: its Sandbox goes with the restart.
 /// </summary>
 public sealed class TaskRunner(
     IntentLifecycle lifecycle, SandboxRegistry sandboxes, SandboxPreparation preparation, IntentTasks tasks,
@@ -127,27 +128,79 @@ public sealed class TaskRunner(
     {
         await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
-            // Only one of two Retries pressed at once finds it failed.
-            var retried = await database.Implementations
-                .Where(implementation => implementation.IntentId == intentId && implementation.Phase == ImplementationPhase.Failed
-                    && database.Intents.Any(intent => intent.Id == intentId && intent.State == IntentState.Implementing)
-                    && !database.IntentTasks.Any(task => task.IntentId == intentId && task.State == IntentTaskState.Failed))
-                .ExecuteUpdateAsync(implementation => implementation
-                    .SetProperty(
-                        record => record.Phase,
-                        record => record.AwaitingPullRequests != null ? ImplementationPhase.OpeningPullRequests
-                            : record.SandboxResourceId == null ? ImplementationPhase.ProvisioningSandbox
-                            : ImplementationPhase.Ready)
-                    .SetProperty(record => record.Repository, (string?)null)
-                    .SetProperty(record => record.Error, (string?)null), cancellationToken);
-            if (retried == 0)
+            var withoutFailedTask = FailedImplementationOf(database, intentId)
+                .Where(implementation => !database.IntentTasks.Any(task => task.IntentId == intentId && task.State == IntentTaskState.Failed));
+            if (!await MarkTakenUpAgainAsync(withoutFailedTask, cancellationToken))
             {
                 return false;
             }
         }
+        TakeUpAgain(intentId);
+        return true;
+    }
+
+    /// <summary>
+    /// Has a Failed Task of an Implementing Intent carried out again, which takes up its implementation as <see cref="RetryAsync"/>
+    /// takes up any other: the Task goes back to Pending, changed as <paramref name="edit"/> has it when there is one, and a new
+    /// agent session works on it, with all its verification attempts again, in the prepared Sandbox, on what the earlier attempts
+    /// left there, or in a fresh one when that one is gone. The earlier attempts are kept.
+    /// </summary>
+    /// <param name="lastRun">
+    /// The number of the Task's last run that made a verification attempt, as the human saw it who asks for this: once a later run
+    /// has made one, what they saw is no longer how the Task failed.
+    /// </param>
+    /// <param name="edit">What the Task is from now on; <c>null</c> to leave it as it is.</param>
+    /// <returns>
+    /// Whether it started again: not unless the Intent is Implementing, its implementation has failed, and that Task is a Failed
+    /// Task whose last run is <paramref name="lastRun"/>. Nothing changes then.
+    /// </returns>
+    public async Task<bool> RetryTaskAsync(Guid intentId, int taskNumber, int lastRun, SpecTask? edit, CancellationToken cancellationToken)
+    {
+        await using (var database = await databases.CreateDbContextAsync(cancellationToken))
+        {
+            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            var withThatFailedTask = FailedImplementationOf(database, intentId)
+                .Where(implementation => database.IntentTasks.Any(
+                        task => task.IntentId == intentId && task.Number == taskNumber && task.State == IntentTaskState.Failed)
+                    && !database.VerificationAttempts.Any(
+                        attempt => attempt.IntentId == intentId && attempt.TaskNumber == taskNumber && attempt.Run > lastRun));
+            // First, as it holds the implementation's row: another of these then waits for this one, and finds it no longer failed.
+            if (!await MarkTakenUpAgainAsync(withThatFailedTask, cancellationToken))
+            {
+                return false;
+            }
+            await IntentTasks.ReopenAsync(database, intentId, taskNumber, edit, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        TakeUpAgain(intentId);
+        return true;
+    }
+
+    /// <summary>The implementation of the Intent, when it is Implementing and that has failed.</summary>
+    private static IQueryable<ImplementationRecord> FailedImplementationOf(OverseerDbContext database, Guid intentId) =>
+        database.Implementations.Where(implementation => implementation.IntentId == intentId
+            && implementation.Phase == ImplementationPhase.Failed
+            && database.Intents.Any(intent => intent.Id == intentId && intent.State == IntentState.Implementing));
+
+    /// <summary>
+    /// Records that the implementation <paramref name="failed"/> finds, should it find one, is no longer failed: of two Retries
+    /// pressed at once, only one finds it.
+    /// </summary>
+    private static async Task<bool> MarkTakenUpAgainAsync(IQueryable<ImplementationRecord> failed, CancellationToken cancellationToken) =>
+        await failed.ExecuteUpdateAsync(implementation => implementation
+            .SetProperty(
+                record => record.Phase,
+                record => record.AwaitingPullRequests != null ? ImplementationPhase.OpeningPullRequests
+                    : record.SandboxResourceId == null ? ImplementationPhase.ProvisioningSandbox
+                    : ImplementationPhase.Ready)
+            .SetProperty(record => record.Repository, (string?)null)
+            .SetProperty(record => record.Error, (string?)null), cancellationToken) > 0;
+
+    /// <summary>Goes on with an implementation just recorded as taken up again.</summary>
+    private void TakeUpAgain(Guid intentId)
+    {
         Changed?.Invoke();
         Run(intentId, retrying: true);
-        return true;
     }
 
     private void OnTransitioned(Guid intentId, IntentState to)
@@ -440,7 +493,7 @@ public enum ImplementationPhase
 /// <param name="SandboxPrepared">
 /// Whether its Sandbox has been prepared, which a failure after that leaves so: a Retry then goes on in it, unless it is gone.
 /// </param>
-/// <param name="HasFailedTask">Whether one of its Tasks is a Failed Task, which the implementation's Retry doesn't take up again.</param>
+/// <param name="HasFailedTask">Whether one of its Tasks is a Failed Task, which only retrying that Task takes up again.</param>
 /// <param name="AwaitingPullRequests">
 /// Whether its final verification has passed, so that what is left, also after a failure, is opening the pull requests.
 /// </param>
