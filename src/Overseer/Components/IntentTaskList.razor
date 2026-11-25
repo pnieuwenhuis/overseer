@@ -1,5 +1,6 @@
 @* An Intent's Tasks in the order they are carried out, each with its role, the repositories it touches, its state and the verification
    attempts on it; a Failed Task also with what recovers it. *@
+@using System.Globalization
 @using Overseer.Implementation
 
 <section class="intent-tasks" aria-label="Tasks">
@@ -34,7 +35,7 @@
                         <form method="post" action="intents/@IntentId/tasks/@task.Number/retry">
                             <AntiforgeryToken />
                             @* Which failure this page shows: pressed once the Task has failed again since, it does nothing. *@
-                            <input type="hidden" name="@LastRunField" value="@(attempts.Count > 0 ? attempts[^1].Run : 0)" />
+                            <input type="hidden" name="@LastRunField" value="@Attempts.LastRunOf(task.Number)" />
                             <button type="submit" class="btn-primary">Retry</button>
                         </form>
                         <a href="intents/@IntentId/tasks/@task.Number/edit" class="btn">Edit &amp; retry</a>
@@ -48,6 +49,10 @@
 @code {
     /// <summary>The field that holds the number of the Task's last run with a verification attempt, as the page shows it.</summary>
     public const string LastRunField = "Run";
+
+    /// <summary>What a posted form says <see cref="LastRunField"/> holds; 0, older than any attempt, when it says none.</summary>
+    public static int LastRunIn(IFormCollection form) =>
+        int.TryParse(form[LastRunField], NumberStyles.None, CultureInfo.InvariantCulture, out var lastRun) ? lastRun : 0;
 
     [Parameter, EditorRequired]
     public required Guid IntentId { get; set; }

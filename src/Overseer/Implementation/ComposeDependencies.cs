@@ -92,5 +92,9 @@ public sealed class ComposeDependencies(RepositoryCommands commands)
 /// <param name="Problem">Why it didn't do its job although it succeeded; <c>null</c> otherwise.</param>
 public sealed record ComposeCommand(RepositoryName Repository, string What, string Command, CommandRun Run, string? Problem)
 {
-    public bool Failed => Problem is not null || Run is not CommandRun.Succeeded;
+    /// <summary>A sentence saying how it went wrong, without what it printed; <c>null</c> when it did its job.</summary>
+    public string? Failure => Problem ?? Run.FailureOf(What);
+
+    /// <summary>As <see cref="Failure"/>, with the end of what a command that failed printed, to show the human.</summary>
+    public string? Error => Problem ?? Run.ErrorOf(What);
 }

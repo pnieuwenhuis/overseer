@@ -1,6 +1,5 @@
 @page "/intents/{Id:guid}/tasks/{Number:int}/edit"
 @attribute [ExcludeFromInteractiveRouting]
-@using System.Globalization
 @using Overseer.GitHub
 @using Overseer.Implementation
 @using Overseer.Intents
@@ -126,7 +125,7 @@
         if (!IsSubmitted && _notEditable is null)
         {
             // The run before the Task, so that what the form holds is never older than the failure it says it was edited after.
-            _lastRun = (await Attempts.OfAsync(Id, HttpContext.RequestAborted)).LastOrDefault(attempt => attempt.TaskNumber == Number)?.Run ?? 0;
+            _lastRun = (await Attempts.OfAsync(Id, HttpContext.RequestAborted)).LastRunOf(Number);
             var task = (await Tasks.OfAsync(Id, HttpContext.RequestAborted)).Single(task => task.Number == Number);
             _edit = new EditedTask(
                 task.Title, task.Description, task.Role.ToString(), [.. task.Repositories.Select(repository => repository.ToString())]);
@@ -136,7 +135,7 @@
     private async Task SubmitAsync()
     {
         var form = HttpContext.Request.Form;
-        _ = int.TryParse(form[IntentTaskList.LastRunField], NumberStyles.None, CultureInfo.InvariantCulture, out _lastRun);
+        _lastRun = IntentTaskList.LastRunIn(form);
         _edit = new EditedTask(
             form[nameof(EditedTask.Title)],
             form[nameof(EditedTask.Description)],

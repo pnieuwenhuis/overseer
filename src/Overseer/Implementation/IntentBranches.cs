@@ -173,35 +173,35 @@ public sealed class IntentBranches(RepositoryCommands commands)
     /// Whether the work in the repository, as last taken, holds anything its default branch doesn't, since the two parted.
     /// </summary>
     /// <exception cref="InvalidOperationException">git couldn't say; the message says why.</exception>
-    public async Task<bool> WorkDiffersFromDefaultBranchAsync(
-        Sandbox sandbox, RepositoryName repository, CancellationToken cancellationToken)
-    {
-        // Against the empty tree where the two have no commit in common.
-        var files = await FilesAsync(
-            sandbox, repository,
-            $"""
-            base=$(git merge-base {DefaultBranch} HEAD || git hash-object -t tree /dev/null) &&
-              git diff --name-only --no-renames -z "$base" {Work} --
-            """,
-            $"Comparing {repository} with its default branch", cancellationToken);
-        return files.Count > 0;
-    }
+    public Task<bool> WorkDiffersFromDefaultBranchAsync(
+        Sandbox sandbox, RepositoryName repository, CancellationToken cancellationToken) =>
+        DiffersFromDefaultBranchAsync(
+            sandbox, repository, commit: "HEAD", tree: Work, $"Comparing {repository} with its default branch", cancellationToken);
 
     /// <summary>
     /// Whether the repository's Intent branch on GitHub changes anything of its default branch's, so that there is something for a
     /// pull request: its last verified work differs from the default branch, since the two parted.
     /// </summary>
     /// <exception cref="InvalidOperationException">As for <see cref="OutputOfAsync"/>.</exception>
-    private async Task<bool> PushedWorkDiffersFromDefaultBranchAsync(
-        Sandbox sandbox, RepositoryName repository, CancellationToken cancellationToken)
+    private Task<bool> PushedWorkDiffersFromDefaultBranchAsync(
+        Sandbox sandbox, RepositoryName repository, CancellationToken cancellationToken) =>
+        DiffersFromDefaultBranchAsync(
+            sandbox, repository, commit: Verified, tree: Verified,
+            $"Comparing the Intent branch of {repository} with its default branch", cancellationToken);
+
+    /// <summary>Whether <paramref name="tree"/> holds anything else than the default branch did where it parted from <paramref name="commit"/>.</summary>
+    /// <exception cref="InvalidOperationException">As for <see cref="OutputOfAsync"/>.</exception>
+    private async Task<bool> DiffersFromDefaultBranchAsync(
+        Sandbox sandbox, RepositoryName repository, string commit, string tree, string what, CancellationToken cancellationToken)
     {
+        // Against the empty tree where the two have no commit in common.
         var files = await FilesAsync(
             sandbox, repository,
             $"""
-            base=$(git merge-base {DefaultBranch} {Verified} || git hash-object -t tree /dev/null) &&
-              git diff --name-only --no-renames -z "$base" {Verified} --
+            base=$(git merge-base {DefaultBranch} {commit} || git hash-object -t tree /dev/null) &&
+              git diff --name-only --no-renames -z "$base" {tree} --
             """,
-            $"Comparing the Intent branch of {repository} with its default branch", cancellationToken);
+            what, cancellationToken);
         return files.Count > 0;
     }
 

@@ -65,6 +65,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             implementation.HasKey(record => record.IntentId);
             implementation.Property(record => record.Phase).HasConversion<string>();
             implementation.HasOne<IntentRecord>().WithOne().HasForeignKey<ImplementationRecord>(record => record.IntentId);
+            implementation.PrimitiveCollection(record => record.AwaitingPullRequests).ElementType().HasConversion<RepositoryNameConverter>();
         });
         modelBuilder.Entity<IntentTaskRecord>(task =>
         {
@@ -73,6 +74,8 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             task.Property(record => record.Role).HasConversion<string>();
             task.Property(record => record.State).HasConversion<string>();
             task.HasOne<IntentRecord>().WithMany().HasForeignKey(record => record.IntentId);
+            task.PrimitiveCollection(record => record.Repositories).ElementType().HasConversion<RepositoryNameConverter>();
+            task.PrimitiveCollection(record => record.AwaitingPush).ElementType().HasConversion<RepositoryNameConverter>();
         });
         modelBuilder.Entity<VerificationAttemptRecord>(attempt =>
         {
@@ -130,6 +133,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             task.ToTable("SpecTasks");
             task.HasKey(record => new { record.IntentId, record.SpecVersion, record.Number });
             task.Property(record => record.Role).HasConversion<string>();
+            task.PrimitiveCollection(record => record.Repositories).ElementType().HasConversion<RepositoryNameConverter>();
         });
         modelBuilder.Entity<IntentTransitionRecord>(transition =>
         {

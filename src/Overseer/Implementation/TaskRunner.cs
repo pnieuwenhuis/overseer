@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using Overseer.GitHub;
 using Overseer.Intents;
@@ -101,16 +102,17 @@ public sealed class TaskRunner(
         if (stored is null)
         {
             return new ImplementationProgress(
-                ImplementationPhase.ProvisioningSandbox, Repository: null, Error: null, SandboxPrepared: false, HasFailedTask: false,
-                AwaitingPullRequests: false);
+                ImplementationPhase.ProvisioningSandbox, Repository: null, Error: null,
+                ResumesAt: ImplementationPhase.ProvisioningSandbox, HasFailedTask: false);
         }
         var hasFailedTask = await database.IntentTasks
             .AnyAsync(task => task.IntentId == intent.Id && task.State == IntentTaskState.Failed, cancellationToken);
         return new ImplementationProgress(
             stored.Phase, stored.Repository is { } repository ? RepositoryName.Parse(repository) : null, stored.Error,
-            SandboxPrepared: stored.SandboxResourceId is not null, hasFailedTask,
-            AwaitingPullRequests: stored.AwaitingPullRequests is not null);
+            ResumesAt(stored), hasFailedTask);
     }
+
+    private static readonly Func<ImplementationRecord, ImplementationPhase> ResumesAt = ImplementationRecord.ResumesAt.Compile();
 
     /// <summary>
     /// Takes up the implementation of an Implementing Intent again after it failed. One that failed once the final verification had
@@ -169,7 +171,7 @@ public sealed class TaskRunner(
             {
                 return false;
             }
-            await IntentTasks.ReopenAsync(database, intentId, taskNumber, edit, cancellationToken);
+            await IntentTasks.PutBackToPendingAsync(database, intentId, taskNumber, edit, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         TakeUpAgain(intentId);
@@ -188,11 +190,7 @@ public sealed class TaskRunner(
     /// </summary>
     private static async Task<bool> MarkTakenUpAgainAsync(IQueryable<ImplementationRecord> failed, CancellationToken cancellationToken) =>
         await failed.ExecuteUpdateAsync(implementation => implementation
-            .SetProperty(
-                record => record.Phase,
-                record => record.AwaitingPullRequests != null ? ImplementationPhase.OpeningPullRequests
-                    : record.SandboxResourceId == null ? ImplementationPhase.ProvisioningSandbox
-                    : ImplementationPhase.Ready)
+            .SetProperty(record => record.Phase, ImplementationRecord.ResumesAt)
             .SetProperty(record => record.Repository, (string?)null)
             .SetProperty(record => record.Error, (string?)null), cancellationToken) > 0;
 
@@ -231,7 +229,7 @@ public sealed class TaskRunner(
         {
             return await OpenPullRequestsAsync(intent, changed, cancellationToken);
         }
-        return await VerifyInSandboxAsync(intent, retrying, cancellationToken);
+        return await ImplementInSandboxAsync(intent, retrying, cancellationToken);
     }
 
     /// <summary>
@@ -239,7 +237,7 @@ public sealed class TaskRunner(
     /// verification passes, and then opens the pull requests.
     /// </summary>
     /// <returns>Why the implementation failed; <c>null</c> when it hasn't.</returns>
-    private async Task<string?> VerifyInSandboxAsync(Intent intent, bool retrying, CancellationToken cancellationToken)
+    private async Task<string?> ImplementInSandboxAsync(Intent intent, bool retrying, CancellationToken cancellationToken)
     {
         var intentId = intent.Id;
         var sandbox = await PreparedSandboxOfAsync(intentId, cancellationToken);
@@ -325,7 +323,7 @@ public sealed class TaskRunner(
                 .ExecuteUpdateAsync(
                     implementation => implementation
                         .SetProperty(record => record.Phase, ImplementationPhase.Ready)
-                        .SetProperty(record => record.AwaitingPullRequests, (List<string>?)null),
+                        .SetProperty(record => record.AwaitingPullRequests, (List<RepositoryName>?)null),
                     stopping),
             cancellationToken);
         return null;
@@ -338,11 +336,10 @@ public sealed class TaskRunner(
     private async Task<IReadOnlyList<RepositoryName>?> AwaitingPullRequestsOfAsync(Guid intentId, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        var stored = await database.Implementations
+        return await database.Implementations
             .Where(implementation => implementation.IntentId == intentId)
             .Select(implementation => implementation.AwaitingPullRequests)
             .SingleOrDefaultAsync(cancellationToken);
-        return stored?.Select(RepositoryName.Parse).ToList();
     }
 
     /// <summary>
@@ -352,7 +349,7 @@ public sealed class TaskRunner(
     private static Task AwaitPullRequestsAsync(
         OverseerDbContext database, Guid intentId, IReadOnlyList<RepositoryName> changed, CancellationToken cancellationToken)
     {
-        var repositories = changed.Select(repository => repository.ToString()).ToList();
+        var repositories = changed.ToList();
         return database.Implementations
             .Where(implementation => implementation.IntentId == intentId)
             .ExecuteUpdateAsync(
@@ -444,7 +441,8 @@ public sealed class TaskRunner(
                         .SetProperty(record => record.Phase, phase)
                         .SetProperty(record => record.Repository, name)
                         .SetProperty(record => record.Error, stored);
-                    if (phase <= ImplementationPhase.Ready)
+                    if (phase is not (ImplementationPhase.Failed or ImplementationPhase.FinalVerification
+                        or ImplementationPhase.OpeningPullRequests))
                     {
                         implementation.SetProperty(record => record.SandboxResourceId, resourceId);
                     }
@@ -500,20 +498,28 @@ public enum ImplementationPhase
 /// <summary>Where an Intent's implementation stands, and why it failed when it did.</summary>
 /// <param name="Repository">The repository the phase is about; <c>null</c> when it isn't about one.</param>
 /// <param name="Error"><c>null</c> unless <paramref name="Phase"/> is <see cref="ImplementationPhase.Failed"/>.</param>
-/// <param name="SandboxPrepared">
-/// Whether its Sandbox has been prepared, which a failure after that leaves so: a Retry then goes on in it, unless it is gone.
+/// <param name="ResumesAt">
+/// The phase a Retry takes it up in, which also says how far it had got when it failed:
+/// <see cref="ImplementationPhase.OpeningPullRequests"/> once the final verification has passed, so that what is left is opening
+/// the pull requests; else <see cref="ImplementationPhase.Ready"/> once its Sandbox is prepared, which a Retry goes on in unless
+/// it is gone; else <see cref="ImplementationPhase.ProvisioningSandbox"/>.
 /// </param>
 /// <param name="HasFailedTask">Whether one of its Tasks is a Failed Task, which only retrying that Task takes up again.</param>
-/// <param name="AwaitingPullRequests">
-/// Whether its final verification has passed, so that what is left, also after a failure, is opening the pull requests.
-/// </param>
 public sealed record ImplementationProgress(
-    ImplementationPhase Phase, RepositoryName? Repository, string? Error, bool SandboxPrepared, bool HasFailedTask,
-    bool AwaitingPullRequests);
+    ImplementationPhase Phase, RepositoryName? Repository, string? Error, ImplementationPhase ResumesAt, bool HasFailedTask);
 
 /// <summary>An Intent's implementation, as PostgreSQL holds it: one per Intent.</summary>
 public sealed class ImplementationRecord
 {
+    /// <summary>
+    /// The phase a Retry takes a failed implementation up in, from what it has got done: opening the pull requests once the final
+    /// verification has passed, else going on in the prepared Sandbox when there is one, else preparing one.
+    /// </summary>
+    internal static readonly Expression<Func<ImplementationRecord, ImplementationPhase>> ResumesAt = record =>
+        record.AwaitingPullRequests != null ? ImplementationPhase.OpeningPullRequests
+        : record.SandboxResourceId != null ? ImplementationPhase.Ready
+        : ImplementationPhase.ProvisioningSandbox;
+
     public required Guid IntentId { get; init; }
     public required ImplementationPhase Phase { get; set; }
 
@@ -530,8 +536,8 @@ public sealed class ImplementationRecord
     public string? SandboxResourceId { get; set; }
 
     /// <summary>
-    /// <c>owner/name</c> of each repository that changed, each to have a pull request: set once the final verification has passed,
-    /// until the Intent is In Review. <c>null</c> otherwise.
+    /// The repositories that changed, each to have a pull request: set once the final verification has passed, until the Intent is
+    /// In Review. <c>null</c> otherwise.
     /// </summary>
-    public List<string>? AwaitingPullRequests { get; set; }
+    public List<RepositoryName>? AwaitingPullRequests { get; set; }
 }

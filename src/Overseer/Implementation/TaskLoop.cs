@@ -131,13 +131,11 @@ public sealed class TaskLoop(
     private async Task<Work> CarryOutAsync(
         Intent intent, Sandbox sandbox, IntentTask task, Action changed, CancellationToken cancellationToken)
     {
-        // An Intent has Tasks only once it has an Approved Spec, which they were created from.
-        var approved = await specs.VersionOfAsync(intent.Id, intent.ApprovedSpecVersion!.Value, cancellationToken)
-            ?? throw new InvalidOperationException($"The Approved Spec of the Intent {intent.Id} is gone.");
+        var approved = await specs.ApprovedOfAsync(intent, cancellationToken);
         var taskCount = (await tasks.OfAsync(intent.Id, cancellationToken)).Count;
         var failedLast = (await attempts.OfAsync(intent.Id, cancellationToken))
             .LastOrDefault(attempt => attempt.TaskNumber == task.Number)?.FailedSteps ?? [];
-        var message = TaskInstructions.FirstMessage(intent, approved.Spec, task, taskCount, failedLast);
+        var message = TaskInstructions.FirstMessage(intent, approved, task, taskCount, failedLast);
         var run = await attempts.NextRunAsync(intent.Id, task.Number, cancellationToken);
         // The agent works with GitHub too, as when it fetches the Intent branch.
         if (await RefreshGitHubTokenAsync(intent, sandbox, cancellationToken) is { } notRefreshed)

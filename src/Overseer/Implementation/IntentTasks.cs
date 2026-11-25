@@ -55,7 +55,7 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
     /// </summary>
     public async Task AwaitPushAsync(Guid intentId, int number, IReadOnlyList<RepositoryName> changed, CancellationToken cancellationToken)
     {
-        var repositories = changed.Select(repository => repository.ToString()).ToList();
+        var repositories = changed.ToList();
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         await database.IntentTasks
             .Where(task => task.IntentId == intentId && task.Number == number)
@@ -78,7 +78,7 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
             .Where(task => task.IntentId == intentId && task.Number == number)
             .ExecuteUpdateAsync(
                 task => task
-                    .SetProperty(record => record.AwaitingPush, (List<string>?)null)
+                    .SetProperty(record => record.AwaitingPush, (List<RepositoryName>?)null)
                     .SetProperty(record => record.RejectedPush, stored),
                 cancellationToken);
     }
@@ -95,7 +95,7 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
             .ExecuteUpdateAsync(
                 task => task
                     .SetProperty(record => record.State, IntentTaskState.Done)
-                    .SetProperty(record => record.AwaitingPush, (List<string>?)null),
+                    .SetProperty(record => record.AwaitingPush, (List<RepositoryName>?)null),
                 cancellationToken);
         await alongside(database, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -119,7 +119,7 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
             .Where(task => task.AwaitingPush != null || task.RejectedPush != null)
             .ExecuteUpdateAsync(
                 task => task
-                    .SetProperty(record => record.AwaitingPush, (List<string>?)null)
+                    .SetProperty(record => record.AwaitingPush, (List<RepositoryName>?)null)
                     .SetProperty(record => record.RejectedPush, (string?)null),
                 cancellationToken);
     }
@@ -147,7 +147,7 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
             Title = task.Title,
             Description = task.Description,
             Role = task.Role,
-            Repositories = [.. task.Repositories.Select(repository => repository.ToString())],
+            Repositories = [.. task.Repositories],
             State = IntentTaskState.Pending,
         }));
         await database.SaveChangesAsync(cancellationToken);
@@ -177,7 +177,7 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
             Title = StorableText.Of(title),
             Description = StorableText.Of(description),
             Role = AgentRole.Developer,
-            Repositories = [.. repositories.Select(repository => repository.ToString())],
+            Repositories = [.. repositories],
             State = IntentTaskState.Pending,
             IsFixUp = true,
         });
@@ -197,7 +197,7 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
     /// Puts the Intent's Failed Task with this number back to Pending in <paramref name="database"/>'s transaction, to be carried
     /// out again, changed as <paramref name="edit"/> has it when there is one. The Approved Spec's Task stays as it is.
     /// </summary>
-    internal static async Task ReopenAsync(
+    internal static async Task PutBackToPendingAsync(
         OverseerDbContext database, Guid intentId, int number, SpecTask? edit, CancellationToken cancellationToken)
     {
         var task = await database.IntentTasks.SingleAsync(task => task.IntentId == intentId && task.Number == number, cancellationToken);
@@ -207,14 +207,14 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
             task.Title = edit.Title;
             task.Description = edit.Description;
             task.Role = edit.Role;
-            task.Repositories = [.. edit.Repositories.Select(repository => repository.ToString())];
+            task.Repositories = [.. edit.Repositories];
         }
         await database.SaveChangesAsync(cancellationToken);
     }
 
     private static IntentTask Read(IntentTaskRecord task) => new(
-        task.Number, task.Title, task.Description, task.Role, [.. task.Repositories.Select(RepositoryName.Parse)], task.State,
-        task.AwaitingPush?.Select(RepositoryName.Parse).ToList(), task.RejectedPush, task.IsFixUp);
+        task.Number, task.Title, task.Description, task.Role, task.Repositories, task.State, task.AwaitingPush, task.RejectedPush,
+        task.IsFixUp);
 }
 
 /// <summary>A Task of an Intent's own Task list, numbered in the order the Tasks are carried out, from 1.</summary>
@@ -261,16 +261,15 @@ public sealed class IntentTaskRecord
     public required string Description { get; set; }
     public required AgentRole Role { get; set; }
 
-    /// <summary><c>owner/name</c> of each Repository in scope it touches.</summary>
-    public required List<string> Repositories { get; set; }
+    /// <summary>The Repositories in scope it touches.</summary>
+    public required List<RepositoryName> Repositories { get; set; }
 
     public required IntentTaskState State { get; set; }
 
     /// <summary>
-    /// <c>owner/name</c> of each repository whose verified work is yet to be pushed; <c>null</c> unless the work is verified and
-    /// the Task not yet Done.
+    /// The repositories whose verified work is yet to be pushed; <c>null</c> unless the work is verified and the Task not yet Done.
     /// </summary>
-    public List<string>? AwaitingPush { get; set; }
+    public List<RepositoryName>? AwaitingPush { get; set; }
 
     /// <summary>Why pushing its verified work was rejected, until work on it passes verification again.</summary>
     public string? RejectedPush { get; set; }

@@ -120,6 +120,6 @@ public sealed class SpecTaskRecord
     public required string Description { get; init; }
     public required AgentRole Role { get; init; }
 
-    /// <summary><c>owner/name</c> of each Repository in scope it touches, as the Intent has it in scope.</summary>
-    public required List<string> Repositories { get; init; }
+    /// <summary>The Repositories in scope it touches, as the Intent has them in scope.</summary>
+    public required List<RepositoryName> Repositories { get; init; }
 }

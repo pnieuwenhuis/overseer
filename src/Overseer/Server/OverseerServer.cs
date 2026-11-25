@@ -136,24 +136,20 @@ public static class OverseerServer
         // The Retry buttons: of a failed Repository Setup, on the Settings page, and of an Intent whose Refinement or
         // implementation failed, on its detail page.
         MapRetry(app, "/repository-setups/{id:guid}/retry",
-            (services, id, stopping) => services.GetRequiredService<RepositorySetups>().RetryAsync(id, stopping), _ => "/settings");
+            (context, id) => context.RequestServices.GetRequiredService<RepositorySetups>().RetryAsync(id, context.RequestAborted),
+            _ => "/settings");
         MapRetry(app, "/intents/{id:guid}/retry",
-            (services, id, stopping) => services.GetRequiredService<Refinements>().RetryAsync(id, stopping), id => $"/intents/{id}");
+            (context, id) => context.RequestServices.GetRequiredService<Refinements>().RetryAsync(id, context.RequestAborted),
+            id => $"/intents/{id}");
         MapRetry(app, "/intents/{id:guid}/implementation/retry",
-            (services, id, stopping) => services.GetRequiredService<TaskRunner>().RetryAsync(id, stopping), id => $"/intents/{id}");
-        // The Retry button of a Failed Task, on the Intent's detail page: as those above, and saying which failure the page showed.
-        app.MapPost("/intents/{id:guid}/tasks/{number:int}/retry", async (Guid id, int number, HttpContext context, IAntiforgery antiforgery) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-            {
-                return Results.BadRequest();
-            }
-            // 0, older than any attempt, when the form says none.
-            _ = int.TryParse(context.Request.Form[IntentTaskList.LastRunField], NumberStyles.None, CultureInfo.InvariantCulture, out var lastRun);
-            await context.RequestServices.GetRequiredService<TaskRunner>()
-                .RetryTaskAsync(id, number, lastRun, edit: null, context.RequestAborted);
-            return Results.LocalRedirect($"/intents/{id}");
-        }).RequireAuthorization();
+            (context, id) => context.RequestServices.GetRequiredService<TaskRunner>().RetryAsync(id, context.RequestAborted),
+            id => $"/intents/{id}");
+        // A Failed Task's, on the Intent's detail page, which also says which failure the page showed.
+        MapRetry(app, "/intents/{id:guid}/tasks/{number:int}/retry",
+            (context, id) => context.RequestServices.GetRequiredService<TaskRunner>().RetryTaskAsync(
+                id, int.Parse((string)context.Request.RouteValues["number"]!, CultureInfo.InvariantCulture),
+                IntentTaskList.LastRunIn(context.Request.Form), edit: null, context.RequestAborted),
+            id => $"/intents/{id}");
         // Every page requires the logged-in user; only the login page opts out with [AllowAnonymous].
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode()
@@ -169,14 +165,14 @@ public static class OverseerServer
     /// </param>
     /// <param name="page">The page the button is on.</param>
     private static void MapRetry(
-        WebApplication app, string address, Func<IServiceProvider, Guid, CancellationToken, Task> retry, Func<Guid, string> page) =>
+        WebApplication app, string address, Func<HttpContext, Guid, Task> retry, Func<Guid, string> page) =>
         app.MapPost(address, async (Guid id, HttpContext context, IAntiforgery antiforgery) =>
         {
             if (!await antiforgery.IsRequestValidAsync(context))
             {
                 return Results.BadRequest();
             }
-            await retry(context.RequestServices, id, context.RequestAborted);
+            await retry(context, id);
             return Results.LocalRedirect(page(id));
         }).RequireAuthorization();
 

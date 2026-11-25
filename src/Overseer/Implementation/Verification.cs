@@ -179,7 +179,8 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
         async Task<bool> RunAsync(RepositoryName repository, string name, string command, TimeSpan limit)
         {
             var run = await commands.RunManifestCommandAsync(sandbox, repository, command, limit, cancellationToken);
-            return await AddAsync(repository, $"The {name} command of {repository}", command, run, problem: null);
+            var what = $"The {name} command of {repository}";
+            return await AddAsync(repository, what, command, run, run.FailureOf(what));
         }
 
         async Task<bool> StartDependenciesAsync()
@@ -200,7 +201,7 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
                 cancellationToken);
             foreach (var command in started)
             {
-                if (!await AddAsync(command.Repository, command.What, command.Command, command.Run, command.Problem))
+                if (!await AddAsync(command.Repository, command.What, command.Command, command.Run, command.Failure))
                 {
                     return false;
                 }
@@ -208,11 +209,12 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
             return true;
         }
 
-        async Task<bool> AddAsync(RepositoryName repository, string what, string command, CommandRun run, string? problem)
+        // Adds the step of a command that ran, which failed when there is a failure, and says whether it passed.
+        async Task<bool> AddAsync(RepositoryName repository, string what, string command, CommandRun run, string? failure)
         {
             if (run is CommandRun.Unreachable)
             {
-                throw new InvalidOperationException(run.FailureOf(what));
+                throw new InvalidOperationException(failure);
             }
             var output = run switch
             {
@@ -220,7 +222,6 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
                 CommandRun.Failed failed => failed.Output,
                 _ => "",
             };
-            var failure = problem ?? run.FailureOf(what);
             steps.Add(new VerificationStep(
                 repository, what, await commands.RedactedAsync(command, cancellationToken), failure, RepositoryCommands.EndOf(output)));
             return failure is null;

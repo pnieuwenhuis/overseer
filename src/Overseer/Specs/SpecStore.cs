@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Overseer.GitHub;
+using Overseer.Intents;
 using Overseer.Persistence;
 
 namespace Overseer.Specs;
@@ -29,6 +30,13 @@ public sealed class SpecStore(IDbContextFactory<OverseerDbContext> databases)
         return await ReadFirstAsync(
             database.SpecVersions.Where(version => version.IntentId == intentId && version.Number == number), cancellationToken);
     }
+
+    /// <summary>The Approved Spec of an Intent that has one, as every Intent that is being implemented does.</summary>
+    /// <exception cref="InvalidOperationException">The Intent has no Approved Spec.</exception>
+    public async Task<Spec> ApprovedOfAsync(Intent intent, CancellationToken cancellationToken) =>
+        intent.ApprovedSpecVersion is { } approved && await VersionOfAsync(intent.Id, approved, cancellationToken) is { } version
+            ? version.Spec
+            : throw new InvalidOperationException($"The Intent {intent.Id} has no Approved Spec.");
 
     /// <summary>Every version of the Intent's Spec, in order; empty when it has none.</summary>
     public async Task<IReadOnlyList<SpecVersionHeading>> VersionsOfAsync(Guid intentId, CancellationToken cancellationToken)
@@ -114,7 +122,7 @@ public sealed class SpecStore(IDbContextFactory<OverseerDbContext> databases)
                 Title = task.Title,
                 Description = task.Description,
                 Role = task.Role,
-                Repositories = [.. task.Repositories.Select(repository => repository.ToString())],
+                Repositories = [.. task.Repositories],
             })],
         });
     }
@@ -140,6 +148,6 @@ public sealed class SpecStore(IDbContextFactory<OverseerDbContext> databases)
                 stored.DataModelChanges,
                 stored.UiChanges,
                 [.. stored.Tasks.OrderBy(task => task.Number).Select(task => new SpecTask(
-                    task.Number, task.Title, task.Description, task.Role, [.. task.Repositories.Select(RepositoryName.Parse)]))]));
+                    task.Number, task.Title, task.Description, task.Role, task.Repositories))]));
     }
 }

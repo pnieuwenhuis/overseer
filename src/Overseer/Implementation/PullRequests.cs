@@ -43,11 +43,9 @@ public sealed class PullRequests(IGitHubGateway gitHub, SpecStore specs, IDbCont
         {
             return null;
         }
-        // An Intent is implemented only once it has an Approved Spec.
-        var approved = await specs.VersionOfAsync(intent.Id, intent.ApprovedSpecVersion!.Value, cancellationToken)
-            ?? throw new InvalidOperationException($"The Approved Spec of the Intent {intent.Id} is gone.");
+        var approved = await specs.ApprovedOfAsync(intent, cancellationToken);
         var title = AtMost(intent.FirstLine, TitleLimit);
-        var body = AtMost(approved.Spec.Summary, BodyLimit);
+        var body = AtMost(approved.Summary, BodyLimit);
         foreach (var repository in missing)
         {
             switch (await gitHub.OpenPullRequestAsync(repository, intent.Branch, title, body, cancellationToken))

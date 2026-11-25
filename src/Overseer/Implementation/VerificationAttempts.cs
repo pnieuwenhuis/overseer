@@ -69,6 +69,13 @@ public sealed record VerificationAttempt(int TaskNumber, int Run, int Number, IR
     public IReadOnlyList<VerificationStep> FailedSteps => [.. Steps.Where(step => !step.Passed)];
 }
 
+public static class VerificationAttemptRuns
+{
+    /// <summary>The number of the Task's last run that made one of these attempts; 0 when none did.</summary>
+    public static int LastRunOf(this IEnumerable<VerificationAttempt> attempts, int taskNumber) =>
+        attempts.Where(attempt => attempt.TaskNumber == taskNumber).Select(attempt => attempt.Run).DefaultIfEmpty().Max();
+}
+
 /// <summary>A verification attempt, as PostgreSQL holds it.</summary>
 public sealed class VerificationAttemptRecord
 {

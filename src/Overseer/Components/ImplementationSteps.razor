@@ -35,13 +35,13 @@
     };
 
     // A failure after the Sandbox was prepared, as of a Task's session, leaves the steps until then done, and one after the final
-    // verification passed, as of a pull request, those before it.
+    // verification passed, as of a pull request, those before it. One while preparing stops them all.
     private string StepClass(ImplementationPhase step) => Implementation switch
     {
-        { Phase: ImplementationPhase.Failed, AwaitingPullRequests: true } =>
-            step < ImplementationPhase.OpeningPullRequests ? "step-done" : "step-stopped",
-        _ => Steps.ClassOf(
-            Implementation is { Phase: ImplementationPhase.Failed, SandboxPrepared: true } ? ImplementationPhase.Ready : Implementation.Phase,
-            step, failed: ImplementationPhase.Failed),
+        { Phase: ImplementationPhase.Failed, ResumesAt: ImplementationPhase.OpeningPullRequests } =>
+            step == ImplementationPhase.OpeningPullRequests ? "step-stopped" : "step-done",
+        { Phase: ImplementationPhase.Failed, ResumesAt: ImplementationPhase.Ready } =>
+            Steps.ClassOf(ImplementationPhase.Ready, step, failed: ImplementationPhase.Failed),
+        _ => Steps.ClassOf(Implementation.Phase, step, failed: ImplementationPhase.Failed),
     };
 }
