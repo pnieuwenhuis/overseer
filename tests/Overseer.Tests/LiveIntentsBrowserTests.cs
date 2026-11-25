@@ -444,7 +444,18 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         var status = implementation.GetByRole(AriaRole.Status);
         await Expect(status).ToHaveTextAsync("Provisioning a Sandbox for the Squad. A new Sandbox takes a few minutes.");
         await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Green");
-        await AdvanceUntilAsync(time, implementation, "CheckingOutIntentBranch");
+        // Not until the page shows the next phase: a page that lags would get the clock advanced past the checkout's time limit.
+        await RepositorySetupPortal.EventuallyAsync(
+            () =>
+            {
+                if (overseer.Sandboxes.CommandsRun.Any(command => command.Command.Contains("git checkout")))
+                {
+                    return Task.FromResult<string?>("");
+                }
+                time.Advance(TimeSpan.FromMinutes(4));
+                return Task.FromResult<string?>(null);
+            },
+            "the checkout");
         await Expect(status).ToHaveTextAsync("Putting acme/web on the Intent branch.");
         checkingOut.SetResult();
         await Expect(status).ToHaveTextAsync("Running the setup command of acme/web.");
