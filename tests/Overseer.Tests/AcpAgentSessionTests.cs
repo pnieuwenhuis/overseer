@@ -89,6 +89,33 @@ public class AcpAgentSessionTests
         Assert.Equal(new AgentOutcome.AskedQuestion("Postgres or SQLite?"), await turn.Outcome);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_question_is_given_without_the_secrets(bool askedWithItsTool)
+    {
+        var agent = new ScriptedAgentProcess();
+        await using var session = await StartAsync(agent, "sk-secret");
+        var turn = await session.SendAsync("Go", Token);
+        await agent.PromptReceivedAsync();
+
+        if (askedWithItsTool)
+        {
+            await agent.AskPermission(new JsonObject
+            {
+                ["title"] = "question",
+                ["rawInput"] = new JsonObject { ["questions"] = new JsonArray("Is sk-secret the right key?") },
+            });
+        }
+        else
+        {
+            agent.Chunk("Is sk-secret the right key?");
+        }
+        agent.EndTurn();
+
+        Assert.Equal(new AgentOutcome.AskedQuestion("Is *** the right key?"), await turn.Outcome);
+    }
+
     [Fact]
     public async Task Another_permission_is_granted_for_the_agent_to_work_headless()
     {

@@ -115,7 +115,7 @@ public sealed class AcpAgentSession : IAgentSession
             var stopReason = response.TryGetProperty("stopReason", out var reason) ? reason.GetString() : null;
             turn.Succeed(stopReason switch
             {
-                "end_turn" or "cancelled" => turn.OutcomeAtEnd(),
+                "end_turn" or "cancelled" => Scrubbed(turn.OutcomeAtEnd()),
                 "max_tokens" => throw new AgentSessionFailedException("The agent stopped because it ran out of tokens for its answer."),
                 "max_turn_requests" => throw new AgentSessionFailedException("The agent stopped because it reached the limit on its requests to the model."),
                 "refusal" => throw new AgentSessionFailedException("The model refused to go on."),
@@ -355,6 +355,10 @@ public sealed class AcpAgentSession : IAgentSession
     }
 
     private string Scrub(string text) => Redaction.Without(text, _secrets);
+
+    /// <summary><paramref name="outcome"/> with the secrets taken out of what the agent asks, if it asks something.</summary>
+    private AgentOutcome Scrubbed(AgentOutcome outcome) =>
+        outcome is AgentOutcome.AskedQuestion asked ? new AgentOutcome.AskedQuestion(Scrub(asked.Question)) : outcome;
 
     public async ValueTask DisposeAsync()
     {
