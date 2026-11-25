@@ -10,6 +10,11 @@ public interface IAgentSession : IAsyncDisposable
     /// Sends the agent a message (its work to start with, then the user's answers) and starts the agent's turn.
     /// Wait for a turn's outcome before sending the next message.
     /// </summary>
+    /// <returns>The turn, once the message is on its way to the agent: not before it is written to it.</returns>
+    /// <exception cref="AgentSessionFailedException">
+    /// The message couldn't be sent, as when the agent's process has exited or the connection to the Sandbox dropped since the last
+    /// turn: the agent doesn't have it.
+    /// </exception>
     /// <exception cref="ObjectDisposedException">The session has been stopped.</exception>
     Task<AgentTurn> SendAsync(string message, CancellationToken cancellationToken);
 }
@@ -18,7 +23,7 @@ public interface IAgentSession : IAsyncDisposable
 public static class AgentSessionTurns
 {
     /// <summary>Sends the agent a message and waits for the turn it starts to end, past the updates it streams meanwhile.</summary>
-    /// <exception cref="AgentSessionFailedException">The turn broke off.</exception>
+    /// <exception cref="AgentSessionFailedException">The message couldn't be sent, or the turn broke off.</exception>
     public static async Task<AgentOutcome> TakeTurnAsync(this IAgentSession session, string message, CancellationToken cancellationToken)
     {
         var turn = await session.SendAsync(message, cancellationToken);

@@ -283,8 +283,12 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         public Task<AgentTurn> SendAsync(string message, CancellationToken cancellationToken)
         {
             ObjectDisposedException.ThrowIf(_stopped, this);
-            received(message);
             var turn = _turns.Next();
+            if (turn.SendFailure is { } unsent)
+            {
+                return Task.FromException<AgentTurn>(new AgentSessionFailedException(unsent));
+            }
+            received(message);
             foreach (var (path, content) in turn.Writes)
             {
                 write(path, content);
@@ -375,6 +379,12 @@ public sealed record FakeAgentSession(params FakeAgentTurn[] Turns)
 /// <summary>A scripted turn: the updates the agent streams and how the turn ends.</summary>
 public sealed record FakeAgentTurn(IReadOnlyList<AgentUpdate> Updates, AgentOutcome Outcome)
 {
+    /// <summary>
+    /// When set, the message that would start the turn can't be sent, as when the agent's process has exited since the turn before:
+    /// sending it fails with this error, the agent never gets it, and nothing of the turn happens.
+    /// </summary>
+    public string? SendFailure { get; init; }
+
     /// <summary>When set, the turn breaks off after its updates with this error, instead of ending with its outcome.</summary>
     public string? Failure { get; init; }
 

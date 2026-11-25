@@ -240,6 +240,29 @@ public class AgentMessageTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task A_message_that_cant_be_sent_as_the_agent_died_during_verification_is_shown_as_never_delivered()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        AddManifest(overseer);
+        var testing = new TaskCompletionSource();
+        overseer.Sandboxes.HoldCommandsContaining("npm test", testing.Task);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(
+            Done(), new FakeAgentTurn([], new AgentOutcome.Done()) { SendFailure = "The agent process exited with code 1." }));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        await TestingAsync(overseer);
+        var task = address + "/tasks/1";
+        await BoxAsync(overseer, task);
+        using var sent = await SendAsync(overseer, task, session: 1, "Call it Download.");
+
+        testing.SetResult();
+
+        var failed = await ImplementationTests.FailedAsync(overseer, address);
+        Assert.Equal("The Developer's session for Task 1 failed: The agent process exited with code 1.", failed.Status);
+        Assert.Equal([NotDelivered("Call it Download.")], StreamOn(await GetAsync(overseer, task)));
+        Assert.Single(SquadMessages(overseer));
+    }
+
+    [Fact]
     public async Task A_message_waiting_as_the_last_allowed_attempt_fails_is_shown_as_never_delivered()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");

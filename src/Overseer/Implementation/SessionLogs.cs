@@ -275,7 +275,10 @@ public sealed class SessionLog : IAsyncDisposable
     /// The human's message that <paramref name="message"/> passes on, as <see cref="NextMessageAsync"/> gave it: once sent, it is
     /// delivered, and goes into the log where the turn begins.
     /// </param>
-    /// <exception cref="AgentSessionFailedException">The turn broke off; what it reported until then is in the log.</exception>
+    /// <exception cref="AgentSessionFailedException">
+    /// The message couldn't be sent, so the one it passes on stays undelivered; or the turn broke off, with what it reported until
+    /// then in the log.
+    /// </exception>
     public async Task<AgentOutcome> TakeTurnAsync(
         IAgentSession session, string message, CancellationToken cancellationToken, SentMessage? delivering = null)
     {

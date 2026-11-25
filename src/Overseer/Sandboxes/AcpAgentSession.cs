@@ -91,27 +91,41 @@ public sealed class AcpAgentSession : IAgentSession
         }
     }
 
-    public Task<AgentTurn> SendAsync(string message, CancellationToken cancellationToken)
+    public async Task<AgentTurn> SendAsync(string message, CancellationToken cancellationToken)
     {
         Turn turn;
+        CancellationToken stopping;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             turn = _turn = new Turn();
+            stopping = _stopping.Token;
         }
-        _ = RunTurnAsync(turn, message);
-        return Task.FromResult(new AgentTurn(turn.Updates.Reader.ReadAllAsync(cancellationToken), turn.Outcome.Task));
-    }
-
-    private async Task RunTurnAsync(Turn turn, string message)
-    {
+        Task<JsonElement> responding;
         try
         {
-            var response = await RequestAsync("session/prompt", new JsonObject
+            using var writing = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stopping);
+            // Waited for: until the prompt is written, the agent doesn't have the message.
+            responding = await WriteRequestAsync("session/prompt", new JsonObject
             {
                 ["sessionId"] = _sessionId,
                 ["prompt"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = message }),
-            }, _stopping.Token);
+            }, writing.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new AgentSessionFailedException("The agent session was stopped.");
+        }
+        _ = RunTurnAsync(turn, responding, stopping);
+        return new AgentTurn(turn.Updates.Reader.ReadAllAsync(cancellationToken), turn.Outcome.Task);
+    }
+
+    /// <summary>Ends the turn as the response to its prompt says.</summary>
+    private async Task RunTurnAsync(Turn turn, Task<JsonElement> responding, CancellationToken stopping)
+    {
+        try
+        {
+            var response = await responding.WaitAsync(stopping);
             var stopReason = response.TryGetProperty("stopReason", out var reason) ? reason.GetString() : null;
             turn.Succeed(stopReason switch
             {
@@ -311,6 +325,15 @@ public sealed class AcpAgentSession : IAgentSession
 
     private async Task<JsonElement> RequestAsync(string method, JsonObject parameters, CancellationToken cancellationToken)
     {
+        var responding = await WriteRequestAsync(method, parameters, cancellationToken);
+        return await responding.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>Writes a request to the agent.</summary>
+    /// <returns>Once the request is written, what completes with the agent's response to it.</returns>
+    /// <exception cref="AgentSessionFailedException">The agent takes no request: its process or the connection is gone.</exception>
+    private async Task<Task<JsonElement>> WriteRequestAsync(string method, JsonObject parameters, CancellationToken cancellationToken)
+    {
         var id = Interlocked.Increment(ref _nextId);
         var waiting = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[id] = waiting;
@@ -323,7 +346,7 @@ public sealed class AcpAgentSession : IAgentSession
         }
 
         await WriteAsync(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["method"] = method, ["params"] = parameters }, cancellationToken);
-        return await waiting.Task.WaitAsync(cancellationToken);
+        return waiting.Task;
     }
 
     private Task RespondAsync(JsonElement id, JsonObject? result = null, JsonObject? error = null) =>

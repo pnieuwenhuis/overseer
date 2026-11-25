@@ -225,6 +225,48 @@ public class AcpAgentSessionTests
         await Assert.ThrowsAsync<AgentSessionFailedException>(async () => await turn.Updates.ToListAsync(Token));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_message_to_an_agent_that_is_gone_since_its_last_turn_fails_to_send(bool connectionLost)
+    {
+        var agent = new ScriptedAgentProcess();
+        await using var session = await StartAsync(agent);
+        var turn = await session.SendAsync("Go", Token);
+        await agent.PromptReceivedAsync();
+        agent.EndTurn();
+        await turn.Outcome;
+
+        if (connectionLost)
+        {
+            agent.Drop();
+        }
+        else
+        {
+            agent.Exit(3, "boom");
+        }
+
+        var failure = await Assert.ThrowsAsync<AgentSessionFailedException>(() => session.SendAsync("One more thing", Token));
+        Assert.Contains(connectionLost ? "connection" : "code 3", failure.Message);
+        Assert.Single(agent.Requests, request => (string)request["method"]! == "session/prompt");
+    }
+
+    [Fact]
+    public async Task A_message_counts_as_sent_only_once_the_agents_process_has_taken_it()
+    {
+        var agent = new ScriptedAgentProcess();
+        await using var session = await StartAsync(agent);
+        var written = new TaskCompletionSource();
+        agent.HoldWrites(written.Task);
+
+        var sending = session.SendAsync("Go", Token);
+
+        Assert.False(sending.IsCompleted);
+        written.SetException(new IOException("The pipe is broken."));
+        var failure = await Assert.ThrowsAsync<AgentSessionFailedException>(() => sending);
+        Assert.Contains("The pipe is broken.", failure.Message);
+    }
+
     [Fact]
     public async Task Disposing_in_the_middle_of_a_turn_stops_the_process_and_ends_the_turn()
     {
@@ -289,15 +331,29 @@ internal sealed class ScriptedAgentProcess : ISshProcess
     /// <summary>What was written before the protocol began: the first line the process read.</summary>
     public List<string> Input { get; } = [];
 
-    public Task WriteLineAsync(string line, CancellationToken cancellationToken)
+    private volatile Task? _writesHeld;
+
+    /// <summary>Makes every write from now on wait for <paramref name="until"/>, and fail as it does, like a slow connection.</summary>
+    public void HoldWrites(Task until) => _writesHeld = until;
+
+    public async Task WriteLineAsync(string line, CancellationToken cancellationToken)
+    {
+        if (_writesHeld is { } held)
+        {
+            await held.WaitAsync(cancellationToken);
+        }
+        Take(line);
+    }
+
+    private void Take(string line)
     {
         if (!line.StartsWith('{'))
         {
             Input.Add(line);
-            return Task.CompletedTask;
+            return;
         }
 
-        if (Disposed || _exit.Task.IsCompleted)
+        if (Disposed || _exit.Task.IsCompleted || _lost is not null)
         {
             throw new IOException("closed");
         }
@@ -313,7 +369,7 @@ internal sealed class ScriptedAgentProcess : ISshProcess
                     asked.SetResult(message);
                 }
             }
-            return Task.CompletedTask;
+            return;
         }
 
         lock (_requests)
@@ -337,7 +393,6 @@ internal sealed class ScriptedAgentProcess : ISshProcess
                 _prompts.Writer.TryWrite(message);
                 break;
         }
-        return Task.CompletedTask;
     }
 
     public async Task<string?> ReadLineAsync(CancellationToken cancellationToken)

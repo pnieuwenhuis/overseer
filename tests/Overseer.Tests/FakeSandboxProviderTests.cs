@@ -162,6 +162,20 @@ public class FakeSandboxProviderTests
     }
 
     [Fact]
+    public async Task A_message_can_fail_to_send_leaving_the_agent_without_it()
+    {
+        var sandbox = await CreateAsync();
+        _provider.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(
+            new FakeAgentTurn([], new AgentOutcome.Done()) { SendFailure = "opencode exited with code 1." }));
+        await using var session = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken);
+
+        var failure = await Assert.ThrowsAsync<AgentSessionFailedException>(() => session.SendAsync("Start", TestContext.Current.CancellationToken));
+
+        Assert.Equal("opencode exited with code 1.", failure.Message);
+        Assert.Empty(_provider.MessagesSent);
+    }
+
+    [Fact]
     public async Task A_turn_can_stream_updates_as_the_test_writes_them_and_ends_once_it_has_written_the_last()
     {
         var sandbox = await CreateAsync();
