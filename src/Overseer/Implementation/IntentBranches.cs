@@ -14,6 +14,9 @@ public sealed class IntentBranches(RepositoryCommands commands)
     /// <summary>The ref in each clone at the last verified work. It never leaves the Sandbox.</summary>
     private const string Verified = "refs/overseer/verified";
 
+    /// <summary>The ref in each clone at the repository's default branch, as it was when the Sandbox cloned it.</summary>
+    private const string DefaultBranch = "refs/remotes/origin/HEAD";
+
     // Whom commits made in a Sandbox are by, Overseer's and its agents': no one's account, as .invalid is nobody's domain.
     private const string CommitterName = "Overseer";
     private const string CommitterEmail = "overseer@overseer.invalid";
@@ -53,17 +56,68 @@ public sealed class IntentBranches(RepositoryCommands commands)
     public async Task<IReadOnlyList<string>> ChangedFilesAsync(
         Sandbox sandbox, RepositoryName repository, CancellationToken cancellationToken)
     {
-        // Against the empty tree where there is no verified commit. Paths are separated by NULs, so none needs quoting.
-        var script = ShellText.OutputAlone(
+        // Against the empty tree where there is no verified commit.
+        return await FilesAsync(
+            sandbox, repository,
             $"""
             base=$(git rev-parse --verify --quiet {Verified} || git hash-object -t tree /dev/null) &&
               git diff --name-only --no-renames -z "$base" -- &&
               git ls-files --others --exclude-standard -z
-            """);
-        var run = await commands.RunAsync(sandbox, repository, script, RepositoryCommands.GitLimit, cancellationToken);
+            """,
+            $"Looking for changes in {repository}", cancellationToken);
+    }
+
+    /// <summary>
+    /// Whether the repository's clone holds anything its default branch doesn't, since the two parted: committed, uncommitted or
+    /// untracked, but not ignored.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">git couldn't say; the message says why.</exception>
+    public async Task<bool> DiffersFromDefaultBranchAsync(
+        Sandbox sandbox, RepositoryName repository, CancellationToken cancellationToken)
+    {
+        // Against the empty tree where there is no default branch, as in a repository that was empty, or no commit in common.
+        var files = await FilesAsync(
+            sandbox, repository,
+            $"""
+            base=$(git merge-base {DefaultBranch} HEAD || git hash-object -t tree /dev/null) &&
+              git diff --name-only --no-renames -z "$base" -- &&
+              git ls-files --others --exclude-standard -z
+            """,
+            $"Comparing {repository} with its default branch", cancellationToken);
+        return files.Count > 0;
+    }
+
+    /// <summary>
+    /// Whether the repository's Intent branch on GitHub changes anything of its default branch's, so that there is something for a
+    /// pull request: its last verified work differs from the default branch, since the two parted.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">git couldn't say; the message says why.</exception>
+    public async Task<bool> ChangesDefaultBranchAsync(
+        Sandbox sandbox, RepositoryName repository, CancellationToken cancellationToken)
+    {
+        // A repository that was empty, and that no Task changed, has no verified commit.
+        var files = await FilesAsync(
+            sandbox, repository,
+            $"""
+            if git rev-parse --verify --quiet {Verified} > /dev/null; then
+              base=$(git merge-base {DefaultBranch} {Verified} || git hash-object -t tree /dev/null) &&
+                git diff --name-only --no-renames -z "$base" {Verified} --
+            fi
+            """,
+            $"Comparing the Intent branch of {repository} with its default branch", cancellationToken);
+        return files.Count > 0;
+    }
+
+    /// <summary>The paths a git script prints, each ending in a NUL, so that none needs quoting.</summary>
+    /// <exception cref="InvalidOperationException">The script failed; the message says that <paramref name="what"/> did, and why.</exception>
+    private async Task<IReadOnlyList<string>> FilesAsync(
+        Sandbox sandbox, RepositoryName repository, string script, string what, CancellationToken cancellationToken)
+    {
+        var run = await commands.RunAsync(
+            sandbox, repository, ShellText.OutputAlone(script), RepositoryCommands.GitLimit, cancellationToken);
         return run is CommandRun.Succeeded succeeded
             ? [.. succeeded.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries).Distinct()]
-            : throw new InvalidOperationException(run.ErrorOf($"Looking for changes in {repository}"));
+            : throw new InvalidOperationException(run.ErrorOf(what));
     }
 
     /// <summary>

@@ -1469,6 +1469,31 @@
         gap: 0.75rem;
     }
 
+    /* The pull requests an Intent has, one for each repository it changed. */
+    .pull-requests {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .pull-request-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+        font-size: 0.875rem;
+    }
+
+    .pull-request-link {
+        font-family: var(--font-mono);
+        font-size: 0.8125rem;
+        overflow-wrap: anywhere;
+    }
+
+    .pull-requests-none {
+        color: var(--color-muted);
+        font-size: 0.875rem;
+    }
+
     .intent-task[data-state="Running"] {
         border-color: var(--color-accent);
     }

@@ -175,6 +175,87 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
         }
     }
 
+    public async Task<GitHubPullRequestOpening?> OpenPullRequestAsync(
+        RepositoryName repository, string branch, string title, string body, CancellationToken cancellationToken)
+    {
+        if (await secrets.ReadAsync(GitHubToken.SecretName, cancellationToken) is not { } token)
+        {
+            return null;
+        }
+        if (!GitHubToken.IsWellFormed(token))
+        {
+            return new GitHubPullRequestOpening.Fails(GitHubToken.NotWellFormedError);
+        }
+
+        try
+        {
+            var path = $"repos/{Uri.EscapeDataString(repository.Owner)}/{Uri.EscapeDataString(repository.Name)}";
+            // A pull request names the branch it goes to, so GitHub first says which is the default one.
+            string defaultBranch;
+            using (var request = Get(path, token))
+            using (var response = await Http.SendAsync(request, cancellationToken))
+            {
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    return new GitHubPullRequestOpening.Fails(GitHubFileCheck.Unreachable(repository));
+                }
+                if (!response.IsSuccessStatusCode)
+                {
+                    return new GitHubPullRequestOpening.Fails(await ErrorAsync(response, cancellationToken));
+                }
+                var found = await response.Content.ReadFromJsonAsync<Repository>(cancellationToken);
+                if (found?.DefaultBranch is not { Length: > 0 } name)
+                {
+                    return new GitHubPullRequestOpening.Fails("GitHub found the repository, but did not say its default branch.");
+                }
+                defaultBranch = name;
+            }
+
+            using var opening = Request(HttpMethod.Post, $"{path}/pulls", token);
+            opening.Content = JsonContent.Create(new NewPullRequest(title, branch, defaultBranch, body));
+            using var answer = await Http.SendAsync(opening, cancellationToken);
+            if (answer.IsSuccessStatusCode)
+            {
+                return Opened(await answer.Content.ReadFromJsonAsync<PullRequest>(cancellationToken))
+                    ?? (GitHubPullRequestOpening)new GitHubPullRequestOpening.Fails(
+                        "GitHub opened the pull request, but did not say its number and address.");
+            }
+            var error = await ErrorAsync(answer, cancellationToken);
+            // GitHub refuses a second one between the same branches: the one that is open is what was asked for.
+            if (answer.StatusCode == HttpStatusCode.UnprocessableEntity
+                && await FindOpenPullRequestAsync(path, $"{repository.Owner}:{branch}", defaultBranch, token, cancellationToken) is { } existing)
+            {
+                return existing;
+            }
+            return new GitHubPullRequestOpening.Fails(error);
+        }
+        catch (Exception exception) when (IsUnreachable(exception, cancellationToken))
+        {
+            return new GitHubPullRequestOpening.Fails(UnreachableError(exception));
+        }
+    }
+
+    /// <summary>The open pull request from <paramref name="head"/> to <paramref name="to"/>; <c>null</c> when there is none.</summary>
+    /// <param name="head">The branch it comes from, as <c>owner:branch</c>.</param>
+    private static async Task<GitHubPullRequestOpening.Opened?> FindOpenPullRequestAsync(
+        string repositoryPath, string head, string to, string token, CancellationToken cancellationToken)
+    {
+        using var request = Get(
+            $"{repositoryPath}/pulls?state=open&head={Uri.EscapeDataString(head)}&base={Uri.EscapeDataString(to)}", token);
+        using var response = await Http.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+        var found = await response.Content.ReadFromJsonAsync<IReadOnlyList<PullRequest>>(cancellationToken);
+        return Opened(found?.FirstOrDefault());
+    }
+
+    private static GitHubPullRequestOpening.Opened? Opened(PullRequest? pullRequest) =>
+        pullRequest is { Number: > 0, HtmlUrl.Length: > 0 }
+            ? new GitHubPullRequestOpening.Opened(pullRequest.Number, pullRequest.HtmlUrl)
+            : null;
+
     /// <summary>A GET request to the GitHub API, authenticated with <paramref name="token"/>.</summary>
     private static HttpRequestMessage Get(string path, string token) => Request(HttpMethod.Get, path, token);
 
@@ -243,5 +324,17 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("private")] bool Private);
 
-    private sealed record Repository([property: JsonPropertyName("full_name")] string? FullName);
+    private sealed record Repository(
+        [property: JsonPropertyName("full_name")] string? FullName,
+        [property: JsonPropertyName("default_branch")] string? DefaultBranch);
+
+    private sealed record NewPullRequest(
+        [property: JsonPropertyName("title")] string Title,
+        [property: JsonPropertyName("head")] string Head,
+        [property: JsonPropertyName("base")] string Base,
+        [property: JsonPropertyName("body")] string Body);
+
+    private sealed record PullRequest(
+        [property: JsonPropertyName("number")] int Number,
+        [property: JsonPropertyName("html_url")] string? HtmlUrl);
 }

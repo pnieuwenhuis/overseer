@@ -8,7 +8,7 @@ namespace Overseer.Implementation;
 /// Verification: Overseer itself builds and tests repositories in a Sandbox, by their Repository Manifests (ADR 0003) as the
 /// clones hold them now, so that work counts as done only when its tests actually pass.
 /// </summary>
-public sealed class Verification(RepositoryCommands commands, ComposeDependencies dependencies)
+public sealed class Verification(RepositoryCommands commands, ComposeDependencies dependencies, IntentBranches branches)
 {
     /// <summary>
     /// Verifies <paramref name="repositories"/>: first, where a repository's changes touch its manifest or its Compose file, its
@@ -26,9 +26,29 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
     /// <exception cref="InvalidOperationException">
     /// They couldn't be verified, as when the Sandbox no longer answers, which says nothing about the work; the message says why.
     /// </exception>
-    public async Task<IReadOnlyList<VerificationStep>> VerifyAsync(
+    public Task<IReadOnlyList<VerificationStep>> VerifyAsync(
         Sandbox sandbox, IReadOnlyList<RepositoryName> scope, IReadOnlyCollection<RepositoryName> repositories,
-        IReadOnlyDictionary<RepositoryName, IReadOnlyList<string>> changes, CancellationToken cancellationToken)
+        IReadOnlyDictionary<RepositoryName, IReadOnlyList<string>> changes, CancellationToken cancellationToken) =>
+        VerifyAsync(sandbox, scope, repositories, changes, full: false, cancellationToken);
+
+    /// <summary>
+    /// The full verification, which the work on the Intent branch passes as a whole: it verifies every Repository in scope as
+    /// <c>VerifyAsync</c> does, but a repository without a manifest fails when it differs from its default branch, and a repository
+    /// that fails doesn't keep the others from being built and tested, so that all that fail are found. A <c>setup</c> command or a
+    /// Compose start that fails still stops it, as what is built and tested after it relies on them.
+    /// </summary>
+    /// <param name="scope">The Repositories in scope.</param>
+    /// <param name="changes">As for <c>VerifyAsync</c>.</param>
+    /// <returns>What was run to verify them, in order, which passed when every step did.</returns>
+    /// <exception cref="InvalidOperationException">They couldn't be verified, as for <c>VerifyAsync</c>.</exception>
+    public Task<IReadOnlyList<VerificationStep>> VerifyAllAsync(
+        Sandbox sandbox, IReadOnlyList<RepositoryName> scope, IReadOnlyDictionary<RepositoryName, IReadOnlyList<string>> changes,
+        CancellationToken cancellationToken) =>
+        VerifyAsync(sandbox, scope, scope, changes, full: true, cancellationToken);
+
+    private async Task<IReadOnlyList<VerificationStep>> VerifyAsync(
+        Sandbox sandbox, IReadOnlyList<RepositoryName> scope, IReadOnlyCollection<RepositoryName> repositories,
+        IReadOnlyDictionary<RepositoryName, IReadOnlyList<string>> changes, bool full, CancellationToken cancellationToken)
     {
         var steps = new List<VerificationStep>();
         // Every manifest is read before anything runs, so that an invalid one is found at once.
@@ -41,11 +61,22 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
                     manifests.Add((repository, manifest));
                     break;
                 case RepositoryManifestReading.Invalid(var errors):
-                    var what = $"The Repository Manifest of {repository} ({RepositoryManifest.Path})";
+                    var invalid = ManifestOf(repository);
                     steps.Add(new VerificationStep(
-                        repository, what, Command: null, $"{what} is invalid.",
+                        repository, invalid, Command: null, $"{invalid} is invalid.",
                         await commands.RedactedAsync(string.Join("\n", errors.Select(error => $"- {error}")), cancellationToken)));
-                    return steps;
+                    if (!full)
+                    {
+                        return steps;
+                    }
+                    break;
+                case RepositoryManifestReading.Missing
+                    when full && await branches.DiffersFromDefaultBranchAsync(sandbox, repository, cancellationToken):
+                    steps.Add(new VerificationStep(
+                        repository, ManifestOf(repository), Command: null,
+                        $"{repository} is changed and has no Repository Manifest ({RepositoryManifest.Path}), so its work can't be verified.",
+                        Output: ""));
+                    break;
             }
         }
 
@@ -68,8 +99,9 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
 
         foreach (var (repository, manifest) in manifests)
         {
-            if (!await RunAsync(repository, "build", manifest.Build, RepositoryCommands.BuildLimit)
-                || !await RunAsync(repository, "test", manifest.Test, RepositoryCommands.TestLimit))
+            var passed = await RunAsync(repository, "build", manifest.Build, RepositoryCommands.BuildLimit)
+                && await RunAsync(repository, "test", manifest.Test, RepositoryCommands.TestLimit);
+            if (!passed && !full)
             {
                 break;
             }
@@ -127,6 +159,8 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
             return failure is null;
         }
     }
+
+    private static string ManifestOf(RepositoryName repository) => $"The Repository Manifest of {repository} ({RepositoryManifest.Path})";
 
     /// <summary>A manifest's path of a file as git names it: without <c>.</c> segments or doubled slashes.</summary>
     private static string PathFromRoot(string path) =>

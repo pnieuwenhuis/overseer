@@ -33,6 +33,33 @@ public interface IGitHubGateway
     /// <param name="path">The file's path from the repository's root, such as <c>.overseer.yml</c>.</param>
     /// <returns>What GitHub says; <c>null</c> when no GitHub token is set.</returns>
     Task<GitHubFileCheck?> CheckFileAsync(RepositoryName repository, string? branch, string path, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Opens a pull request in <paramref name="repository"/>, with the GitHub token Overseer uses, from <paramref name="branch"/> to
+    /// the repository's default branch. One that is open between the two already counts as opened, and stays as it is.
+    /// </summary>
+    /// <param name="branch">A branch of the repository.</param>
+    /// <param name="body">Its description, in Markdown.</param>
+    /// <returns>What GitHub did; <c>null</c> when no GitHub token is set.</returns>
+    Task<GitHubPullRequestOpening?> OpenPullRequestAsync(
+        RepositoryName repository, string branch, string title, string body, CancellationToken cancellationToken);
+}
+
+/// <summary>What GitHub did when asked to open a pull request.</summary>
+public abstract record GitHubPullRequestOpening
+{
+    private GitHubPullRequestOpening()
+    {
+    }
+
+    /// <summary>The pull request is open: the repository's number <paramref name="Number"/>, whose page is <paramref name="Url"/>.</summary>
+    public sealed record Opened(int Number, string Url) : GitHubPullRequestOpening;
+
+    /// <summary>
+    /// GitHub opened nothing, as for a branch with nothing the default branch doesn't have, or a repository the token can't reach, or
+    /// could not be asked; <paramref name="Error"/> is GitHub's error.
+    /// </summary>
+    public sealed record Fails(string Error) : GitHubPullRequestOpening;
 }
 
 /// <summary>What GitHub says about a file on a branch.</summary>

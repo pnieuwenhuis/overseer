@@ -11,6 +11,8 @@
     </li>
     <li class="@StepClass(ImplementationPhase.RunningSetup)">Run each repository's setup command</li>
     <li class="@StepClass(ImplementationPhase.StartingDependencies)">Start the services of each repository's Compose file</li>
+    <li class="@StepClass(ImplementationPhase.FinalVerification)">Build and test every repository on the Intent branch</li>
+    <li class="@StepClass(ImplementationPhase.OpeningPullRequests)">Open a pull request for each repository that changed</li>
 </WorkSteps>
 
 @code {
@@ -27,11 +29,19 @@
         ImplementationPhase.RunningSetup => $"Running the setup command of {Implementation.Repository}.",
         ImplementationPhase.StartingDependencies => $"Starting the Compose services of {Implementation.Repository}.",
         ImplementationPhase.Ready => "The Intent is ready: its Sandbox is prepared for the Squad.",
+        ImplementationPhase.FinalVerification => "Running the final verification: the full build and tests on the Intent branch.",
+        ImplementationPhase.OpeningPullRequests => "Opening a pull request for each changed repository.",
         _ => "",
     };
 
-    // A failure after the Sandbox was prepared, as of a Task's session, leaves these steps done.
-    private string StepClass(ImplementationPhase step) => Steps.ClassOf(
-        Implementation is { Phase: ImplementationPhase.Failed, SandboxPrepared: true } ? ImplementationPhase.Ready : Implementation.Phase,
-        step, failed: ImplementationPhase.Failed);
+    // A failure after the Sandbox was prepared, as of a Task's session, leaves the steps until then done, and one after the final
+    // verification passed, as of a pull request, those before it.
+    private string StepClass(ImplementationPhase step) => Implementation switch
+    {
+        { Phase: ImplementationPhase.Failed, AwaitingPullRequests: true } =>
+            step < ImplementationPhase.OpeningPullRequests ? "step-done" : "step-stopped",
+        _ => Steps.ClassOf(
+            Implementation is { Phase: ImplementationPhase.Failed, SandboxPrepared: true } ? ImplementationPhase.Ready : Implementation.Phase,
+            step, failed: ImplementationPhase.Failed),
+    };
 }

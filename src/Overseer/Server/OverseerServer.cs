@@ -11,6 +11,7 @@ using Overseer.ModelProviders;
 using Overseer.Persistence;
 using Overseer.Refinement;
 using Overseer.Repositories;
+using Overseer.Review;
 using Overseer.Sandboxes;
 using Overseer.Secrets;
 using Overseer.Settings;
@@ -67,6 +68,7 @@ public static class OverseerServer
         builder.Services.AddSingleton<IIntentFailures, RefinementFailures>();
         builder.Services.AddSingleton<IIntentFailures, ImplementationFailures>();
         builder.Services.AddSingleton<IIntentAttention, RefinementAttention>();
+        builder.Services.AddSingleton<IIntentAttention, ReviewAttention>();
         builder.Services.AddSingleton<IntentLifecycle>();
         builder.Services.AddSingleton<SpecStore>();
         builder.Services.AddSingleton<SpecEdits>();
@@ -82,6 +84,8 @@ public static class OverseerServer
         builder.Services.AddSingleton<IntentTasks>();
         builder.Services.AddSingleton<VerificationAttempts>();
         builder.Services.AddSingleton<TaskLoop>();
+        builder.Services.AddSingleton<FinalVerification>();
+        builder.Services.AddSingleton<PullRequests>();
         builder.Services.AddSingleton<TaskRunner>();
         builder.Services.AddHostedService(services => services.GetRequiredService<TaskRunner>());
 

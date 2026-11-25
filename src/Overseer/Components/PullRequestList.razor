@@ -1,0 +1,27 @@
+@* An Intent's pull requests, each linked to on GitHub. *@
+@using Overseer.Implementation
+
+<section class="pull-requests" aria-label="Pull requests">
+    <h2>Pull requests</h2>
+    @if (PullRequests.Count == 0)
+    {
+        <p class="pull-requests-none">No repository changed, so there is no pull request.</p>
+    }
+    else
+    {
+        <ul class="pull-request-list">
+            @foreach (var pullRequest in PullRequests)
+            {
+                <li @key="pullRequest.Repository">
+                    <a class="pull-request-link" href="@pullRequest.Url">@pullRequest.Repository #@pullRequest.Number</a>
+                </li>
+            }
+        </ul>
+    }
+</section>
+
+@code {
+    /// <summary>Ordered by repository; empty only once it is known that no repository changed.</summary>
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<PullRequest> PullRequests { get; set; }
+}

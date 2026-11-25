@@ -21,6 +21,12 @@ public sealed partial record RepositoryManifest(string Setup, string Build, stri
     /// <summary>Its path from the repository's root.</summary>
     public const string Path = ".overseer.yml";
 
+    /// <summary>What it holds, in words for an agent that may have to create one.</summary>
+    public const string Format =
+        "It holds the shell commands `setup` (prepares a fresh clone, such as installing dependencies), `build` and `test`, " +
+        "run from the repository's root, and optionally `compose`, the path of a Docker Compose file that starts the services " +
+        "the tests need.";
+
     private const string Keys = "setup, build, test and, optionally, compose";
     private const string NotAMapping = $"It must be a mapping of {Keys}.";
 

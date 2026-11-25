@@ -29,6 +29,9 @@ namespace Overseer.Persistence.Migrations
                     b.Property<Guid>("IntentId")
                         .HasColumnType("uuid");
 
+                    b.PrimitiveCollection<List<string>>("AwaitingPullRequests")
+                        .HasColumnType("text[]");
+
                     b.Property<string>("Error")
                         .HasColumnType("text");
 
@@ -62,6 +65,9 @@ namespace Overseer.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<bool>("IsFixUp")
+                        .HasColumnType("boolean");
+
                     b.PrimitiveCollection<List<string>>("Repositories")
                         .IsRequired()
                         .HasColumnType("text[]");
@@ -81,6 +87,26 @@ namespace Overseer.Persistence.Migrations
                     b.HasKey("IntentId", "Number");
 
                     b.ToTable("IntentTasks", (string)null);
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.PullRequestRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Repository")
+                        .HasColumnType("text");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("IntentId", "Repository");
+
+                    b.ToTable("PullRequests", (string)null);
                 });
 
             modelBuilder.Entity("Overseer.Implementation.VerificationAttemptRecord", b =>
@@ -500,6 +526,15 @@ namespace Overseer.Persistence.Migrations
                 });
 
             modelBuilder.Entity("Overseer.Implementation.IntentTaskRecord", b =>
+                {
+                    b.HasOne("Overseer.Intents.IntentRecord", null)
+                        .WithMany()
+                        .HasForeignKey("IntentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.PullRequestRecord", b =>
                 {
                     b.HasOne("Overseer.Intents.IntentRecord", null)
                         .WithMany()

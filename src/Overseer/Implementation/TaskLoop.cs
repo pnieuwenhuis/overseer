@@ -9,8 +9,8 @@ namespace Overseer.Implementation;
 
 /// <summary>
 /// The Squad at work: carries out an Intent's Tasks in its prepared Sandbox, one at a time (ADR 0001), in their order, each in a
-/// new agent session for the Task's role. Once the agent says it is done, Overseer verifies the work (<see cref="Verification"/>)
-/// and tells the agent what failed, for it to fix, until the work passes or the allowed attempts are used up, which makes the Task
+/// new agent session for the Task's role. Once the agent says it is done, Overseer verifies the work (<see cref="Verification"/>,
+/// the full one for the fix-up Task) and tells the agent what failed, for it to fix, until the work passes or the allowed attempts are used up, which makes the Task
 /// a Failed Task. Work that passes is committed and pushed to the Intent branch (<see cref="IntentBranches"/>); only then is the
 /// Task Done and the next one started.
 /// </summary>
@@ -129,8 +129,10 @@ public sealed class TaskLoop(
             try
             {
                 var changes = await ChangesAsync(intent, sandbox, cancellationToken);
-                var steps = await verification.VerifyAsync(
-                    sandbox, intent.RepositoriesInScope, [.. task.Repositories.Union(changes.Keys)], changes, cancellationToken);
+                var steps = task.IsFixUp
+                    ? await verification.VerifyAllAsync(sandbox, intent.RepositoriesInScope, changes, cancellationToken)
+                    : await verification.VerifyAsync(
+                        sandbox, intent.RepositoriesInScope, [.. task.Repositories.Union(changes.Keys)], changes, cancellationToken);
                 attempt = new VerificationAttempt(task.Number, run, number, steps);
                 changedRepositories = [.. intent.RepositoriesInScope.Where(changes.ContainsKey)];
             }
@@ -141,7 +143,8 @@ public sealed class TaskLoop(
             }
             await attempts.RecordAsync(intent.Id, attempt, cancellationToken);
             changed();
-            if (attempt.FailedStep is not { } failed)
+            var failed = attempt.FailedSteps;
+            if (failed.Count == 0)
             {
                 return new Work.Verified(changedRepositories);
             }
@@ -153,7 +156,7 @@ public sealed class TaskLoop(
                 changed();
                 return new Work.Unfinished(
                     $"Task {task.Number} is a Failed Task: its work didn't pass verification in {number} "
-                    + $"{(number == 1 ? "attempt" : "attempts")}. In the last one: {failed.Failure}");
+                    + $"{(number == 1 ? "attempt" : "attempts")}. In the last one: {string.Join(" ", failed.Select(step => step.Failure))}");
             }
             message = TaskInstructions.VerificationFailed(task, failed, number, allowed);
         }

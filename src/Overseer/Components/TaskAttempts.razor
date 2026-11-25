@@ -9,8 +9,8 @@
         @foreach (var attempt in Attempts)
         {
             @* No list items here: the Task's is one already. *@
-            <details @key="(attempt.Run, attempt.Number)" class="task-attempt" data-task="@attempt.TaskNumber" data-passed="@(attempt.FailedStep is null)">
-                <summary class="task-attempt-heading">@(runs ? $"Run {attempt.Run}, attempt" : "Attempt") @attempt.Number: @(attempt.FailedStep is { } failed ? $"failed. {failed.Failure}" : "passed.")</summary>
+            <details @key="(attempt.Run, attempt.Number)" class="task-attempt" data-task="@attempt.TaskNumber" data-passed="@(attempt.FailedSteps.Count == 0)">
+                <summary class="task-attempt-heading">@(runs ? $"Run {attempt.Run}, attempt" : "Attempt") @attempt.Number: @Outcome(attempt)</summary>
                 @foreach (var step in attempt.Steps)
                 {
                     <div class="verification-step" data-passed="@step.Passed">
@@ -37,4 +37,7 @@
 @code {
     [Parameter, EditorRequired]
     public required IReadOnlyList<VerificationAttempt> Attempts { get; set; }
+
+    private static string Outcome(VerificationAttempt attempt) =>
+        attempt.FailedSteps is { Count: > 0 } failed ? $"failed. {string.Join(" ", failed.Select(step => step.Failure))}" : "passed.";
 }

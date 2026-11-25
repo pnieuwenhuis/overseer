@@ -88,7 +88,7 @@ internal static class AnalystInstructions
         {string.Join("\n", intent.RepositoriesInScope.Select(repository => $"- {repository} ({repository.WebUrl})"))}
 
         Each Repository in scope needs a Repository Manifest, `{RepositoryManifest.Path}` at its root on its default branch, so
-        that the work on it can be verified. {ManifestFormat}
+        that the work on it can be verified. {RepositoryManifest.Format}
 
         {ManifestStatus(manifests)}
 
@@ -152,12 +152,6 @@ internal static class AnalystInstructions
         Overseer takes the file away once your turn ends. When it isn't valid, it isn't stored and the human doesn't see it:
         you are told what is wrong, and write the whole Spec again.
         """;
-
-    /// <summary>What a Repository Manifest holds, for an Analyst that has a Task create one.</summary>
-    private const string ManifestFormat =
-        "It holds the shell commands `setup` (prepares a fresh clone, such as installing dependencies), `build` and `test`, " +
-        "run from the repository's root, and optionally `compose`, the path of a Docker Compose file that starts the services " +
-        "the tests need.";
 
     /// <summary>Which Repositories in scope lack a Repository Manifest, and what the Spec must do about it.</summary>
     private static string ManifestStatus(ManifestCheck manifests)

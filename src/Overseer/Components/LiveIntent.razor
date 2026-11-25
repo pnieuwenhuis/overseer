@@ -7,6 +7,7 @@
 @inject SpecStore Specs
 @inject IntentTasks Tasks
 @inject VerificationAttempts Attempts
+@inject PullRequests PullRequests
 
 @if (Shown is { WhyNot: { } why })
 {
@@ -88,6 +89,12 @@
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
                 <ImplementationSteps Intent="intent" Implementation="implementation" />
+            </div>
+        }
+        @if (intent.State == IntentState.InReview || Shown.PullRequests.Count > 0)
+        {
+            <div class="border-b border-line px-5 py-4 sm:px-6">
+                <PullRequestList PullRequests="Shown.PullRequests" />
             </div>
         }
         @if (Shown.Tasks.Count > 0)
@@ -208,14 +215,15 @@
             intent is null ? [] : await Refinements.TranscriptOfAsync(intent.Id, cancellationToken),
             // The Approved Spec once there is one to show, else the latest version.
             intent is null ? null
-                : intent is { State: IntentState.Approved or IntentState.Implementing, ApprovedSpecVersion: { } approved }
+                : intent is { State: IntentState.Approved or IntentState.Implementing or IntentState.InReview, ApprovedSpecVersion: { } approved }
                     ? await Specs.VersionOfAsync(intent.Id, approved, cancellationToken)
                     : await Specs.LatestOfAsync(intent.Id, cancellationToken),
             intent is null ? [] : await Specs.VersionsOfAsync(intent.Id, cancellationToken),
             intent is null ? [] : await Specs.CommentsOfAsync(intent.Id, cancellationToken),
             intent is { State: IntentState.AwaitingSpecApproval } ? await Lifecycle.WhyNotApprovedAndStartedAsync(Id, cancellationToken) : null,
             intent is null ? [] : await Tasks.OfAsync(intent.Id, cancellationToken),
-            intent is null ? [] : await Attempts.OfAsync(intent.Id, cancellationToken));
+            intent is null ? [] : await Attempts.OfAsync(intent.Id, cancellationToken),
+            intent is null ? [] : await PullRequests.OfAsync(intent.Id, cancellationToken));
     }
 
     /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
@@ -235,10 +243,11 @@
     /// </param>
     /// <param name="Tasks">The Intent's own Tasks, in order; empty until its implementation has begun.</param>
     /// <param name="Attempts">The verification attempts on its Tasks, by Task, in the order they were made.</param>
+    /// <param name="PullRequests">Its pull requests, ordered by repository; empty when none is opened.</param>
     public sealed record Detail(
         Intent? Intent, string? WhyNot, RefinementProgress? Refinement, ImplementationProgress? Implementation, IReadOnlyList<Round> Transcript,
         SpecVersion? Spec, IReadOnlyList<SpecVersionHeading> SpecVersions, IReadOnlyList<SpecComment> Comments, string? WhyNotApprovedAndStarted,
-        IReadOnlyList<IntentTask> Tasks, IReadOnlyList<VerificationAttempt> Attempts);
+        IReadOnlyList<IntentTask> Tasks, IReadOnlyList<VerificationAttempt> Attempts, IReadOnlyList<PullRequest> PullRequests);
 
     /// <summary>A change of an Intent's state that the page offers with a button, disabled while it can't be made.</summary>
     public enum StateChange

@@ -34,8 +34,7 @@ internal static class TaskInstructions
 
         - Read the agent guidance of each repository you change, such as its `AGENTS.md`, and follow it.
         - Before you end your turn, run the `build` and `test` commands of each repository you changed, and make them pass.
-        - When you end your turn, Overseer verifies your work itself: it runs those commands in each repository your Task touches,
-          and in each other one you changed, after `setup` where you changed the manifest or the Compose file. What fails comes back
+        - When you end your turn, Overseer verifies your work itself: {VerifiedBy(task)} What fails comes back
           to you to fix. What passes, Overseer commits where you haven't, and pushes: leave nothing behind that doesn't belong in
           the repository, such as build outputs that its `.gitignore` doesn't cover.
         - Leave pushing to Overseer: never run `git push`, don't open or change pull requests, and don't change anything else on
@@ -61,16 +60,41 @@ internal static class TaskInstructions
         """;
 
     /// <summary>What a Task's session is told when its work failed verification, for it to fix.</summary>
-    /// <param name="failed">The step of the verification that failed.</param>
+    /// <param name="failed">The steps of the verification that failed.</param>
     /// <param name="attempt">Which verification attempt that was, from 1, of the <paramref name="allowed"/> ones.</param>
-    public static string VerificationFailed(IntentTask task, VerificationStep failed, int attempt, int allowed) =>
+    public static string VerificationFailed(IntentTask task, IReadOnlyList<VerificationStep> failed, int attempt, int allowed) =>
         $"""
         Overseer verified your work on Task {task.Number}, and it failed: attempt {attempt} of {allowed}.
 
-        {FailureOf(failed)}
+        {FailuresOf(failed)}
 
         Fix it, and end your turn as before. Overseer then verifies your work again.
         """;
+
+    /// <summary>The description of the fix-up Task, in Markdown: why there is one, and what failed.</summary>
+    /// <param name="failed">The steps of the final verification that failed.</param>
+    public static string FixUp(IReadOnlyList<VerificationStep> failed) =>
+        $"""
+        Once the Tasks before this one were Done, Overseer ran the final verification, the full build and tests on the Intent
+        branch, and it failed. Make it pass.
+
+        {FailuresOf(failed)}
+        """;
+
+    /// <summary>How each of these steps of a verification failed, with the command that was run and what it printed.</summary>
+    public static string FailuresOf(IReadOnlyList<VerificationStep> failed) => string.Join("\n\n", failed.Select(FailureOf));
+
+    /// <summary>What Overseer runs to verify a Task's work, and in which repositories.</summary>
+    private static string VerifiedBy(IntentTask task) => task.IsFixUp
+        ? $"""
+          it runs those commands in every Repository in scope,
+            also those your Task doesn't list, after `setup` where you changed the manifest or the Compose file. A repository you
+            changed, or that an earlier Task changed, must have a Repository Manifest. {RepositoryManifest.Format}
+          """
+        : """
+          it runs those commands in each repository your Task touches,
+            and in each other one you changed, after `setup` where you changed the manifest or the Compose file.
+          """;
 
     /// <summary>How a step of a verification failed, with the command that was run and what it printed.</summary>
     private static string FailureOf(VerificationStep failed)

@@ -59,11 +59,14 @@ public sealed class VerificationAttempts(IDbContextFactory<OverseerDbContext> da
 }
 
 /// <summary>One verification of a Task's work: the <paramref name="Number"/>th, from 1, of the Task's <paramref name="Run"/>th run.</summary>
-/// <param name="Steps">What was run to verify it, in order; only the last can have failed.</param>
+/// <param name="Steps">
+/// What was run to verify it, in order. A Task's verification stops at the first step that fails; a full one, of the fix-up Task,
+/// goes on with the other repositories, so that several can have failed.
+/// </param>
 public sealed record VerificationAttempt(int TaskNumber, int Run, int Number, IReadOnlyList<VerificationStep> Steps)
 {
-    /// <summary>The step that failed; <c>null</c> when the attempt passed.</summary>
-    public VerificationStep? FailedStep => Steps.FirstOrDefault(step => !step.Passed);
+    /// <summary>The steps that failed, in order; none when the attempt passed.</summary>
+    public IReadOnlyList<VerificationStep> FailedSteps => [.. Steps.Where(step => !step.Passed)];
 }
 
 /// <summary>A verification attempt, as PostgreSQL holds it.</summary>

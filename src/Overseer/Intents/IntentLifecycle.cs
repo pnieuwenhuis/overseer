@@ -228,6 +228,26 @@ public sealed class IntentLifecycle(
         }, cancellationToken);
 
     /// <summary>
+    /// Moves an Implementing Intent to In Review, as its work has passed the final verification and its pull requests are opened;
+    /// <paramref name="finishImplementation"/> records that in the same transaction. It keeps its Active Intent slot, and its Working
+    /// Time goes on. Refused unless the Intent is Implementing at this moment, and then nothing is recorded.
+    /// </summary>
+    /// <param name="finishImplementation">Changes the database it is given, under the lock on the Intent's row.</param>
+    public Task<IntentChange> AwaitReviewAsync(
+        Guid id, Func<OverseerDbContext, CancellationToken, Task> finishImplementation, CancellationToken cancellationToken) =>
+        ChangeStateAsync(id, async (database, state, stopping) =>
+        {
+            if (state is not IntentState.Implementing)
+            {
+                return new Decision.Refuse(state is null
+                    ? NoSuchIntent
+                    : $"This Intent is {state.Value.InWords()}, and only an Implementing Intent moves to In Review.");
+            }
+            await finishImplementation(database, stopping);
+            return new Decision.MoveTo(IntentState.InReview);
+        }, cancellationToken);
+
+    /// <summary>
     /// Adds a version to the Spec of an Intent awaiting its approval, which <paramref name="addVersion"/> does in the same transaction,
     /// under the lock on the Intent's row: no other version is added meanwhile. The Intent stays awaiting approval, now of that version.
     /// Refused unless the Intent awaits Spec approval at this moment, or when <paramref name="addVersion"/> refuses, and then nothing is
@@ -382,10 +402,10 @@ public sealed class IntentLifecycle(
     /// colour and its label in <see cref="IntentWords"/>, so that the light doesn't come to rely on the colour. Checked in this order:
     /// first red, labelled Failed, when <see cref="Intent.HasFailed"/> (so far a failed Refinement or implementation, as when its Sandbox
     /// couldn't be created; later a Failed Task or a failed merge, each through <see cref="IIntentFailures"/>), as a failure outweighs a
-    /// question; then orange, labelled Needs Attention, when <see cref="Intent.NeedsAttention"/> (so far an unanswered Round, through
-    /// <see cref="IIntentAttention"/>, and a Spec awaiting approval, which its state says; later an agent's question and Review Comments
-    /// awaiting triage, through <see cref="IIntentAttention"/>). InReview isn't settled by the green below: the ticket that makes it
-    /// reachable decides its light, as an Intent In Review can be up to the user rather than to agents.
+    /// question; then orange, labelled Needs Attention, when <see cref="Intent.NeedsAttention"/> (so far an unanswered Round and an
+    /// Intent In Review, through <see cref="IIntentAttention"/>, and a Spec awaiting approval, which its state says; later an agent's
+    /// question, through <see cref="IIntentAttention"/>). An Intent In Review Needs Attention whenever no agent is working on it, as
+    /// only the user can move it on: so far that is always.
     /// </summary>
     public static IntentLight? LightOf(Intent intent) =>
         intent.HasFailed ? IntentLight.Red
@@ -839,12 +859,12 @@ public enum IntentState
     Approved,
 
     /// <summary>
-    /// The Squad implements the Approved Spec, in a Sandbox the Task Runner prepares as the Intent moves here. Nothing moves an
-    /// Intent on from here yet.
+    /// The Squad implements the Approved Spec, in a Sandbox the Task Runner prepares as the Intent moves here. It moves on to In
+    /// Review once its work passes the final verification and its pull requests are opened.
     /// </summary>
     Implementing,
 
-    // Nothing reaches this yet, except by an update of the database in tests. The transitions to and from it come with their triggers.
+    /// <summary>The Intent's work is up for review. Nothing moves an Intent on from here yet.</summary>
     InReview,
 
     /// <summary>

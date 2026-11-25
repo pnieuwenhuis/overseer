@@ -138,7 +138,85 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
             _ => new GitHubFileCheck.Fails(GitHubFileCheck.Unreachable(repository)),
         };
 
+    // By owner/name in lower case, then branch: the branches besides the default one, and whether each has commits of its own.
+    private readonly ConcurrentDictionary<(string Repository, string Branch), bool> _branches = new();
+
+    /// <summary>Makes the repository <paramref name="ownerAndName"/> have the branch <paramref name="branch"/>, as pushed to.</summary>
+    /// <param name="ahead">Whether it has commits the default branch doesn't, without which GitHub opens no pull request.</param>
+    public void AddBranch(string ownerAndName, string branch, bool ahead = true) =>
+        _branches[(Key(RepositoryName.Parse(ownerAndName)), branch)] = ahead;
+
+    // By owner/name in lower case: why GitHub refuses to open a pull request in that repository.
+    private readonly ConcurrentDictionary<string, string> _pullRequestRefusals = new();
+
+    private readonly ConcurrentQueue<FakePullRequest> _pullRequests = new();
+
+    private volatile Task _pullRequestsHeld = Task.CompletedTask;
+
+    /// <summary>
+    /// Makes GitHub answer a request to open a pull request only once <paramref name="until"/> completes, so that a test can act
+    /// meanwhile.
+    /// </summary>
+    public void HoldPullRequests(Task until) => _pullRequestsHeld = until;
+
+    /// <summary>Makes GitHub refuse to open pull requests in the repository <paramref name="ownerAndName"/> with <paramref name="error"/>.</summary>
+    public void RefusePullRequests(string ownerAndName, string error) =>
+        _pullRequestRefusals[Key(RepositoryName.Parse(ownerAndName))] = error;
+
+    /// <summary>Makes GitHub open pull requests in the repository <paramref name="ownerAndName"/> again.</summary>
+    public void AllowPullRequests(string ownerAndName) => _pullRequestRefusals.TryRemove(Key(RepositoryName.Parse(ownerAndName)), out _);
+
+    /// <summary>The pull requests GitHub opened, in that order.</summary>
+    public IReadOnlyList<FakePullRequest> PullRequests => [.. _pullRequests];
+
+    public async Task<GitHubPullRequestOpening?> OpenPullRequestAsync(
+        RepositoryName repository, string branch, string title, string body, CancellationToken cancellationToken)
+    {
+        await _pullRequestsHeld.WaitAsync(cancellationToken);
+        switch (await CheckRepositoryAsync(repository, cancellationToken))
+        {
+            case null:
+                return null;
+            case GitHubRepositoryCheck.Fails fails:
+                return new GitHubPullRequestOpening.Fails(fails.Error);
+            case GitHubRepositoryCheck.NotFound:
+                return new GitHubPullRequestOpening.Fails(GitHubFileCheck.Unreachable(repository));
+        }
+        if (_pullRequestRefusals.GetValueOrDefault(Key(repository)) is { } refusal)
+        {
+            return new GitHubPullRequestOpening.Fails(refusal);
+        }
+        var found = _repositories[Key(repository)];
+        lock (_pullRequests)
+        {
+            if (_pullRequests.FirstOrDefault(open => open.Repository == found.Name && open.Head == branch) is { } existing)
+            {
+                return new GitHubPullRequestOpening.Opened(existing.Number, existing.Url);
+            }
+            if (!_branches.TryGetValue((Key(repository), branch), out var ahead))
+            {
+                return new GitHubPullRequestOpening.Fails("Validation Failed: head invalid (HTTP 422)");
+            }
+            if (!ahead)
+            {
+                return new GitHubPullRequestOpening.Fails(
+                    $"Validation Failed: No commits between {found.DefaultBranch} and {branch} (HTTP 422)");
+            }
+            var number = _pullRequests.Count(open => open.Repository == found.Name) + 1;
+            var opened = new FakePullRequest(
+                found.Name, number, $"{found.Name.WebUrl}/pull/{number}", branch, found.DefaultBranch, title, body);
+            _pullRequests.Enqueue(opened);
+            return new GitHubPullRequestOpening.Opened(opened.Number, opened.Url);
+        }
+    }
+
     private static string Key(RepositoryName repository) => repository.ToString().ToLowerInvariant();
 
     private sealed record FakeRepository(RepositoryName Name, string? ReachableBy, string DefaultBranch);
 }
+
+/// <summary>A pull request the fake GitHub opened.</summary>
+/// <param name="Head">The branch it comes from.</param>
+/// <param name="Base">The branch it goes to.</param>
+public sealed record FakePullRequest(
+    RepositoryName Repository, int Number, string Url, string Head, string Base, string Title, string Body);

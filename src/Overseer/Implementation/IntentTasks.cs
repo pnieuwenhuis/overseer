@@ -10,7 +10,7 @@ namespace Overseer.Implementation;
 
 /// <summary>
 /// Each Intent's own Task list, which the Task Runner carries out, kept in PostgreSQL. It starts as the Approved Spec's Tasks and
-/// is kept apart from them, as the Approved Spec stays locked.
+/// is kept apart from them, as the Approved Spec stays locked; a failing final verification adds a fix-up Task to it.
 /// </summary>
 public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, SpecStore specs)
 {
@@ -123,6 +123,38 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
     }
 
     /// <summary>
+    /// Adds the fix-up Task to the end of the Intent's Tasks: a Developer's Task, Pending, to make the final verification pass.
+    /// An Intent gets only one.
+    /// </summary>
+    /// <param name="description">Markdown.</param>
+    /// <param name="repositories">The Repositories in scope that failed it.</param>
+    /// <returns>Whether it was added: not when the Intent has its fix-up Task already, in whatever state.</returns>
+    public async Task<bool> AddFixUpAsync(
+        Guid intentId, string title, string description, IReadOnlyList<RepositoryName> repositories, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        var tasks = database.IntentTasks.Where(task => task.IntentId == intentId);
+        if (await tasks.AnyAsync(task => task.IsFixUp, cancellationToken))
+        {
+            return false;
+        }
+        var last = await tasks.MaxAsync(task => (int?)task.Number, cancellationToken) ?? 0;
+        database.IntentTasks.Add(new IntentTaskRecord
+        {
+            IntentId = intentId,
+            Number = last + 1,
+            Title = StorableText.Of(title),
+            Description = StorableText.Of(description),
+            Role = AgentRole.Developer,
+            Repositories = [.. repositories.Select(repository => repository.ToString())],
+            State = IntentTaskState.Pending,
+            IsFixUp = true,
+        });
+        await database.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    /// <summary>
     /// Puts the Intent's Task that is Running, if one is, back to Pending in <paramref name="database"/>'s transaction: what ran it
     /// has ended without finishing it.
     /// </summary>
@@ -133,7 +165,7 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
 
     private static IntentTask Read(IntentTaskRecord task) => new(
         task.Number, task.Title, task.Description, task.Role, [.. task.Repositories.Select(RepositoryName.Parse)], task.State,
-        task.AwaitingPush?.Select(RepositoryName.Parse).ToList());
+        task.AwaitingPush?.Select(RepositoryName.Parse).ToList(), task.IsFixUp);
 }
 
 /// <summary>A Task of an Intent's own Task list, numbered in the order the Tasks are carried out, from 1.</summary>
@@ -144,9 +176,12 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
 /// Once its work has passed verification and until it is Done: the repositories it changed, whose Intent branch is still to be
 /// pushed. <c>null</c> otherwise.
 /// </param>
+/// <param name="IsFixUp">
+/// Whether it is the fix-up Task, added to make the final verification pass: the full verification is what verifies it.
+/// </param>
 public sealed record IntentTask(
     int Number, string Title, string Description, AgentRole Role, IReadOnlyList<RepositoryName> Repositories, IntentTaskState State,
-    IReadOnlyList<RepositoryName>? AwaitingPush);
+    IReadOnlyList<RepositoryName>? AwaitingPush, bool IsFixUp);
 
 public enum IntentTaskState
 {
@@ -184,4 +219,7 @@ public sealed class IntentTaskRecord
     /// the Task not yet Done.
     /// </summary>
     public List<string>? AwaitingPush { get; set; }
+
+    /// <summary>Whether it is the fix-up Task, which the failure of a final verification added.</summary>
+    public bool IsFixUp { get; init; }
 }

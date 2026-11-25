@@ -9,25 +9,33 @@ namespace Overseer.Implementation;
 
 /// <summary>
 /// The Task Runner: when the Intent Lifecycle moves an Intent to Implementing, it gives the Intent its Task list, prepares the
-/// Intent's Sandbox for the Squad (<see cref="SandboxPreparation"/>) and has the Squad carry out the Tasks there
-/// (<see cref="TaskLoop"/>), all in the background. Where each implementation stands, and the Sandbox it was prepared in, is kept
-/// in PostgreSQL. An implementation that fails leaves the Intent Implementing, in its slot, and red until a Retry, which goes on
-/// in the prepared Sandbox when there is one, and otherwise prepares a fresh one; one with a Failed Task has no such Retry. A
-/// restart of serve fails too, for now, every implementation that hadn't failed: its Sandbox goes with the restart.
+/// Intent's Sandbox for the Squad (<see cref="SandboxPreparation"/>), has the Squad carry out the Tasks there
+/// (<see cref="TaskLoop"/>), runs the final verification once all are Done (<see cref="FinalVerification"/>), and once that passes
+/// opens the pull requests (<see cref="PullRequests"/>) and has the Intent move to In Review, all in the background. Where each
+/// implementation stands, and the Sandbox it was prepared in, is kept in PostgreSQL. An implementation that fails leaves the Intent
+/// Implementing, in its slot, and red until a Retry, which goes on in the prepared Sandbox when there is one, and otherwise
+/// prepares a fresh one; once the final verification has passed, a Retry only opens the pull requests still missing, which needs no
+/// Sandbox. One with a Failed Task has no such Retry. A restart of serve fails too, for now, every implementation that hadn't
+/// failed: its Sandbox goes with the restart.
 /// </summary>
 public sealed class TaskRunner(
     IntentLifecycle lifecycle, SandboxRegistry sandboxes, SandboxPreparation preparation, IntentTasks tasks,
-    TaskLoop loop, IDbContextFactory<OverseerDbContext> databases, ILogger<TaskRunner> logger)
+    TaskLoop loop, FinalVerification finalVerification, PullRequests pullRequests, IDbContextFactory<OverseerDbContext> databases,
+    ILogger<TaskRunner> logger)
     : IHostedService
 {
     private const string Interrupted = "Overseer restarted, which interrupted the implementation. Retry to prepare a fresh Sandbox.";
 
+    private const string InterruptedPullRequests =
+        "Overseer restarted, which interrupted the implementation. Retry to open the pull requests.";
+
     private readonly SandboxedWork _work = new(logger);
 
     /// <summary>
-    /// Raised whenever an implementation changes phase, or one of its Tasks changes or is verified, on the thread that changed it,
-    /// once the change is committed. Handlers must not throw; read again with <see cref="ProgressOfAsync"/>,
-    /// <see cref="IntentTasks.OfAsync"/> and <see cref="VerificationAttempts.OfAsync"/>.
+    /// Raised whenever an implementation changes phase, one of its Tasks changes or is verified, or one of its pull requests is
+    /// opened, on the thread that changed it, once the change is committed. Handlers must not throw; read again with
+    /// <see cref="ProgressOfAsync"/>, <see cref="IntentTasks.OfAsync"/>, <see cref="VerificationAttempts.OfAsync"/> and
+    /// <see cref="PullRequests.OfAsync"/>.
     /// </summary>
     public event Action? Changed;
 
@@ -38,19 +46,27 @@ public sealed class TaskRunner(
     /// </summary>
     async Task IHostedService.StartAsync(CancellationToken cancellationToken)
     {
-        List<Guid> interrupted;
+        List<(Guid IntentId, bool AwaitingPullRequests)> interrupted;
         await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
             // Also an Implementing Intent without a record: one started before implementations were recorded, or as serve stopped.
-            interrupted = await database.Intents
+            interrupted = [.. (await database.Intents
                 .Where(intent => intent.State == IntentState.Implementing
                     && !database.Implementations.Any(implementation => implementation.IntentId == intent.Id && implementation.Phase == ImplementationPhase.Failed))
-                .Select(intent => intent.Id)
-                .ToListAsync(cancellationToken);
+                .Select(intent => new
+                {
+                    intent.Id,
+                    AwaitingPullRequests = database.Implementations.Any(
+                        implementation => implementation.IntentId == intent.Id && implementation.AwaitingPullRequests != null),
+                })
+                .ToListAsync(cancellationToken))
+                .Select(intent => (intent.Id, intent.AwaitingPullRequests))];
         }
-        foreach (var intentId in interrupted)
+        foreach (var (intentId, awaitingPullRequests) in interrupted)
         {
-            await EnterPhaseAsync(intentId, ImplementationPhase.Failed, repository: null, Interrupted, cancellationToken);
+            await EnterPhaseAsync(
+                intentId, ImplementationPhase.Failed, repository: null,
+                awaitingPullRequests ? InterruptedPullRequests : Interrupted, cancellationToken);
         }
         await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
@@ -84,20 +100,24 @@ public sealed class TaskRunner(
         if (stored is null)
         {
             return new ImplementationProgress(
-                ImplementationPhase.ProvisioningSandbox, Repository: null, Error: null, SandboxPrepared: false, HasFailedTask: false);
+                ImplementationPhase.ProvisioningSandbox, Repository: null, Error: null, SandboxPrepared: false, HasFailedTask: false,
+                AwaitingPullRequests: false);
         }
         var hasFailedTask = await database.IntentTasks
             .AnyAsync(task => task.IntentId == intent.Id && task.State == IntentTaskState.Failed, cancellationToken);
         return new ImplementationProgress(
             stored.Phase, stored.Repository is { } repository ? RepositoryName.Parse(repository) : null, stored.Error,
-            SandboxPrepared: stored.SandboxResourceId is not null, hasFailedTask);
+            SandboxPrepared: stored.SandboxResourceId is not null, hasFailedTask,
+            AwaitingPullRequests: stored.AwaitingPullRequests is not null);
     }
 
     /// <summary>
-    /// Takes up the implementation of an Implementing Intent again after it failed. One that failed once its Sandbox was prepared,
-    /// as when a Task's session broke off or its work couldn't be pushed, goes on in that Sandbox, with its first Task that isn't
-    /// Done. Otherwise, as when preparing failed or a restart interrupted it, or when the prepared Sandbox is gone, a fresh Sandbox
-    /// is prepared, once what is left of the old one is destroyed. The Intent stays Implementing throughout.
+    /// Takes up the implementation of an Implementing Intent again after it failed. One that failed once the final verification had
+    /// passed, as when a pull request couldn't be opened, only opens the pull requests still missing. One that failed once its Sandbox
+    /// was prepared, as when a Task's session broke off or its work couldn't be pushed, goes on in that Sandbox, with its first Task
+    /// that isn't Done, and the final verification once all are. Otherwise, as when preparing failed or a restart interrupted it, or
+    /// when the prepared Sandbox is gone, a fresh Sandbox is prepared, once what is left of the old one is destroyed. The Intent stays
+    /// Implementing throughout.
     /// </summary>
     /// <returns>
     /// Whether it started again: not when there is no such Intent, its implementation hasn't failed, or one of its Tasks is a Failed
@@ -115,7 +135,9 @@ public sealed class TaskRunner(
                 .ExecuteUpdateAsync(implementation => implementation
                     .SetProperty(
                         record => record.Phase,
-                        record => record.SandboxResourceId == null ? ImplementationPhase.ProvisioningSandbox : ImplementationPhase.Ready)
+                        record => record.AwaitingPullRequests != null ? ImplementationPhase.OpeningPullRequests
+                            : record.SandboxResourceId == null ? ImplementationPhase.ProvisioningSandbox
+                            : ImplementationPhase.Ready)
                     .SetProperty(record => record.Repository, (string?)null)
                     .SetProperty(record => record.Error, (string?)null), cancellationToken);
             if (retried == 0)
@@ -152,6 +174,21 @@ public sealed class TaskRunner(
             return null;
         }
         await tasks.CreateFromApprovedSpecAsync(intent, cancellationToken);
+        if (await AwaitingPullRequestsOfAsync(intentId, cancellationToken) is { } changed)
+        {
+            return await OpenPullRequestsAsync(intent, changed, cancellationToken);
+        }
+        return await VerifyInSandboxAsync(intent, retrying, cancellationToken);
+    }
+
+    /// <summary>
+    /// Has the Intent's work done and verified in its Sandbox, which is prepared first where there is none, until the final
+    /// verification passes, and then opens the pull requests.
+    /// </summary>
+    /// <returns>Why the implementation failed; <c>null</c> when it hasn't.</returns>
+    private async Task<string?> VerifyInSandboxAsync(Intent intent, bool retrying, CancellationToken cancellationToken)
+    {
+        var intentId = intent.Id;
         var sandbox = await PreparedSandboxOfAsync(intentId, cancellationToken);
         if (sandbox is null)
         {
@@ -180,7 +217,83 @@ public sealed class TaskRunner(
             }
             await EnterPhaseAsync(intentId, ImplementationPhase.Ready, repository: null, error: null, cancellationToken, sandbox);
         }
-        return await loop.RunAsync(intent, sandbox, () => Changed?.Invoke(), cancellationToken);
+        // Until the final verification passes: its first failure adds a fix-up Task, which is carried out like any other.
+        while (true)
+        {
+            if (await loop.RunAsync(intent, sandbox, () => Changed?.Invoke(), cancellationToken) is { } unfinished)
+            {
+                return unfinished;
+            }
+            await EnterPhaseAsync(intentId, ImplementationPhase.FinalVerification, repository: null, error: null, cancellationToken);
+            switch (await finalVerification.RunAsync(intent, sandbox, cancellationToken))
+            {
+                case FinalVerificationResult.FixUpAdded:
+                    await EnterPhaseAsync(intentId, ImplementationPhase.Ready, repository: null, error: null, cancellationToken, sandbox);
+                    break;
+                case FinalVerificationResult.Failed failed:
+                    return failed.Error;
+                case FinalVerificationResult.Passed passed:
+                    // From here on a Retry only opens the pull requests: the work is verified, and pushed.
+                    await AwaitPullRequestsAsync(intentId, passed.Changed, cancellationToken);
+                    return await OpenPullRequestsAsync(intent, passed.Changed, cancellationToken);
+                default:
+                    throw new UnreachableException();
+            }
+        }
+    }
+
+    /// <summary>Opens the pull requests still missing, and once each repository has its own, has the Intent move to In Review.</summary>
+    /// <param name="changed">The repositories that changed, each to have a pull request.</param>
+    /// <returns>Why a pull request couldn't be opened; <c>null</c> once none is missing.</returns>
+    private async Task<string?> OpenPullRequestsAsync(
+        Intent intent, IReadOnlyList<RepositoryName> changed, CancellationToken cancellationToken)
+    {
+        await EnterPhaseAsync(intent.Id, ImplementationPhase.OpeningPullRequests, repository: null, error: null, cancellationToken);
+        if (await pullRequests.OpenMissingAsync(intent, changed, () => Changed?.Invoke(), cancellationToken) is { } notOpened)
+        {
+            return notOpened;
+        }
+        // Refused only when the Intent is no longer Implementing, and then it isn't this implementation's to move.
+        await lifecycle.AwaitReviewAsync(
+            intent.Id,
+            // Work that changes after the review is verified anew.
+            (database, stopping) => database.Implementations
+                .Where(implementation => implementation.IntentId == intent.Id)
+                .ExecuteUpdateAsync(
+                    implementation => implementation
+                        .SetProperty(record => record.Phase, ImplementationPhase.Ready)
+                        .SetProperty(record => record.AwaitingPullRequests, (List<string>?)null),
+                    stopping),
+            cancellationToken);
+        return null;
+    }
+
+    /// <summary>
+    /// The repositories that changed and are each to have a pull request, once the Intent's final verification has passed; <c>null</c>
+    /// until then.
+    /// </summary>
+    private async Task<IReadOnlyList<RepositoryName>?> AwaitingPullRequestsOfAsync(Guid intentId, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        var stored = await database.Implementations
+            .Where(implementation => implementation.IntentId == intentId)
+            .Select(implementation => implementation.AwaitingPullRequests)
+            .SingleOrDefaultAsync(cancellationToken);
+        return stored?.Select(RepositoryName.Parse).ToList();
+    }
+
+    /// <summary>
+    /// Records that the Intent's work passed the final verification, so that what is left is a pull request for each of these
+    /// repositories, the ones that changed.
+    /// </summary>
+    private async Task AwaitPullRequestsAsync(Guid intentId, IReadOnlyList<RepositoryName> changed, CancellationToken cancellationToken)
+    {
+        var repositories = changed.Select(repository => repository.ToString()).ToList();
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await database.Implementations
+            .Where(implementation => implementation.IntentId == intentId)
+            .ExecuteUpdateAsync(
+                implementation => implementation.SetProperty(record => record.AwaitingPullRequests, repositories), cancellationToken);
     }
 
     /// <summary>
@@ -243,7 +356,7 @@ public sealed class TaskRunner(
     /// </summary>
     /// <param name="sandbox">
     /// The Sandbox the implementation is prepared in, with <see cref="ImplementationPhase.Ready"/>. A failure keeps the one
-    /// recorded; every other phase comes before there is one.
+    /// recorded, as do the phases after it; every other phase comes before there is one.
     /// </param>
     private async Task EnterPhaseAsync(
         Guid intentId, ImplementationPhase phase, RepositoryName? repository, string? error, CancellationToken cancellationToken,
@@ -268,7 +381,7 @@ public sealed class TaskRunner(
                         .SetProperty(record => record.Phase, phase)
                         .SetProperty(record => record.Repository, name)
                         .SetProperty(record => record.Error, stored);
-                    if (phase != ImplementationPhase.Failed)
+                    if (phase <= ImplementationPhase.Ready)
                     {
                         implementation.SetProperty(record => record.SandboxResourceId, resourceId);
                     }
@@ -311,6 +424,12 @@ public enum ImplementationPhase
     /// <summary>The Sandbox is ready for the Squad.</summary>
     Ready,
 
+    /// <summary>Every Task is Done, and the Intent branch is built and tested as a whole.</summary>
+    FinalVerification,
+
+    /// <summary>The final verification has passed, and each repository that changed gets its pull request.</summary>
+    OpeningPullRequests,
+
     /// <summary>The implementation failed; it can be retried.</summary>
     Failed,
 }
@@ -322,8 +441,12 @@ public enum ImplementationPhase
 /// Whether its Sandbox has been prepared, which a failure after that leaves so: a Retry then goes on in it, unless it is gone.
 /// </param>
 /// <param name="HasFailedTask">Whether one of its Tasks is a Failed Task, which the implementation's Retry doesn't take up again.</param>
+/// <param name="AwaitingPullRequests">
+/// Whether its final verification has passed, so that what is left, also after a failure, is opening the pull requests.
+/// </param>
 public sealed record ImplementationProgress(
-    ImplementationPhase Phase, RepositoryName? Repository, string? Error, bool SandboxPrepared, bool HasFailedTask);
+    ImplementationPhase Phase, RepositoryName? Repository, string? Error, bool SandboxPrepared, bool HasFailedTask,
+    bool AwaitingPullRequests);
 
 /// <summary>An Intent's implementation, as PostgreSQL holds it: one per Intent.</summary>
 public sealed class ImplementationRecord
@@ -342,4 +465,10 @@ public sealed class ImplementationRecord
     /// serve, which destroys it.
     /// </summary>
     public string? SandboxResourceId { get; set; }
+
+    /// <summary>
+    /// <c>owner/name</c> of each repository that changed, each to have a pull request: set once the final verification has passed,
+    /// until the Intent is In Review. <c>null</c> otherwise.
+    /// </summary>
+    public List<string>? AwaitingPullRequests { get; set; }
 }
