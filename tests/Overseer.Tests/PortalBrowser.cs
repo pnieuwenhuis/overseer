@@ -81,8 +81,11 @@ public sealed class PortalTab(PortalBrowser browser, string page, string antifor
         ]), TestContext.Current.CancellationToken);
 
     /// <summary>Presses a button of the page's that posts to an address of its own, such as Retry.</summary>
-    public Task<HttpResponseMessage> PostAsync(string action) =>
-        browser.Http.PostAsync(action, new FormUrlEncodedContent([new("__RequestVerificationToken", antiforgeryToken)]), TestContext.Current.CancellationToken);
+    /// <param name="fields">The form's hidden fields, when it has any.</param>
+    public Task<HttpResponseMessage> PostAsync(string action, IEnumerable<KeyValuePair<string, string>>? fields = null) =>
+        browser.Http.PostAsync(
+            action, new FormUrlEncodedContent([.. fields ?? [], new("__RequestVerificationToken", antiforgeryToken)]),
+            TestContext.Current.CancellationToken);
 }
 
 public static class PortalResponses

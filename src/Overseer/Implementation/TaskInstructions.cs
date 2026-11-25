@@ -10,11 +10,15 @@ internal static class TaskInstructions
 {
     /// <summary>
     /// The first message of a Task's session: the instructions of the Task's role, the Intent's Approved Spec, and the Task the
-    /// session is for, with the repositories it touches.
+    /// session is for, with the repositories it touches; and, when the Task's last verification failed, how.
     /// </summary>
     /// <param name="task">A Task of the Intent's own Task list, which may differ from the Approved Spec's.</param>
     /// <param name="taskCount">How many Tasks the Intent has.</param>
-    public static string FirstMessage(Intent intent, Spec approved, IntentTask task, int taskCount) =>
+    /// <param name="failedLast">
+    /// The step that failed the Task's last verification attempt, which an earlier session made; <c>null</c> when none was made, or
+    /// it passed.
+    /// </param>
+    public static string FirstMessage(Intent intent, Spec approved, IntentTask task, int taskCount, VerificationStep? failedLast) =>
         $"""
         {RoleOf(task.Role)}
 
@@ -27,8 +31,8 @@ internal static class TaskInstructions
         services of its Compose file are running. The manifest also holds the commands that build it (`build`) and test it (`test`).
 
         The Intent's Tasks are carried out one at a time, in order, each by an agent of its own. Do your Task, and leave the others to
-        theirs. The repositories hold the work of the Tasks before yours. An earlier session on your Task that broke off may have left
-        work there too: look with `git status` and `git log`, and go on from it.
+        theirs. The repositories hold the work of the Tasks before yours. An earlier session on your Task, one that broke off or whose
+        work failed verification, may have left work there too: look with `git status` and `git log`, and go on from it.
 
         How to work:
 
@@ -57,7 +61,17 @@ internal static class TaskInstructions
 
         Repositories it touches: {string.Join(", ", task.Repositories)}
 
-        {task.Description}
+        {task.Description}{(failedLast is null ? "" : $"\n\n{LastFailure(failedLast)}")}
+        """;
+
+    /// <summary>What a new session on a Task is told about the verification that failed before it.</summary>
+    private static string LastFailure(VerificationStep failed) =>
+        $"""
+        # What failed last time
+
+        The last time Overseer verified work on your Task, before your session, it failed. Your work has to pass where that didn't.
+
+        {FailureOf(failed)}
         """;
 
     /// <summary>What a Task's session is told when its work failed verification, for it to fix.</summary>

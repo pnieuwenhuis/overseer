@@ -1,0 +1,151 @@
+@page "/intents/{Id:guid}/tasks/{Number:int}/edit"
+@attribute [ExcludeFromInteractiveRouting]
+@using System.Globalization
+@using Overseer.GitHub
+@using Overseer.Implementation
+@using Overseer.Intents
+@using Overseer.Specs
+@inject IntentLifecycle Lifecycle
+@inject IntentTasks Tasks
+@inject VerificationAttempts Attempts
+@inject TaskEdits Edits
+@inject NavigationManager Navigation
+
+<PageTitle>Edit Task · Overseer</PageTitle>
+
+@if (_lookedUp)
+{
+    <IntentBackLink IntentId="@(_intent?.Id)" />
+}
+<h1 class="mb-6">Edit Task @Number</h1>
+
+@if (_lookedUp)
+{
+    @* A form submitted from a page opened earlier is handled whatever became of the Task, keeping what the user entered, and only a form on the page can handle it. *@
+    @if (_notEditable is null || IsSubmitted)
+    {
+        <form method="post" @formname="@FormName" @onsubmit="SubmitAsync" class="panel form p-5 sm:p-6">
+            <AntiforgeryToken />
+            <input type="hidden" name="@IntentTaskList.LastRunField" value="@_lastRun" />
+            @if (_refusal.Count > 0)
+            {
+                <div class="callout-danger" role="alert">
+                    <p>The Task was not saved:</p>
+                    <ul class="task-editor-errors">
+                        @foreach (var reason in _refusal)
+                        {
+                            <li>@reason</li>
+                        }
+                    </ul>
+                </div>
+            }
+            <p class="form-note">
+                Saving changes the Intent's Task only: the Approved Spec stays as approved. The Task then runs again in a new session,
+                which is told what failed last and has all its verification attempts again.
+            </p>
+            <label>
+                Title
+                <input type="text" name="@nameof(EditedTask.Title)" value="@_edit.Title" />
+            </label>
+            <label>
+                Description
+                <textarea name="@nameof(EditedTask.Description)" rows="8" spellcheck="true">@_edit.Description</textarea>
+            </label>
+            <label>
+                Role
+                <select name="@nameof(EditedTask.Role)">
+                    @foreach (var role in SpecHandIn.TaskRoles)
+                    {
+                        <option value="@role" selected="@(_edit.Role == role.ToString())">@role</option>
+                    }
+                </select>
+            </label>
+            <fieldset>
+                <legend>Repositories it touches</legend>
+                @foreach (var repository in _repositories)
+                {
+                    <label>
+                        <input type="checkbox" name="@nameof(EditedTask.Repositories)" value="@repository"
+                               checked="@_edit.Repositories.Any(touched => RepositoryName.TryParse(touched, out var name) && RepositoryName.SameRepository.Equals(name, repository))" />
+                        @repository
+                    </label>
+                }
+            </fieldset>
+            <span class="buttons">
+                <a href="intents/@Id" class="btn">Cancel</a>
+                <button type="submit" class="btn-primary">Save &amp; retry</button>
+            </span>
+        </form>
+    }
+    else
+    {
+        <p role="alert" class="callout-warning">@_notEditable</p>
+    }
+}
+
+@code {
+    /// <summary>The name of the Task's editor.</summary>
+    private const string FormName = "edit-task";
+
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [Parameter]
+    public Guid Id { get; set; }
+
+    [Parameter]
+    public int Number { get; set; }
+
+    private bool _lookedUp;
+    private Intent? _intent;
+    // Why the Task can't be edited at the moment.
+    private string? _notEditable;
+    private IReadOnlyList<RepositoryName> _repositories = [];
+
+    // What the form shows: the Task as it is, and once the form is submitted, what was submitted.
+    private EditedTask _edit = EditedTask.Empty;
+    // The Task's last run with a verification attempt, as it was when the form was opened.
+    private int _lastRun;
+
+    // Why the last save was refused; empty unless it was.
+    private IReadOnlyList<string> _refusal = [];
+
+    private bool IsSubmitted => HttpMethods.IsPost(HttpContext.Request.Method);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _intent = await Lifecycle.FindAsync(Id, HttpContext.RequestAborted);
+        _notEditable = await Edits.WhyNotEditableAsync(_intent, Number, HttpContext.RequestAborted);
+        _repositories = _intent?.RepositoriesInScope ?? [];
+        _lookedUp = true;
+        if (_intent is null && !IsSubmitted)
+        {
+            Navigation.NotFound();
+            return;
+        }
+        if (!IsSubmitted && _notEditable is null)
+        {
+            // The run before the Task, so that what the form holds is never older than the failure it says it was edited after.
+            _lastRun = (await Attempts.OfAsync(Id, HttpContext.RequestAborted)).LastOrDefault(attempt => attempt.TaskNumber == Number)?.Run ?? 0;
+            var task = (await Tasks.OfAsync(Id, HttpContext.RequestAborted)).Single(task => task.Number == Number);
+            _edit = new EditedTask(
+                task.Title, task.Description, task.Role.ToString(), [.. task.Repositories.Select(repository => repository.ToString())]);
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        var form = HttpContext.Request.Form;
+        _ = int.TryParse(form[IntentTaskList.LastRunField], NumberStyles.None, CultureInfo.InvariantCulture, out _lastRun);
+        _edit = new EditedTask(
+            form[nameof(EditedTask.Title)],
+            form[nameof(EditedTask.Description)],
+            form[nameof(EditedTask.Role)],
+            [.. form[nameof(EditedTask.Repositories)].OfType<string>()]);
+        _refusal = await Edits.SaveAndRetryAsync(Id, Number, _lastRun, _edit, HttpContext.RequestAborted);
+        if (_refusal.Count == 0)
+        {
+            Navigation.NavigateTo($"/intents/{Id}");
+        }
+    }
+}

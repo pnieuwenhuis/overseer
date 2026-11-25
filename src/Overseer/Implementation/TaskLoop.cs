@@ -97,7 +97,9 @@ public sealed class TaskLoop(
         var approved = await specs.VersionOfAsync(intent.Id, intent.ApprovedSpecVersion!.Value, cancellationToken)
             ?? throw new InvalidOperationException($"The Approved Spec of the Intent {intent.Id} is gone.");
         var taskCount = (await tasks.OfAsync(intent.Id, cancellationToken)).Count;
-        var message = TaskInstructions.FirstMessage(intent, approved.Spec, task, taskCount);
+        var failedLast = (await attempts.OfAsync(intent.Id, cancellationToken))
+            .LastOrDefault(attempt => attempt.TaskNumber == task.Number)?.FailedStep;
+        var message = TaskInstructions.FirstMessage(intent, approved.Spec, task, taskCount, failedLast);
         var run = await attempts.NextRunAsync(intent.Id, task.Number, cancellationToken);
         IAgentSession session;
         try

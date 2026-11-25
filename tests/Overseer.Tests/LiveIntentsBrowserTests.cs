@@ -523,9 +523,53 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         await Expect(headings).ToHaveCountAsync(2);
         await Expect(output).ToBeVisibleAsync();
         await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Red");
-        // No Retry: a Failed Task stops the Intent.
+        // No Retry of the implementation: a Failed Task stops the Intent.
         await Expect(detail.Locator(".implementation").GetByRole(AriaRole.Button)).ToHaveCountAsync(0);
         Assert.True(await WasNotReloadedAsync(detail));
+    }
+
+    [Fact]
+    public async Task A_Failed_Task_is_retried_and_then_edited_and_retried_from_the_open_detail_page()
+    {
+        await using var overseer = await StartOverseerAsync();
+        overseer.Sandboxes.AddRepositoryFile("acme/web", ".overseer.yml", "setup: npm ci\nbuild: npm run build\ntest: npm test\n");
+        await SetOperatingLimitsAsync(overseer, verificationAttemptsPerTask: 1);
+        var working = new TaskCompletionSource();
+        var done = new FakeAgentTurn([], new AgentOutcome.Done());
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Developer, new FakeAgentSession(done), new FakeAgentSession(done with { EndsAfter = working.Task }),
+            new FakeAgentSession(done));
+        overseer.Sandboxes.ScriptCommandsContaining(
+            "npm test", new CommandResult(1, "1 test failed"), new CommandResult(1, "1 test failed"), new CommandResult(0, ""));
+        var address = await ImplementationTests.AwaitingApprovalAsync(overseer, "Export data", "acme/web");
+        await using var session = await chromium.LogInAsync(overseer);
+        var detail = await OpenAsync(session, address);
+        using var approved = await ImplementationTests.ApproveAsync(overseer, address, start: true);
+        var tasks = detail.GetByRole(AriaRole.Region, new PageGetByRoleOptions { Name = "Tasks", Exact = true });
+        var states = tasks.Locator(".intent-task-state");
+        var retry = tasks.GetByRole(AriaRole.Button, new LocatorGetByRoleOptions { Name = "Retry" });
+        var editAndRetry = tasks.GetByRole(AriaRole.Link, new LocatorGetByRoleOptions { Name = "Edit & retry" });
+        // Shown live as the Task fails.
+        await Expect(states).ToHaveTextAsync(["Failed"]);
+
+        await retry.ClickAsync();
+
+        await Expect(states).ToHaveTextAsync(["Running"]);
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Green");
+        await Expect(retry).ToHaveCountAsync(0);
+        await Expect(editAndRetry).ToHaveCountAsync(0);
+        working.SetResult();
+        await Expect(states).ToHaveTextAsync(["Failed"]);
+
+        await editAndRetry.ClickAsync();
+        await detail.GetByLabel("Title").FillAsync("Export every order");
+        await detail.GetByLabel("Description").FillAsync("As CSV.\nWith a header row.");
+        await detail.GetByRole(AriaRole.Button, new PageGetByRoleOptions { Name = "Save & retry" }).ClickAsync();
+
+        await Expect(states).ToHaveTextAsync(["Done"]);
+        await Expect(tasks.Locator(".intent-task-title")).ToHaveTextAsync(["Export every order"]);
+        await Expect(tasks.Locator(".task-attempt-heading")).ToHaveCountAsync(3);
+        await Expect(retry).ToHaveCountAsync(0);
     }
 
     /// <summary>

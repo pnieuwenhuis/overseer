@@ -590,7 +590,7 @@ public class VerificationTests(PostgresServer postgres)
     private static CommandResult Changed(params string[] files) => new(0, string.Concat(files.Select(file => file + "\0")));
 
     /// <summary>The verification attempts on the Task as the Intent's detail page shows them, in its order.</summary>
-    private static IReadOnlyList<ShownAttempt> AttemptsOn(string page, int task) =>
+    internal static IReadOnlyList<ShownAttempt> AttemptsOn(string page, int task) =>
         [.. Regex.Matches(page, $"<details class=\"task-attempt\" data-task=\"{task}\"[^>]*>(.*?)</details>", RegexOptions.Singleline)
             .Select(attempt => new ShownAttempt(
                 Collapsed(ElementText(attempt.Groups[1].Value, "task-attempt-heading")),
@@ -606,9 +606,9 @@ public class VerificationTests(PostgresServer postgres)
 
     private static string Collapsed(string text) => Regex.Replace(text, @"\s+", " ");
 
-    private sealed record ShownAttempt(string Heading, IReadOnlyList<ShownStep> Steps);
+    internal sealed record ShownAttempt(string Heading, IReadOnlyList<ShownStep> Steps);
 
-    private sealed record ShownStep(string Name, string Command, string Output);
+    internal sealed record ShownStep(string Name, string Command, string Output);
 
     /// <summary>Overseer with these repositories configured, each with a Repository Manifest in every Sandbox that holds it.</summary>
     private async Task<RunningOverseer> StartAsync(params string[] repositories)
