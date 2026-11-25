@@ -21,6 +21,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<RoundRecord> Rounds => Set<RoundRecord>();
     public DbSet<ImplementationRecord> Implementations => Set<ImplementationRecord>();
     public DbSet<IntentTaskRecord> IntentTasks => Set<IntentTaskRecord>();
+    public DbSet<VerificationAttemptRecord> VerificationAttempts => Set<VerificationAttemptRecord>();
     public DbSet<SpecVersionRecord> SpecVersions => Set<SpecVersionRecord>();
     public DbSet<SpecCommentRecord> SpecComments => Set<SpecCommentRecord>();
 
@@ -71,6 +72,19 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             task.Property(record => record.Role).HasConversion<string>();
             task.Property(record => record.State).HasConversion<string>();
             task.HasOne<IntentRecord>().WithMany().HasForeignKey(record => record.IntentId);
+        });
+        modelBuilder.Entity<VerificationAttemptRecord>(attempt =>
+        {
+            attempt.ToTable("VerificationAttempts");
+            attempt.HasKey(record => new { record.IntentId, record.TaskNumber, record.Run, record.Number });
+            attempt.HasOne<IntentTaskRecord>().WithMany().HasForeignKey(record => new { record.IntentId, record.TaskNumber });
+            attempt.HasMany(record => record.Steps).WithOne()
+                .HasForeignKey(step => new { step.IntentId, step.TaskNumber, step.Run, step.AttemptNumber });
+        });
+        modelBuilder.Entity<VerificationStepRecord>(step =>
+        {
+            step.ToTable("VerificationSteps");
+            step.HasKey(record => new { record.IntentId, record.TaskNumber, record.Run, record.AttemptNumber, record.Number });
         });
         modelBuilder.Entity<RoundRecord>(round =>
         {

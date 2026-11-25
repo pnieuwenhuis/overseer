@@ -4,7 +4,7 @@
 
 <WorkSteps Name="implementation" Label="Implementation" Phase="@Implementation.Phase.ToString()" Status="@Status"
            Failed="@(Implementation.Phase == ImplementationPhase.Failed)" Error="@Implementation.Error"
-           RetryAction="@($"intents/{Intent.Id}/implementation/retry")">
+           RetryAction="@(Implementation.HasFailedTask ? null : $"intents/{Intent.Id}/implementation/retry")">
     <li class="@StepClass(ImplementationPhase.ProvisioningSandbox)">Provision a Sandbox holding the Repositories in scope</li>
     <li class="@StepClass(ImplementationPhase.CheckingOutIntentBranch)">
         <span>Put each repository on the Intent branch <span class="intent-branch">@Intent.Branch</span></span>

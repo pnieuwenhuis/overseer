@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using Overseer.GitHub;
 using Overseer.Intents;
@@ -24,12 +25,15 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
         return [.. stored.Select(Read)];
     }
 
-    /// <summary>The first of the Intent's Tasks that is Pending, the next to carry out; <c>null</c> when none is.</summary>
-    public async Task<IntentTask?> FirstPendingAsync(Guid intentId, CancellationToken cancellationToken)
+    /// <summary>
+    /// The first of the Intent's Tasks that isn't Done, the one the Squad is at: no Task after it runs before it is Done.
+    /// <c>null</c> once all are.
+    /// </summary>
+    public async Task<IntentTask?> NextAsync(Guid intentId, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         var stored = await database.IntentTasks.AsNoTracking()
-            .Where(task => task.IntentId == intentId && task.State == IntentTaskState.Pending)
+            .Where(task => task.IntentId == intentId && task.State != IntentTaskState.Done)
             .OrderBy(task => task.Number)
             .FirstOrDefaultAsync(cancellationToken);
         return stored is null ? null : Read(stored);
@@ -42,6 +46,51 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
         await database.IntentTasks
             .Where(task => task.IntentId == intentId && task.Number == number)
             .ExecuteUpdateAsync(task => task.SetProperty(record => record.State, state), cancellationToken);
+    }
+
+    /// <summary>
+    /// Records that the Task's work passed verification and is committed, so that what is left is pushing the Intent branch of
+    /// these repositories, the ones it changed.
+    /// </summary>
+    public async Task AwaitPushAsync(Guid intentId, int number, IReadOnlyList<RepositoryName> changed, CancellationToken cancellationToken)
+    {
+        var repositories = changed.Select(repository => repository.ToString()).ToList();
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await database.IntentTasks
+            .Where(task => task.IntentId == intentId && task.Number == number)
+            .ExecuteUpdateAsync(task => task.SetProperty(record => record.AwaitingPush, repositories), cancellationToken);
+    }
+
+    /// <summary>Records that the Task is Done: its work is verified and pushed.</summary>
+    public async Task FinishAsync(Guid intentId, int number, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await database.IntentTasks
+            .Where(task => task.IntentId == intentId && task.Number == number)
+            .ExecuteUpdateAsync(
+                task => task
+                    .SetProperty(record => record.State, IntentTaskState.Done)
+                    .SetProperty(record => record.AwaitingPush, (List<string>?)null),
+                cancellationToken);
+    }
+
+    /// <summary>
+    /// Forgets the verified work of the Intent's Tasks that is yet to be pushed, because the Sandbox that held it is gone: the Task
+    /// it was of is carried out again.
+    /// </summary>
+    public Task ForgetUnpushedAsync(Guid intentId, CancellationToken cancellationToken) =>
+        ForgetUnpushedAsync(task => task.IntentId == intentId, cancellationToken);
+
+    /// <summary>As <see cref="ForgetUnpushedAsync(Guid, CancellationToken)"/>, for every Intent, as when no Sandbox is left.</summary>
+    public Task ForgetAllUnpushedAsync(CancellationToken cancellationToken) => ForgetUnpushedAsync(task => true, cancellationToken);
+
+    private async Task ForgetUnpushedAsync(Expression<Func<IntentTaskRecord, bool>> whose, CancellationToken cancellationToken)
+    {
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await database.IntentTasks
+            .Where(whose)
+            .Where(task => task.AwaitingPush != null)
+            .ExecuteUpdateAsync(task => task.SetProperty(record => record.AwaitingPush, (List<string>?)null), cancellationToken);
     }
 
     /// <summary>
@@ -83,15 +132,21 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
             .ExecuteUpdateAsync(task => task.SetProperty(record => record.State, IntentTaskState.Pending), cancellationToken);
 
     private static IntentTask Read(IntentTaskRecord task) => new(
-        task.Number, task.Title, task.Description, task.Role, [.. task.Repositories.Select(RepositoryName.Parse)], task.State);
+        task.Number, task.Title, task.Description, task.Role, [.. task.Repositories.Select(RepositoryName.Parse)], task.State,
+        task.AwaitingPush?.Select(RepositoryName.Parse).ToList());
 }
 
 /// <summary>A Task of an Intent's own Task list, numbered in the order the Tasks are carried out, from 1.</summary>
 /// <param name="Description">Markdown.</param>
 /// <param name="Role">Designer or Developer.</param>
 /// <param name="Repositories">The Repositories in scope it touches.</param>
+/// <param name="AwaitingPush">
+/// Once its work has passed verification and until it is Done: the repositories it changed, whose Intent branch is still to be
+/// pushed. <c>null</c> otherwise.
+/// </param>
 public sealed record IntentTask(
-    int Number, string Title, string Description, AgentRole Role, IReadOnlyList<RepositoryName> Repositories, IntentTaskState State);
+    int Number, string Title, string Description, AgentRole Role, IReadOnlyList<RepositoryName> Repositories, IntentTaskState State,
+    IReadOnlyList<RepositoryName>? AwaitingPush);
 
 public enum IntentTaskState
 {
@@ -101,9 +156,12 @@ public enum IntentTaskState
     /// <summary>An agent is carrying it out.</summary>
     Running,
 
+    /// <summary>Its work passed verification and is pushed to the Intent branch.</summary>
     Done,
 
-    /// <summary>A Failed Task: its work didn't pass verification. Nothing makes a Task one yet.</summary>
+    /// <summary>
+    /// A Failed Task: its work didn't pass verification in the allowed number of attempts. No Task after it runs while it is one.
+    /// </summary>
     Failed,
 }
 
@@ -120,4 +178,10 @@ public sealed class IntentTaskRecord
     public required List<string> Repositories { get; set; }
 
     public required IntentTaskState State { get; set; }
+
+    /// <summary>
+    /// <c>owner/name</c> of each repository whose verified work is yet to be pushed; <c>null</c> unless the work is verified and
+    /// the Task not yet Done.
+    /// </summary>
+    public List<string>? AwaitingPush { get; set; }
 }

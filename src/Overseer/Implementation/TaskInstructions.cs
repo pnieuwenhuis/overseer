@@ -34,6 +34,10 @@ internal static class TaskInstructions
 
         - Read the agent guidance of each repository you change, such as its `AGENTS.md`, and follow it.
         - Before you end your turn, run the `build` and `test` commands of each repository you changed, and make them pass.
+        - When you end your turn, Overseer verifies your work itself: it runs those commands in each repository your Task touches,
+          and in each other one you changed, after `setup` where you changed the manifest or the Compose file. What fails comes back
+          to you to fix. What passes, Overseer commits where you haven't, and pushes: leave nothing behind that doesn't belong in
+          the repository, such as build outputs that its `.gitignore` doesn't cover.
         - Leave pushing to Overseer: never run `git push`, don't open or change pull requests, and don't change anything else on
           GitHub. Stay on the Intent branch.
         - No one can answer questions during a Task. Where the Spec and your Task leave something open, decide for yourself.
@@ -55,6 +59,37 @@ internal static class TaskInstructions
 
         {task.Description}
         """;
+
+    /// <summary>What a Task's session is told when its work failed verification, for it to fix.</summary>
+    /// <param name="failed">The step of the verification that failed.</param>
+    /// <param name="attempt">Which verification attempt that was, from 1, of the <paramref name="allowed"/> ones.</param>
+    public static string VerificationFailed(IntentTask task, VerificationStep failed, int attempt, int allowed) =>
+        $"""
+        Overseer verified your work on Task {task.Number}, and it failed: attempt {attempt} of {allowed}.
+
+        {FailureOf(failed)}
+
+        Fix it, and end your turn as before. Overseer then verifies your work again.
+        """;
+
+    /// <summary>How a step of a verification failed, with the command that was run and what it printed.</summary>
+    private static string FailureOf(VerificationStep failed)
+    {
+        var command = failed.Command is null ? "" : $"\n\nThe command, run from the root of {failed.Repository}:\n\n{Fenced(failed.Command)}";
+        var output = failed.Output.Length == 0 ? "" : $"\n\nThe end of its output:\n\n{Fenced(failed.Output)}";
+        return $"{failed.Failure}{command}{output}";
+    }
+
+    /// <summary><paramref name="text"/> as a Markdown code block, whatever it holds.</summary>
+    private static string Fenced(string text)
+    {
+        var fence = "```";
+        while (text.Contains(fence, StringComparison.Ordinal))
+        {
+            fence += "`";
+        }
+        return $"{fence}\n{text}\n{fence}";
+    }
 
     /// <summary>Who the agent is, and what its role asks of it.</summary>
     private static string RoleOf(AgentRole role) => role switch

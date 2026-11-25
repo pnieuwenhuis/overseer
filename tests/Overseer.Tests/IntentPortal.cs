@@ -67,19 +67,23 @@ public static class IntentPortal
 
     /// <summary>Saves this maximum of Active Intents on the Settings page, with the other limits at their defaults.</summary>
     public static Task SetMaxActiveIntentsAsync(RunningOverseer overseer, int maximum) =>
-        SetOperatingLimitsAsync(overseer, maximum, OperatingLimit.RefinementIdleTimeout.Default);
+        SetOperatingLimitsAsync(overseer, maxActiveIntents: maximum);
 
     /// <summary>Saves this Refinement idle timeout on the Settings page, with the other limits at their defaults.</summary>
     public static Task SetRefinementIdleTimeoutAsync(RunningOverseer overseer, TimeSpan timeout) =>
-        SetOperatingLimitsAsync(overseer, OperatingLimit.MaxActiveIntents.Default, (int)timeout.TotalMinutes);
+        SetOperatingLimitsAsync(overseer, refinementIdleTimeoutMinutes: (int)timeout.TotalMinutes);
 
-    private static async Task SetOperatingLimitsAsync(RunningOverseer overseer, int maxActiveIntents, int refinementIdleTimeoutMinutes)
+    /// <summary>Saves these operating limits on the Settings page, and the default for each one not given.</summary>
+    public static async Task SetOperatingLimitsAsync(
+        RunningOverseer overseer, int? maxActiveIntents = null, int? refinementIdleTimeoutMinutes = null, int? verificationAttemptsPerTask = null)
     {
         using var response = await overseer.SubmitFormAsync("/settings", "operating-limits", new Dictionary<string, string>
         {
-            ["MaxActiveIntents"] = maxActiveIntents.ToString(CultureInfo.InvariantCulture),
-            ["RefinementIdleTimeout"] = refinementIdleTimeoutMinutes.ToString(CultureInfo.InvariantCulture),
-            ["VerificationAttemptsPerTask"] = OperatingLimit.VerificationAttemptsPerTask.Default.ToString(CultureInfo.InvariantCulture),
+            ["MaxActiveIntents"] = (maxActiveIntents ?? OperatingLimit.MaxActiveIntents.Default).ToString(CultureInfo.InvariantCulture),
+            ["RefinementIdleTimeout"] =
+                (refinementIdleTimeoutMinutes ?? OperatingLimit.RefinementIdleTimeout.Default).ToString(CultureInfo.InvariantCulture),
+            ["VerificationAttemptsPerTask"] =
+                (verificationAttemptsPerTask ?? OperatingLimit.VerificationAttemptsPerTask.Default).ToString(CultureInfo.InvariantCulture),
             ["MaxSandboxLifetime"] = OperatingLimit.MaxSandboxLifetime.Default.ToString(CultureInfo.InvariantCulture),
         });
         Assert.Contains("The operating limits are saved.", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));

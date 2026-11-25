@@ -492,6 +492,42 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         Assert.True(await WasNotReloadedAsync(detail));
     }
 
+    [Fact]
+    public async Task An_open_detail_page_shows_each_verification_attempt_on_a_Task_as_it_is_made_and_keeps_an_opened_one_open()
+    {
+        await using var overseer = await StartOverseerAsync();
+        overseer.Sandboxes.AddRepositoryFile("acme/web", ".overseer.yml", "setup: npm ci\nbuild: npm run build\ntest: npm test\n");
+        await SetOperatingLimitsAsync(overseer, verificationAttemptsPerTask: 2);
+        var fixing = new TaskCompletionSource();
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(
+            new FakeAgentTurn([], new AgentOutcome.Done()),
+            new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = fixing.Task }));
+        overseer.Sandboxes.ScriptCommandsContaining("npm test", new CommandResult(1, "1 test failed"));
+        var address = await ImplementationTests.AwaitingApprovalAsync(overseer, "Export data", "acme/web");
+        await using var session = await chromium.LogInAsync(overseer);
+        var detail = await OpenAsync(session, address);
+
+        using var approved = await ImplementationTests.ApproveAsync(overseer, address, start: true);
+
+        var tasks = detail.GetByRole(AriaRole.Region, new PageGetByRoleOptions { Name = "Tasks", Exact = true });
+        var headings = tasks.Locator(".task-attempt-heading");
+        await Expect(headings).ToHaveTextAsync(["Attempt 1: failed. The test command of acme/web failed with exit code 1."]);
+        await headings.First.ClickAsync();
+        var output = tasks.Locator(".verification-output").First;
+        await Expect(output).ToHaveTextAsync("1 test failed");
+        await Expect(output).ToBeVisibleAsync();
+
+        fixing.SetResult();
+
+        await Expect(tasks.Locator(".intent-task-state")).ToHaveTextAsync(["Failed"]);
+        await Expect(headings).ToHaveCountAsync(2);
+        await Expect(output).ToBeVisibleAsync();
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Red");
+        // No Retry: a Failed Task stops the Intent.
+        await Expect(detail.Locator(".implementation").GetByRole(AriaRole.Button)).ToHaveCountAsync(0);
+        Assert.True(await WasNotReloadedAsync(detail));
+    }
+
     /// <summary>
     /// Waits until the detail page of an Active Intent is live, which its Working Time going on as the clock advances shows. Until then
     /// its live rendering may still replace what is typed into it.

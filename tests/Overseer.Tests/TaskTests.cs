@@ -337,7 +337,7 @@ public class TaskTests(PostgresServer postgres)
     }
 
     /// <summary>Waits for the Squad's agents to have been sent this many messages.</summary>
-    private static Task<IReadOnlyList<AgentMessage>> SquadMessagesAsync(RunningOverseer overseer, int count) =>
+    internal static Task<IReadOnlyList<AgentMessage>> SquadMessagesAsync(RunningOverseer overseer, int count) =>
         EventuallyAsync(
             () => Task.FromResult(SquadMessages(overseer) is var messages && messages.Count >= count ? messages : null),
             $"the Squad to be sent {count} messages");
@@ -346,19 +346,19 @@ public class TaskTests(PostgresServer postgres)
     private static FakeAgentSession DoneOnce(Task until) => new(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = until });
 
     /// <summary>The sessions the Squad's agents got so far, in the order they started.</summary>
-    private static IReadOnlyList<AgentSessionStart> SquadSessionsStarted(RunningOverseer overseer) =>
+    internal static IReadOnlyList<AgentSessionStart> SquadSessionsStarted(RunningOverseer overseer) =>
         [.. overseer.Sandboxes.AgentSessionsStarted.Where(session => IsOfTheSquad(session.Role))];
 
-    private static IReadOnlyList<AgentSessionStart> SquadSessionsStopped(RunningOverseer overseer) =>
+    internal static IReadOnlyList<AgentSessionStart> SquadSessionsStopped(RunningOverseer overseer) =>
         [.. overseer.Sandboxes.AgentSessionsStopped.Where(session => IsOfTheSquad(session.Role))];
 
-    private static IReadOnlyList<AgentMessage> SquadMessages(RunningOverseer overseer) =>
+    internal static IReadOnlyList<AgentMessage> SquadMessages(RunningOverseer overseer) =>
         [.. overseer.Sandboxes.MessagesSent.Where(message => IsOfTheSquad(message.Role))];
 
     private static bool IsOfTheSquad(AgentRole role) => role is AgentRole.Designer or AgentRole.Developer;
 
     /// <summary>Waits for the Intent's detail page to show its Tasks in these states, in order.</summary>
-    private static Task<IReadOnlyList<ShownTask>> StatesAsync(RunningOverseer overseer, string address, params string[] states) =>
+    internal static Task<IReadOnlyList<ShownTask>> StatesAsync(RunningOverseer overseer, string address, params string[] states) =>
         TasksAsync(overseer, address, tasks => tasks.Select(task => task.State).SequenceEqual(states), $"the Tasks to be {string.Join(", ", states)}");
 
     /// <summary>A valid Spec with three Tasks, the first for the Designer, for an Intent with acme/api and acme/web in scope.</summary>
@@ -373,7 +373,7 @@ public class TaskTests(PostgresServer postgres)
     }
 
     /// <summary>Has an Intent with this Spec approved and started, and gives its address.</summary>
-    private static async Task<string> ImplementingAsync(RunningOverseer overseer, JsonObject spec, string text, params string[] repositories)
+    internal static async Task<string> ImplementingAsync(RunningOverseer overseer, JsonObject spec, string text, params string[] repositories)
     {
         var address = await AwaitingApprovalAsync(overseer, spec, text, repositories);
         using var approved = await ApproveAsync(overseer, address, start: true);

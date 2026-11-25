@@ -1489,8 +1489,63 @@
         color: var(--color-success);
     }
 
+    .intent-task[data-state="Failed"] {
+        border-color: var(--color-danger);
+    }
+
     .intent-task[data-state="Failed"] .intent-task-state {
         color: var(--color-danger);
+    }
+
+    .intent-task-push {
+        color: var(--color-muted);
+    }
+
+    /* The verification attempts on a Task, each opening to the commands run and what they printed. */
+    .task-attempts {
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+        font-size: 0.8125rem;
+    }
+
+    .task-attempt-heading {
+        cursor: pointer;
+        overflow-wrap: anywhere;
+    }
+
+    .task-attempt[data-passed="False"] .task-attempt-heading {
+        color: var(--color-danger);
+    }
+
+    .verification-step,
+    .verification-nothing {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        margin-top: 0.625rem;
+    }
+
+    .verification-step-name {
+        font-weight: 600;
+    }
+
+    .verification-step[data-passed="False"] .verification-step-name {
+        color: var(--color-danger);
+    }
+
+    .verification-command,
+    .verification-output {
+        background: var(--color-raised);
+        border: 1px solid var(--color-line);
+        border-radius: 0.5rem;
+        font-family: var(--font-mono);
+        line-height: 1.6;
+        max-height: 20rem;
+        overflow: auto;
+        padding: 0.5rem 0.75rem;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
     }
 }
 

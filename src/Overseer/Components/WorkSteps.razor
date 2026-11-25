@@ -7,11 +7,14 @@
     @if (Failed)
     {
         <p class="@($"{Name}-status")" role="alert">@Error</p>
-        @* A plain form, posted by the browser, so Retry works the same with or without the live connection. *@
-        <form method="post" action="@RetryAction">
-            <AntiforgeryToken />
-            <button type="submit" class="btn-primary">Retry</button>
-        </form>
+        @if (RetryAction is not null)
+        {
+            @* A plain form, posted by the browser, so Retry works the same with or without the live connection. *@
+            <form method="post" action="@RetryAction">
+                <AntiforgeryToken />
+                <button type="submit" class="btn-primary">Retry</button>
+            </form>
+        }
     }
     else
     {
@@ -47,7 +50,7 @@
     [Parameter, EditorRequired]
     public required string Status { get; set; }
 
-    /// <summary>Where the Retry button posts to.</summary>
+    /// <summary>Where the Retry button posts to; <c>null</c> when the work can't be retried as a whole, which shows no button.</summary>
     [Parameter, EditorRequired]
-    public required string RetryAction { get; set; }
+    public required string? RetryAction { get; set; }
 }

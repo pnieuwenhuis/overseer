@@ -1,0 +1,40 @@
+@* The verification attempts on one Task, in the order they were made, each opening to what was run and what it printed. *@
+@using Overseer.Implementation
+
+@if (Attempts.Count > 0)
+{
+    @* Told apart by run once there is more than one: each run, a new agent session on the Task, counts its attempts from 1. *@
+    var runs = Attempts[^1].Run > 1;
+    <div class="task-attempts">
+        @foreach (var attempt in Attempts)
+        {
+            @* No list items here: the Task's is one already. *@
+            <details @key="(attempt.Run, attempt.Number)" class="task-attempt" data-task="@attempt.TaskNumber" data-passed="@(attempt.FailedStep is null)">
+                <summary class="task-attempt-heading">@(runs ? $"Run {attempt.Run}, attempt" : "Attempt") @attempt.Number: @(attempt.FailedStep is { } failed ? $"failed. {failed.Failure}" : "passed.")</summary>
+                @foreach (var step in attempt.Steps)
+                {
+                    <div class="verification-step" data-passed="@step.Passed">
+                        <p class="verification-step-name">@step.What</p>
+                        @if (step.Command is not null)
+                        {
+                            <pre class="verification-command">@step.Command</pre>
+                        }
+                        @if (step.Output.Length > 0)
+                        {
+                            <pre class="verification-output">@step.Output</pre>
+                        }
+                    </div>
+                }
+                @if (attempt.Steps.Count == 0)
+                {
+                    <p class="verification-nothing">Nothing to verify: no repository concerned has a Repository Manifest.</p>
+                }
+            </details>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<VerificationAttempt> Attempts { get; set; }
+}

@@ -74,8 +74,13 @@ public static class OverseerServer
         builder.Services.AddSingleton<SpecApproval>();
         builder.Services.AddSingleton<Refinements>();
         builder.Services.AddHostedService(services => services.GetRequiredService<Refinements>());
+        builder.Services.AddSingleton<RepositoryCommands>();
+        builder.Services.AddSingleton<ComposeDependencies>();
+        builder.Services.AddSingleton<IntentBranches>();
         builder.Services.AddSingleton<SandboxPreparation>();
+        builder.Services.AddSingleton<Verification>();
         builder.Services.AddSingleton<IntentTasks>();
+        builder.Services.AddSingleton<VerificationAttempts>();
         builder.Services.AddSingleton<TaskLoop>();
         builder.Services.AddSingleton<TaskRunner>();
         builder.Services.AddHostedService(services => services.GetRequiredService<TaskRunner>());

@@ -1,4 +1,5 @@
-@* An Intent's Tasks in the order they are carried out, each with its role, the repositories it touches and its state. *@
+@* An Intent's Tasks in the order they are carried out, each with its role, the repositories it touches, its state and the verification
+   attempts on it. *@
 @using Overseer.Implementation
 
 <section class="intent-tasks" aria-label="Tasks">
@@ -6,13 +7,18 @@
     <ol class="intent-task-list">
         @foreach (var task in Tasks)
         {
-            <li class="intent-task" data-task="@task.Number" data-state="@task.State">
+            <li @key="task.Number" class="intent-task" data-task="@task.Number" data-state="@task.State">
                 <h3 class="intent-task-heading"><span class="intent-task-number">@task.Number.</span> <span class="intent-task-title">@task.Title</span></h3>
                 <p class="intent-task-facts">
                     <span class="intent-task-state">@task.State</span>
                     <span class="intent-task-role">@task.Role</span>
                     <span class="intent-task-repositories">@string.Join(", ", task.Repositories)</span>
+                    @if (task.AwaitingPush is not null)
+                    {
+                        <span class="intent-task-push">Verified, not pushed yet</span>
+                    }
                 </p>
+                <TaskAttempts Attempts="@Attempts.Where(attempt => attempt.TaskNumber == task.Number).ToList()" />
             </li>
         }
     </ol>
@@ -21,4 +27,8 @@
 @code {
     [Parameter, EditorRequired]
     public required IReadOnlyList<IntentTask> Tasks { get; set; }
+
+    /// <summary>The verification attempts on the Tasks, in the order they were made.</summary>
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<VerificationAttempt> Attempts { get; set; }
 }

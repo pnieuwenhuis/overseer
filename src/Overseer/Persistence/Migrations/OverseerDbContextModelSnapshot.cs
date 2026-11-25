@@ -55,6 +55,9 @@ namespace Overseer.Persistence.Migrations
                     b.Property<int>("Number")
                         .HasColumnType("integer");
 
+                    b.PrimitiveCollection<List<string>>("AwaitingPush")
+                        .HasColumnType("text[]");
+
                     b.Property<string>("Description")
                         .IsRequired()
                         .HasColumnType("text");
@@ -78,6 +81,65 @@ namespace Overseer.Persistence.Migrations
                     b.HasKey("IntentId", "Number");
 
                     b.ToTable("IntentTasks", (string)null);
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.VerificationAttemptRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TaskNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Run")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.HasKey("IntentId", "TaskNumber", "Run", "Number");
+
+                    b.ToTable("VerificationAttempts", (string)null);
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.VerificationStepRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TaskNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Run")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("AttemptNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Command")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Failure")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Output")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Repository")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("What")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("IntentId", "TaskNumber", "Run", "AttemptNumber", "Number");
+
+                    b.ToTable("VerificationSteps", (string)null);
                 });
 
             modelBuilder.Entity("Overseer.Intents.IntentRecord", b =>
@@ -446,6 +508,24 @@ namespace Overseer.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Overseer.Implementation.VerificationAttemptRecord", b =>
+                {
+                    b.HasOne("Overseer.Implementation.IntentTaskRecord", null)
+                        .WithMany()
+                        .HasForeignKey("IntentId", "TaskNumber")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.VerificationStepRecord", b =>
+                {
+                    b.HasOne("Overseer.Implementation.VerificationAttemptRecord", null)
+                        .WithMany("Steps")
+                        .HasForeignKey("IntentId", "TaskNumber", "Run", "AttemptNumber")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Overseer.Intents.IntentTransitionRecord", b =>
                 {
                     b.HasOne("Overseer.Intents.IntentRecord", null)
@@ -525,6 +605,11 @@ namespace Overseer.Persistence.Migrations
                         .HasForeignKey("IntentId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.VerificationAttemptRecord", b =>
+                {
+                    b.Navigation("Steps");
                 });
 
             modelBuilder.Entity("Overseer.Intents.IntentRecord", b =>
