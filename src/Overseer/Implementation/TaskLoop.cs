@@ -160,7 +160,7 @@ public sealed class TaskLoop(
         await using var log = await logs.OpenAsync(intent.Id, task.Number, task.Role, cancellationToken);
         // The number of the last verification attempt this session made, and how many of them failed. A turn that ends in a
         // question, or with a message of the human's waiting, leads to none.
-        var number = 0;
+        var attemptNumber = 0;
         var failures = 0;
         // The human's message the next turn delivers; null when it says something else.
         SentMessage? delivering = null;
@@ -197,7 +197,7 @@ public sealed class TaskLoop(
                 continue;
             }
 
-            number++;
+            attemptNumber++;
             VerificationAttempt attempt;
             IReadOnlyList<RepositoryName> changedRepositories;
             try
@@ -205,7 +205,7 @@ public sealed class TaskLoop(
                 var verified = task.IsFixUp
                     ? await verification.VerifyAllAsync(sandbox, intent, cancellationToken)
                     : await verification.VerifyAsync(sandbox, intent, task.Repositories, cancellationToken);
-                attempt = new VerificationAttempt(task.Number, run, number, verified.Steps);
+                attempt = new VerificationAttempt(task.Number, run, attemptNumber, verified.Steps);
                 changedRepositories = verified.Changed;
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
@@ -236,10 +236,11 @@ public sealed class TaskLoop(
                 changed();
                 return new Work.Unfinished(
                     $"Task {task.Number} is a Failed Task: its work didn't pass verification in {failures} "
-                    + $"{(failures == 1 ? "attempt" : "attempts")}. In the last one: {string.Join(" ", failed.Select(step => step.Failure))}");
+                    + $"{(failures == 1 ? "attempt" : "attempts")}. In the last one, attempt {attemptNumber}: "
+                    + string.Join(" ", failed.Select(step => step.Failure)));
             }
             // A message that waits by now follows this turn.
-            message = TaskInstructions.VerificationFailed(task, failed, failures, allowed);
+            message = TaskInstructions.VerificationFailed(task, failed, attemptNumber, failures, allowed);
         }
     }
 

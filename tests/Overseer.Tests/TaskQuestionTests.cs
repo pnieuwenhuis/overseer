@@ -101,7 +101,7 @@ public class TaskQuestionTests(PostgresServer postgres)
         Assert.Equal(
             ["Attempt 1: failed. The test command of acme/web failed with exit code 1."],
             VerificationTests.AttemptsOn(page, 1).Select(attempt => attempt.Heading.ReplaceLineEndings(" ")));
-        Assert.Contains("attempt 1 of 2", SquadMessages(overseer)[2].Message);
+        Assert.Contains("attempt 1 failed. Failed attempts so far: 1, of the 2 allowed.", SquadMessages(overseer)[2].Message);
 
         using var second = await AnswerAsync(overseer, address, 2, "No, fix it.");
 

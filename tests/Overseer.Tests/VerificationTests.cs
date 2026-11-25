@@ -62,7 +62,7 @@ public class VerificationTests(PostgresServer postgres)
         var failed = await ImplementationTests.FailedAsync(overseer, address);
         Assert.Equal(
             "Task 1 is a Failed Task: its work didn't pass verification in 3 attempts. "
-            + "In the last one: The test command of acme/web failed with exit code 1.",
+            + "In the last one, attempt 3: The test command of acme/web failed with exit code 1.",
             failed.Status);
         Assert.Equal(("Red", "Failed"), failed.Light);
         Assert.Equal(("Red", "Failed"), LightOn(await GetAsync(overseer, "/")));
@@ -117,7 +117,7 @@ public class VerificationTests(PostgresServer postgres)
         var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
 
         var failed = await ImplementationTests.FailedAsync(overseer, address);
-        Assert.Contains($"in {said}. In the last one: The build command of acme/web failed with exit code 2.", failed.Status);
+        Assert.Contains($"in {said}. In the last one, attempt {allowed}: The build command of acme/web failed with exit code 2.", failed.Status);
         Assert.Equal(allowed, CommandsIn(overseer, "acme/web").Count(command => command.Contains("npm run build")));
         Assert.Equal(allowed, SquadMessages(overseer).Count);
         // The first command that fails is the last one run.
@@ -434,7 +434,7 @@ public class VerificationTests(PostgresServer postgres)
         time.Advance(TimeSpan.FromMinutes(31));
 
         var failed = await ImplementationTests.FailedAsync(overseer, address);
-        Assert.EndsWith($"In the last one: {failure}", failed.Status);
+        Assert.EndsWith($"In the last one, attempt 1: {failure}", failed.Status);
         await StatesAsync(overseer, address, "Failed");
     }
 

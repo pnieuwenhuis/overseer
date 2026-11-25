@@ -178,7 +178,36 @@ public class AgentMessageTests(PostgresServer postgres)
             VerificationTests.AttemptsOn(await GetAsync(overseer, address), 1).Select(attempt => attempt.Heading));
         var messages = SquadMessages(overseer);
         Assert.Equal(3, messages.Count);
-        Assert.Contains("attempt 1 of 2", messages[2].Message);
+        Assert.Contains("attempt 2 failed. Failed attempts so far: 1, of the 2 allowed.", messages[2].Message);
+    }
+
+    [Fact]
+    public async Task After_a_verification_that_passed_the_page_the_agent_and_the_Failed_Task_name_the_attempts_alike()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        AddManifest(overseer);
+        await SetOperatingLimitsAsync(overseer, verificationAttemptsPerTask: 2);
+        var testing = new TaskCompletionSource();
+        overseer.Sandboxes.HoldCommandsContaining("npm test", testing.Task);
+        overseer.Sandboxes.ScriptCommandsContaining("npm test", Passes, Fails);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(Done()));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        await TestingAsync(overseer);
+        var task = address + "/tasks/1";
+        await BoxAsync(overseer, task);
+        using var sent = await SendAsync(overseer, task, session: 1, "Call it Download.");
+
+        testing.SetResult();
+
+        var failed = await ImplementationTests.FailedAsync(overseer, address);
+        const string failure = "The test command of acme/web failed with exit code 1.";
+        Assert.Equal(
+            ["Attempt 1: passed.", $"Attempt 2: failed. {failure}", $"Attempt 3: failed. {failure}"],
+            VerificationTests.AttemptsOn(await GetAsync(overseer, address), 1).Select(attempt => attempt.Heading));
+        Assert.Contains("attempt 2 failed. Failed attempts so far: 1, of the 2 allowed.", SquadMessages(overseer)[2].Message);
+        Assert.Equal(
+            $"Task 1 is a Failed Task: its work didn't pass verification in 2 attempts. In the last one, attempt 3: {failure}",
+            failed.Status);
     }
 
     [Fact]
@@ -202,7 +231,7 @@ public class AgentMessageTests(PostgresServer postgres)
         await FinalVerificationTests.InReviewAsync(overseer, address);
         var messages = SquadMessages(overseer);
         Assert.Equal(3, messages.Count);
-        Assert.Contains("it failed: attempt 1 of 2", messages[1].Message);
+        Assert.Contains("attempt 1 failed. Failed attempts so far: 1, of the 2 allowed.", messages[1].Message);
         Assert.Contains("Call it Download.", messages[2].Message);
         // The two turns after the failure led to one verification, the second of the two attempts.
         Assert.Equal(

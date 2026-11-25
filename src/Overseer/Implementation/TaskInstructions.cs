@@ -102,10 +102,15 @@ internal static class TaskInstructions
 
     /// <summary>What a Task's session is told when its work failed verification, for it to fix.</summary>
     /// <param name="failed">The steps of the verification that failed.</param>
-    /// <param name="attempt">Which verification attempt that was, from 1, of the <paramref name="allowed"/> ones.</param>
-    public static string VerificationFailed(IntentTask task, IReadOnlyList<VerificationStep> failed, int attempt, int allowed) =>
+    /// <param name="attempt">Which verification attempt of the session that was, from 1, as the Portal numbers it.</param>
+    /// <param name="failures">
+    /// How many of the session's attempts have failed, that one included, of the <paramref name="allowed"/> ones: fewer than
+    /// <paramref name="attempt"/> where an earlier one passed.
+    /// </param>
+    public static string VerificationFailed(
+        IntentTask task, IReadOnlyList<VerificationStep> failed, int attempt, int failures, int allowed) =>
         $"""
-        Overseer verified your work on Task {task.Number}, and it failed: attempt {attempt} of {allowed}.
+        Overseer verified your work on Task {task.Number}, and attempt {attempt} failed. Failed attempts so far: {failures}, of the {allowed} allowed.
 
         {FailuresOf(failed)}
 

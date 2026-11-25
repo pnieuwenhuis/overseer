@@ -154,7 +154,7 @@ public class FinalVerificationTests(PostgresServer postgres)
         var failed = await ImplementationTests.FailedAsync(overseer, address);
         Assert.Equal(
             "Task 2 is a Failed Task: its work didn't pass verification in 2 attempts. "
-            + "In the last one: The test command of acme/api failed with exit code 1.",
+            + "In the last one, attempt 2: The test command of acme/api failed with exit code 1.",
             failed.Status);
         Assert.Equal(("Red", "Failed"), failed.Light);
         Assert.Null(failed.RetryAction);
