@@ -30,14 +30,37 @@ public static class AgentSessionTurns
 }
 
 /// <summary>The agent's response to one message.</summary>
-public sealed class AgentTurn(IAsyncEnumerable<string> updates, Task<AgentOutcome> outcome)
+public sealed class AgentTurn(IAsyncEnumerable<AgentUpdate> updates, Task<AgentOutcome> outcome)
 {
-    /// <summary>What the agent reports while it works, as it happens; the stream ends with the turn. Read it once.</summary>
-    public IAsyncEnumerable<string> Updates { get; } = updates;
+    /// <summary>
+    /// What the agent reports while it works, as it happens; the stream ends with the turn, with an
+    /// <see cref="AgentSessionFailedException"/> when the turn broke off. Read it once.
+    /// </summary>
+    public IAsyncEnumerable<AgentUpdate> Updates { get; } = updates;
 
     /// <summary>How the turn ended; completes when it does.</summary>
     /// <exception cref="AgentSessionFailedException">The turn broke off without an outcome.</exception>
     public Task<AgentOutcome> Outcome { get; } = outcome;
+}
+
+/// <summary>One thing an agent reports while it works: more of what it says, or a tool it calls.</summary>
+public abstract record AgentUpdate
+{
+    private AgentUpdate()
+    {
+    }
+
+    /// <summary>
+    /// More of what the agent says. It arrives in fragments, as the agent writes it: the fragments of a turn up to its next new tool
+    /// call, or its end, are one message.
+    /// </summary>
+    /// <param name="Text">Markdown, which may start or end in the middle of a word.</param>
+    public sealed record Message(string Text) : AgentUpdate;
+
+    /// <summary>A tool the agent calls. A later one with the same ID in the same turn says more about that call.</summary>
+    /// <param name="Id">What tells a turn's tool calls apart.</param>
+    /// <param name="Title">The tool and what it is called on, as far as known yet, such as <c>bash: npm test</c>.</param>
+    public sealed record ToolCall(string Id, string Title) : AgentUpdate;
 }
 
 /// <summary>

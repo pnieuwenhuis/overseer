@@ -160,8 +160,7 @@ public abstract class SandboxProviderContract : IAsyncDisposable
 
         var turn = await session.SendAsync("Reply with the word READY, then finish without changing anything.", TestContext.Current.CancellationToken);
 
-        var updates = await turn.Updates.ToListAsync(TestContext.Current.CancellationToken);
-        Assert.Contains(updates, update => update.Contains("READY"));
+        Assert.Contains("READY", await SaidAsync(turn));
         Assert.Equal(new AgentOutcome.Done(), await turn.Outcome);
     }
 
@@ -181,8 +180,7 @@ public abstract class SandboxProviderContract : IAsyncDisposable
 
         var answered = await session.SendAsync("Blue. Repeat my answer, then finish without changing anything.", TestContext.Current.CancellationToken);
 
-        var updates = await answered.Updates.ToListAsync(TestContext.Current.CancellationToken);
-        Assert.Contains(updates, update => update.Contains("Blue"));
+        Assert.Contains("Blue", await SaidAsync(answered));
         Assert.Equal(new AgentOutcome.Done(), await answered.Outcome);
     }
 
@@ -199,9 +197,13 @@ public abstract class SandboxProviderContract : IAsyncDisposable
             session.SendAsync("Implement the Task", TestContext.Current.CancellationToken));
     }
 
+    /// <summary>What the agent says in the turn: the fragments of its messages put together, without its tool calls.</summary>
+    private static async Task<string> SaidAsync(AgentTurn turn) => string.Concat(
+        (await turn.Updates.ToListAsync(TestContext.Current.CancellationToken)).OfType<AgentUpdate.Message>().Select(message => message.Text));
+
     /// <summary>
     /// Makes a scriptable provider play the next <paramref name="role"/> session's turns as a real agent would answer
-    /// the messages. A real provider needs nothing: the agent really answers.
+    /// the messages, each saying its <c>Updates</c>. A real provider needs nothing: the agent really answers.
     /// </summary>
     protected virtual void GivenAgentSession(AgentRole role, params (string[] Updates, AgentOutcome Outcome)[] turns)
     {
@@ -273,7 +275,8 @@ public sealed class FakeSandboxProviderContract : SandboxProviderContract
     protected override Task<string?> GitHubTokenOfAsync(Sandbox sandbox) => Task.FromResult(_fake.GitHubTokenOf(sandbox));
 
     protected override void GivenAgentSession(AgentRole role, params (string[] Updates, AgentOutcome Outcome)[] turns) =>
-        _fake.ScriptAgentSessions(role, new FakeAgentSession([.. turns.Select(turn => new FakeAgentTurn(turn.Updates, turn.Outcome))]));
+        _fake.ScriptAgentSessions(role, new FakeAgentSession([.. turns.Select(
+            turn => new FakeAgentTurn([.. turn.Updates.Select(said => new AgentUpdate.Message(said))], turn.Outcome))]));
 }
 
 /// <summary>

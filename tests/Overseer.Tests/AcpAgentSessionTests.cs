@@ -35,14 +35,76 @@ public class AcpAgentSessionTests
         agent.Chunk("Working ");
         var updates = turn.Updates.GetAsyncEnumerator(Token);
         Assert.True(await updates.MoveNextAsync());
-        Assert.Equal("Working ", updates.Current);
+        Assert.Equal(new AgentUpdate.Message("Working "), updates.Current);
         agent.Chunk("on it.");
         agent.EndTurn();
 
         Assert.True(await updates.MoveNextAsync());
-        Assert.Equal("on it.", updates.Current);
+        Assert.Equal(new AgentUpdate.Message("on it."), updates.Current);
         Assert.False(await updates.MoveNextAsync());
         Assert.Equal(new AgentOutcome.Done(), await turn.Outcome);
+    }
+
+    [Fact]
+    public async Task A_tool_call_is_told_apart_from_a_message_and_names_its_tool_once_what_it_is_called_on_is_known()
+    {
+        var agent = new ScriptedAgentProcess();
+        await using var session = await StartAsync(agent);
+        var turn = await session.SendAsync("Go", Token);
+        await agent.PromptReceivedAsync();
+
+        agent.Chunk("Let me look.");
+        // As OpenCode reports its tools: first by their name, then, as each goes on, with what it works on.
+        agent.ToolCall("call-1", "bash");
+        agent.ToolCall("call-2", "read");
+        agent.ToolCallUpdate("call-1", "npm test");
+        agent.ToolCallUpdate("call-1", "npm test");
+        agent.ToolCallUpdate("call-2", "read");
+        agent.ToolCallUpdate("call-2", "src/orders.ts");
+        agent.ToolCallUpdate("call-2", title: null);
+        agent.EndTurn();
+
+        Assert.Equal(
+            [
+                new AgentUpdate.Message("Let me look."),
+                new AgentUpdate.ToolCall("call-1", "bash"),
+                new AgentUpdate.ToolCall("call-2", "read"),
+                new AgentUpdate.ToolCall("call-1", "bash: npm test"),
+                new AgentUpdate.ToolCall("call-2", "read: src/orders.ts"),
+            ],
+            await turn.Updates.ToListAsync(Token));
+    }
+
+    [Fact]
+    public async Task OpenCodes_question_tool_is_none_of_the_turns_tool_calls()
+    {
+        var agent = new ScriptedAgentProcess();
+        await using var session = await StartAsync(agent);
+        var turn = await session.SendAsync("Go", Token);
+        await agent.PromptReceivedAsync();
+
+        agent.ToolCall("call-1", "question");
+        agent.ToolCallUpdate("call-1", "Asked 1 question");
+        agent.EndTurn();
+
+        Assert.Empty(await turn.Updates.ToListAsync(Token));
+    }
+
+    [Fact]
+    public async Task The_updates_are_given_without_the_secrets()
+    {
+        var agent = new ScriptedAgentProcess();
+        await using var session = await StartAsync(agent, "sk-secret");
+        var turn = await session.SendAsync("Go", Token);
+        await agent.PromptReceivedAsync();
+
+        agent.Chunk("The key is sk-secret.");
+        agent.ToolCall("call-1", "echo sk-secret");
+        agent.EndTurn();
+
+        Assert.Equal(
+            [new AgentUpdate.Message("The key is ***."), new AgentUpdate.ToolCall("call-1", "echo ***")],
+            await turn.Updates.ToListAsync(Token));
     }
 
     [Fact]
@@ -297,6 +359,19 @@ internal sealed class ScriptedAgentProcess : ISshProcess
         ["sessionUpdate"] = "agent_message_chunk",
         ["content"] = new JsonObject { ["type"] = "text", ["text"] = text },
     });
+
+    public void ToolCall(string id, string title) =>
+        Update(new JsonObject { ["sessionUpdate"] = "tool_call", ["toolCallId"] = id, ["title"] = title, ["status"] = "pending" });
+
+    public void ToolCallUpdate(string id, string? title)
+    {
+        var update = new JsonObject { ["sessionUpdate"] = "tool_call_update", ["toolCallId"] = id, ["status"] = "in_progress" };
+        if (title is not null)
+        {
+            update["title"] = title;
+        }
+        Update(update);
+    }
 
     public void EndTurn() =>
         Send(new JsonObject { ["id"] = _promptId, ["result"] = new JsonObject { ["stopReason"] = "end_turn" } });

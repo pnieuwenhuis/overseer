@@ -223,7 +223,7 @@ public sealed class AcpAgentSession : IAgentSession
             case "agent_message_chunk"
                 when update.TryGetProperty("content", out var content) && content.TryGetProperty("text", out var text) && text.GetString() is { Length: > 0 } chunk:
                 turn.Message.Append(chunk);
-                turn.Updates.Writer.TryWrite(Scrub(chunk));
+                turn.Updates.Writer.TryWrite(new AgentUpdate.Message(Scrub(chunk)));
                 break;
             case "tool_call":
                 turn.Message.Clear();
@@ -231,16 +231,33 @@ public sealed class AcpAgentSession : IAgentSession
                 {
                     turn.Question = question;
                 }
-                else if (update.TryGetProperty("title", out var title) && title.GetString() is { Length: > 0 } called)
+                else if (TextOf(update, "title") is { } tool)
                 {
-                    turn.Updates.Writer.TryWrite(Scrub(called));
+                    var id = TextOf(update, "toolCallId") ?? Guid.NewGuid().ToString("N");
+                    turn.ToolCalls[id] = (tool, tool);
+                    turn.Updates.Writer.TryWrite(new AgentUpdate.ToolCall(id, Scrub(tool)));
                 }
                 break;
             case "tool_call_update" when QuestionOf(update) is { } updatedQuestion:
                 turn.Question = updatedQuestion;
                 break;
+            // OpenCode first titles a tool call with the tool's name, and a later title says what it works on, such as the command.
+            case "tool_call_update"
+                when TextOf(update, "toolCallId") is { } id && turn.ToolCalls.TryGetValue(id, out var call) && TextOf(update, "title") is { } on:
+                var title = on == call.Tool ? on : $"{call.Tool}: {on}";
+                if (title != call.Title)
+                {
+                    turn.ToolCalls[id] = (call.Tool, title);
+                    turn.Updates.Writer.TryWrite(new AgentUpdate.ToolCall(id, Scrub(title)));
+                }
+                break;
         }
     }
+
+    private static string? TextOf(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String && value.GetString() is { Length: > 0 } text
+            ? text
+            : null;
 
     /// <summary>The permission decision for a request: to go ahead, except with a question, which is for the user.</summary>
     private JsonObject Decide(JsonElement parameters)
@@ -400,7 +417,11 @@ public sealed class AcpAgentSession : IAgentSession
     /// <summary>What one turn collects while the agent works.</summary>
     private sealed class Turn
     {
-        public Channel<string> Updates { get; } = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
+        public Channel<AgentUpdate> Updates { get; } =
+            Channel.CreateUnbounded<AgentUpdate>(new UnboundedChannelOptions { SingleReader = true });
+
+        /// <summary>The tool calls announced, by ID: the tool each came as, and the title last reported.</summary>
+        public Dictionary<string, (string Tool, string Title)> ToolCalls { get; } = [];
 
         public TaskCompletionSource<AgentOutcome> Outcome { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

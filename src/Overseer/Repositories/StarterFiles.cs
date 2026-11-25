@@ -32,14 +32,10 @@ public sealed class StarterFiles(SandboxRegistry sandboxes, IGitHubGateway gitHu
             await agentWorking();
             await using (var session = await sandboxes.StartAgentSessionAsync(sandbox, AgentRole.Developer, cancellationToken))
             {
-                var turn = await session.SendAsync(Instructions(setup), cancellationToken);
-                await foreach (var _ in turn.Updates.WithCancellation(cancellationToken))
-                {
-                }
                 AgentOutcome outcome;
                 try
                 {
-                    outcome = await turn.Outcome.WaitAsync(cancellationToken);
+                    outcome = await session.TakeTurnAsync(Instructions(setup), cancellationToken);
                 }
                 catch (AgentSessionFailedException exception)
                 {

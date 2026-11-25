@@ -169,7 +169,7 @@ public class IdleRefinementTests(PostgresServer postgres)
                 HandsInRound(("Which format?", "CSV."), ("Which page offers it?", "The orders page.")),
                 HandsInRound(("Up to how many rows?", "All of them."))),
             // Catches up on the transcript, then works on the answers.
-            new FakeAgentSession(new FakeAgentTurn(["Reading the code"], new AgentOutcome.Done()), FakeAgentTurn.Endless("Reading the answers")));
+            new FakeAgentSession(new FakeAgentTurn([new AgentUpdate.Message("Reading the code")], new AgentOutcome.Done()), FakeAgentTurn.Endless(new AgentUpdate.Message("Reading the answers"))));
         using var saved = await SaveAsync(overseer, "# Export data\n\nAs CSV.", "acme/web");
         var address = await AddressAsync(overseer, "Export data");
         using var started = await StartAsync(overseer, address);

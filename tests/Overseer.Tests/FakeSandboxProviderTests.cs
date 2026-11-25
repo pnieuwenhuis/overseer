@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Microsoft.Extensions.Time.Testing;
 using Overseer.Sandboxes;
 
@@ -43,16 +44,16 @@ public class FakeSandboxProviderTests
     {
         var sandbox = await CreateAsync();
         _provider.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
-            new FakeAgentTurn(["Reading the README"], new AgentOutcome.AskedQuestion("Which database should it use?")),
-            new FakeAgentTurn(["Writing the Spec"], new AgentOutcome.Done())));
+            new FakeAgentTurn([new AgentUpdate.Message("Reading the README")], new AgentOutcome.AskedQuestion("Which database should it use?")),
+            new FakeAgentTurn([new AgentUpdate.Message("Writing the Spec")], new AgentOutcome.Done())));
         await using var session = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Analyst, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken);
 
         var asking = await session.SendAsync("Refine the Intent", TestContext.Current.CancellationToken);
-        Assert.Equal(["Reading the README"], await asking.Updates.ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal([new AgentUpdate.Message("Reading the README")], await asking.Updates.ToListAsync(TestContext.Current.CancellationToken));
         Assert.Equal(new AgentOutcome.AskedQuestion("Which database should it use?"), await asking.Outcome);
 
         var finishing = await session.SendAsync("PostgreSQL", TestContext.Current.CancellationToken);
-        Assert.Equal(["Writing the Spec"], await finishing.Updates.ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal([new AgentUpdate.Message("Writing the Spec")], await finishing.Updates.ToListAsync(TestContext.Current.CancellationToken));
         Assert.Equal(new AgentOutcome.Done(), await finishing.Outcome);
     }
 
@@ -77,7 +78,7 @@ public class FakeSandboxProviderTests
     {
         var sandbox = await CreateAsync();
         _provider.ScriptAgentSessions(AgentRole.Developer,
-            new FakeAgentSession(new FakeAgentTurn(["Implemented the first Task"], new AgentOutcome.Done())),
+            new FakeAgentSession(new FakeAgentTurn([new AgentUpdate.Message("Implemented the first Task")], new AgentOutcome.Done())),
             new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.AskedQuestion("Which port?"))));
 
         var first = await SendFirstMessageAsync(sandbox, AgentRole.Developer);
@@ -142,27 +143,66 @@ public class FakeSandboxProviderTests
     {
         var sandbox = await CreateAsync();
         _provider.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(
-            new FakeAgentTurn(["Writing README.md"], new AgentOutcome.Done()) { Failure = "opencode exited with code 1." }));
+            new FakeAgentTurn([new AgentUpdate.Message("Writing README.md")], new AgentOutcome.Done()) { Failure = "opencode exited with code 1." }));
 
         var turn = await SendFirstMessageAsync(sandbox, AgentRole.Developer);
 
-        Assert.Equal(["Writing README.md"], await turn.Updates.ToListAsync(TestContext.Current.CancellationToken));
+        var updates = new List<AgentUpdate>();
+        var brokenOff = await Assert.ThrowsAsync<AgentSessionFailedException>(async () =>
+        {
+            await foreach (var update in turn.Updates.WithCancellation(TestContext.Current.CancellationToken))
+            {
+                updates.Add(update);
+            }
+        });
+        Assert.Equal([new AgentUpdate.Message("Writing README.md")], updates);
         var failure = await Assert.ThrowsAsync<AgentSessionFailedException>(() => turn.Outcome);
         Assert.Equal("opencode exited with code 1.", failure.Message);
+        Assert.Equal(failure.Message, brokenOff.Message);
+    }
+
+    [Fact]
+    public async Task A_turn_can_stream_updates_as_the_test_writes_them_and_ends_once_it_has_written_the_last()
+    {
+        var sandbox = await CreateAsync();
+        var live = Channel.CreateUnbounded<AgentUpdate>();
+        _provider.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(
+            new FakeAgentTurn([new AgentUpdate.Message("Reading")], new AgentOutcome.Done()) { Live = live.Reader }));
+        await using var session = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken);
+        var turn = await session.SendAsync("Start", TestContext.Current.CancellationToken);
+        await using var updates = turn.Updates.GetAsyncEnumerator(TestContext.Current.CancellationToken);
+        Assert.True(await updates.MoveNextAsync());
+
+        var next = updates.MoveNextAsync();
+        Assert.False(next.IsCompleted);
+        live.Writer.TryWrite(new AgentUpdate.ToolCall("1", "bash: npm test"));
+
+        Assert.True(await next);
+        Assert.Equal(new AgentUpdate.ToolCall("1", "bash: npm test"), updates.Current);
+        Assert.False(turn.Outcome.IsCompleted);
+        live.Writer.Complete();
+        Assert.False(await updates.MoveNextAsync());
+        Assert.Equal(new AgentOutcome.Done(), await turn.Outcome);
     }
 
     [Fact]
     public async Task An_endless_turn_goes_on_until_the_session_is_stopped()
     {
         var sandbox = await CreateAsync();
-        _provider.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(FakeAgentTurn.Endless("Thinking")));
+        _provider.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(FakeAgentTurn.Endless(new AgentUpdate.Message("Thinking"))));
         var session = await _provider.StartAgentSessionAsync(sandbox, AgentRole.Developer, AgentHarnessConfiguration.Default, NoEnvironment, TestContext.Current.CancellationToken);
 
         var turn = await session.SendAsync("Start", TestContext.Current.CancellationToken);
-        Assert.Equal(["Thinking"], await turn.Updates.ToListAsync(TestContext.Current.CancellationToken));
+        await using var updates = turn.Updates.GetAsyncEnumerator(TestContext.Current.CancellationToken);
+        Assert.True(await updates.MoveNextAsync());
+        Assert.Equal(new AgentUpdate.Message("Thinking"), updates.Current);
+        // The stream goes on as long as the turn does.
+        var next = updates.MoveNextAsync().AsTask();
+        Assert.False(next.IsCompleted);
         Assert.False(turn.Outcome.IsCompleted);
 
         await session.DisposeAsync();
+        await Assert.ThrowsAsync<AgentSessionFailedException>(() => next);
         await Assert.ThrowsAsync<AgentSessionFailedException>(() => turn.Outcome);
     }
 

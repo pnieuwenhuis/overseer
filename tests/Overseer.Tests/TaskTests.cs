@@ -89,7 +89,7 @@ public class TaskTests(PostgresServer postgres)
         {
             "doesn't start" => new FakeAgentSession { StartFailure = "opencode is not installed." },
             "breaks off" => new FakeAgentSession(
-                new FakeAgentTurn(["Reading the code"], new AgentOutcome.Done()) { Failure = "The agent process exited with code 1." }),
+                new FakeAgentTurn([new AgentUpdate.Message("Reading the code")], new AgentOutcome.Done()) { Failure = "The agent process exited with code 1." }),
             _ => new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.AskedQuestion("Which port should it listen on?"))),
         };
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneOnce(Task.CompletedTask));

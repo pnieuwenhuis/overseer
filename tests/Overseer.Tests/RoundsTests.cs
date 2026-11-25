@@ -62,7 +62,7 @@ public class RoundsTests(PostgresServer postgres)
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
             HandsInRound(("Which format?", "CSV."), ("Which page offers it?", "The orders page."), ("Up to how many rows?", "All of them.")),
-            FakeAgentTurn.Endless("Reading the answers")));
+            FakeAgentTurn.Endless(new AgentUpdate.Message("Reading the answers"))));
         using var saved = await SaveAsync(overseer, "Export data", "acme/web");
         var address = await AddressAsync(overseer, "Export data");
         using var started = await StartAsync(overseer, address);

@@ -184,8 +184,8 @@ public class RefinementTests(PostgresServer postgres)
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst,
-            new FakeAgentSession(new FakeAgentTurn(["Reading the code"], new AgentOutcome.Done()) { Failure = "opencode exited with code 1." }),
-            new FakeAgentSession(FakeAgentTurn.Endless("Reading the code")));
+            new FakeAgentSession(new FakeAgentTurn([new AgentUpdate.Message("Reading the code")], new AgentOutcome.Done()) { Failure = "opencode exited with code 1." }),
+            new FakeAgentSession(FakeAgentTurn.Endless(new AgentUpdate.Message("Reading the code"))));
         using var saved = await SaveAsync(overseer, "Export data", "acme/web");
         var address = await AddressAsync(overseer, "Export data");
 
@@ -248,7 +248,7 @@ public class RefinementTests(PostgresServer postgres)
             firstSandboxes = first.Sandboxes;
             first.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(
                 RoundsTests.HandsInRound(("Which format?", "CSV.")),
-                FakeAgentTurn.Endless("Reading the answers")));
+                FakeAgentTurn.Endless(new AgentUpdate.Message("Reading the answers"))));
             using var saved = await SaveAsync(first, "Export data", "acme/web");
             address = await AddressAsync(first, "Export data");
             using var started = await StartAsync(first, address);

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using Overseer.GitHub;
 
 namespace Overseer.Sandboxes;
@@ -291,10 +293,50 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
             {
                 { EndsNever: true } => _stopping.Task,
                 { Failure: { } failure } => Task.FromException<AgentOutcome>(new AgentSessionFailedException(failure)),
-                { EndsAfter: { } gate } => gate.ContinueWith(_ => turn.Outcome, TaskScheduler.Default),
-                _ => Task.FromResult(turn.Outcome),
+                { EndsAfter: null, Live: null } => Task.FromResult(turn.Outcome),
+                _ => EndAsync(turn),
             };
-            return Task.FromResult(new AgentTurn(turn.Updates.ToAsyncEnumerable(), outcome));
+            return Task.FromResult(new AgentTurn(StreamAsync(turn, outcome, cancellationToken), outcome));
+        }
+
+        /// <summary>
+        /// The outcome of a turn that a test ends, once what it waits for has happened; stopping the session breaks it off.
+        /// </summary>
+        private async Task<AgentOutcome> EndAsync(FakeAgentTurn turn)
+        {
+            var written = turn.Live?.Completion ?? Task.CompletedTask;
+            var ended = Task.WhenAll(written, turn.EndsAfter ?? Task.CompletedTask);
+            if (await Task.WhenAny(ended, _stopping.Task) != ended)
+            {
+                return await _stopping.Task;
+            }
+            return turn.Outcome;
+        }
+
+        /// <summary>The turn's updates as a real agent's stream: it ends with the turn, throwing when the turn broke off.</summary>
+        private static async IAsyncEnumerable<AgentUpdate> StreamAsync(
+            FakeAgentTurn turn, Task<AgentOutcome> outcome, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            foreach (var update in turn.Updates)
+            {
+                yield return update;
+            }
+            if (turn.Live is { } live)
+            {
+                while (true)
+                {
+                    while (live.TryRead(out var update))
+                    {
+                        yield return update;
+                    }
+                    var more = live.WaitToReadAsync(cancellationToken).AsTask();
+                    if (await Task.WhenAny(more, outcome) == outcome || !await more)
+                    {
+                        break;
+                    }
+                }
+            }
+            await outcome.WaitAsync(cancellationToken);
         }
 
         public ValueTask DisposeAsync()
@@ -331,7 +373,7 @@ public sealed record FakeAgentSession(params FakeAgentTurn[] Turns)
 }
 
 /// <summary>A scripted turn: the updates the agent streams and how the turn ends.</summary>
-public sealed record FakeAgentTurn(IReadOnlyList<string> Updates, AgentOutcome Outcome)
+public sealed record FakeAgentTurn(IReadOnlyList<AgentUpdate> Updates, AgentOutcome Outcome)
 {
     /// <summary>When set, the turn breaks off after its updates with this error, instead of ending with its outcome.</summary>
     public string? Failure { get; init; }
@@ -342,9 +384,15 @@ public sealed record FakeAgentTurn(IReadOnlyList<string> Updates, AgentOutcome O
     /// <summary>When set, the turn ends with its outcome only once this completes, so that a test can act while the agent works.</summary>
     public Task? EndsAfter { get; init; }
 
+    /// <summary>
+    /// When set, the turn goes on to stream what a test writes to this channel, as it writes it, after <see cref="Updates"/>, and
+    /// ends with its outcome only once the test has completed the channel.
+    /// </summary>
+    public ChannelReader<AgentUpdate>? Live { get; init; }
+
     /// <summary>The files the agent writes in its Sandbox during the turn, by absolute path, such as what it hands in.</summary>
     public IReadOnlyDictionary<string, string> Writes { get; init; } = new Dictionary<string, string>();
 
     /// <summary>A turn that streams <paramref name="updates"/>, then goes on until the session is stopped.</summary>
-    public static FakeAgentTurn Endless(params string[] updates) => new(updates, new AgentOutcome.Done()) { EndsNever = true };
+    public static FakeAgentTurn Endless(params AgentUpdate[] updates) => new(updates, new AgentOutcome.Done()) { EndsNever = true };
 }

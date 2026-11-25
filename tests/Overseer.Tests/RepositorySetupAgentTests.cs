@@ -81,7 +81,7 @@ public class RepositorySetupAgentTests(PostgresServer postgres)
         var time = new FakeTimeProvider();
         await using var overseer = await StartWithTokenAsync(postgres, time: time);
         overseer.Sandboxes.ProvisioningDelay = TimeSpan.FromMinutes(4);
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(FakeAgentTurn.Endless("Writing README.md")));
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(FakeAgentTurn.Endless(new AgentUpdate.Message("Writing README.md"))));
 
         using var response = await StartSetupAsync(overseer, "acme", "web");
 
@@ -163,7 +163,7 @@ public class RepositorySetupAgentTests(PostgresServer postgres)
     {
         await using var overseer = await StartWithTokenAsync(postgres);
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(
-            new FakeAgentTurn(["Writing README.md"], new AgentOutcome.Done()) { Failure = "opencode exited with code 1." }));
+            new FakeAgentTurn([new AgentUpdate.Message("Writing README.md")], new AgentOutcome.Done()) { Failure = "opencode exited with code 1." }));
 
         using var response = await StartSetupAsync(overseer, "acme", "web");
 
@@ -217,7 +217,7 @@ public class RepositorySetupAgentTests(PostgresServer postgres)
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         await using (var first = await StartWithTokenAsync(postgres, connectionString))
         {
-            first.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(FakeAgentTurn.Endless("Writing README.md")));
+            first.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(FakeAgentTurn.Endless(new AgentUpdate.Message("Writing README.md"))));
             using var started = await StartSetupAsync(first, "acme", "web");
             await EventuallyAsync(async () => await SetupAsync(first, "acme/web") is { Phase: "AgentWorking" } setup ? setup : null, "the agent to start working");
             // As if serve crashed: the Sandbox outlives it.
