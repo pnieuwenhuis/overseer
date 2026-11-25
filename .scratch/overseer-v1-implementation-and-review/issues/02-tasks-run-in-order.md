@@ -8,12 +8,12 @@ Until ticket 03, a Task is Done when its agent's turn ends as done. Until ticket
 
 **Blocked by:** 01 (Implementing prepares a Sandbox)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The Intent's Tasks are created from the Approved Spec in its order, all Pending, and are kept in PostgreSQL
-- [ ] Only one Task runs at a time, always the first Pending one, and each gets its own agent session in the Task's role, stopped when the Task ends
-- [ ] The first message of a session holds the role's instructions, the Approved Spec and the Task, including the repositories it touches
-- [ ] The Developer instructions require unit and integration tests for the Task's work
-- [ ] The detail page shows every Task with its role and state, updating live, and the Intent shows a green light while a Task runs
-- [ ] A session that fails to start or breaks off turns the Intent red with the reason, and Retry runs that Task again in a new session
-- [ ] Covered by tests through the application with scripted agent sessions
+- [x] The Intent's Tasks are created from the Approved Spec in its order, all Pending, and are kept in PostgreSQL
+- [x] Only one Task runs at a time, always the first Pending one, and each gets its own agent session in the Task's role, stopped when the Task ends
+- [x] The first message of a session holds the role's instructions, the Approved Spec and the Task, including the repositories it touches
+- [x] The Developer instructions require unit and integration tests for the Task's work
+- [x] The detail page shows every Task with its role and state, updating live, and the Intent shows a green light while a Task runs
+- [x] A session that fails to start or breaks off turns the Intent red with the reason, and Retry runs that Task again in a new session
+- [x] Covered by tests through the application with scripted agent sessions
