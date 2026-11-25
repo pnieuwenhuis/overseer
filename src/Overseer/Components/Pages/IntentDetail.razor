@@ -1,11 +1,13 @@
 @page "/intents/{Id:guid}"
 @attribute [ExcludeFromInteractiveRouting]
 @using System.Globalization
+@using Overseer.Implementation
 @using Overseer.Intents
 @using Overseer.Refinement
 @using Overseer.Specs
 @inject IntentLifecycle Lifecycle
 @inject Refinements Refinements
+@inject TaskRunner TaskRunner
 @inject SpecSendBack SpecSendBack
 @inject SpecApproval SpecApproval
 @inject NavigationManager Navigation
@@ -20,9 +22,10 @@
 {
     <LiveIntent Id="Id" Refused="_refused" AnswersRefused="@_answersRefused" RefusedAnswers="_refusedAnswers"
                 CommentsRefused="@_commentsRefused" CommentsDraft="@_commentsDraft" ApprovalRefused="@_approvalRefused"
+                AnswerRefused="@_answerRefused"
                 @rendermode="InteractiveServer" />
 }
-@* Blazor handles a submitted form only when the page has a form of its name. The Start, Resume and answer forms the user sees are LiveIntent's, which come and go as the Intent changes. *@
+@* Blazor handles a submitted form only when the page has a form of its name. The Start, Resume and answer forms the user sees are LiveIntent's and its components', which come and go as the Intent changes. *@
 @if (IsSubmitted)
 {
     <form method="post" @formname="@StartFormName" @onsubmit="StartAsync"></form>
@@ -30,6 +33,7 @@
     <form method="post" @formname="@AnswerFormName" @onsubmit="AnswerAsync"></form>
     <form method="post" @formname="@SendBackFormName" @onsubmit="SendBackAsync"></form>
     <form method="post" @formname="@ApproveFormName" @onsubmit="ApproveAsync"></form>
+    <form method="post" @formname="@AnswerQuestionFormName" @onsubmit="AnswerQuestionAsync"></form>
 }
 
 @code {
@@ -47,6 +51,15 @@
 
     /// <summary>The name that a form submitted to this page approves the Spec under.</summary>
     public const string ApproveFormName = "approve-spec";
+
+    /// <summary>The name that a form submitted to this page answers a Task's agent's question under.</summary>
+    public const string AnswerQuestionFormName = "answer-question";
+
+    /// <summary>The field of that form that holds the number of the question answered.</summary>
+    public const string QuestionField = "Question";
+
+    /// <summary>The field of that form that holds the user's answer.</summary>
+    public const string QuestionAnswerField = "Answer";
 
     /// <summary>The field of the approve form that holds the number of the Spec version approved; the send back form's <see cref="SpecVersionField"/> too.</summary>
     public const string ApprovedVersionField = SpecVersionField;
@@ -84,6 +97,7 @@
     private string? _commentsRefused;
     private string? _commentsDraft;
     private string? _approvalRefused;
+    private string? _answerRefused;
 
     private bool IsSubmitted => HttpMethods.IsPost(HttpContext.Request.Method);
 
@@ -156,6 +170,18 @@
                 _refused = LiveIntent.StateChange.SendBack;
                 _commentsDraft = comments;
                 break;
+        }
+    }
+
+    private async Task AnswerQuestionAsync()
+    {
+        var form = HttpContext.Request.Form;
+        _answerRefused = int.TryParse(form[QuestionField], NumberStyles.None, CultureInfo.InvariantCulture, out var question)
+            ? await TaskRunner.AnswerAsync(Id, question, form[QuestionAnswerField].ToString(), HttpContext.RequestAborted)
+            : "It didn't say which question it answers.";
+        if (_answerRefused is null)
+        {
+            Navigation.NavigateTo($"/intents/{Id}");
         }
     }
 

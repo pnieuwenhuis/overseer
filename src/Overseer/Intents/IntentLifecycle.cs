@@ -402,10 +402,10 @@ public sealed class IntentLifecycle(
     /// colour and its label in <see cref="IntentWords"/>, so that the light doesn't come to rely on the colour. Checked in this order:
     /// first red, labelled Failed, when <see cref="Intent.HasFailed"/> (so far a failed Refinement or implementation, as when its Sandbox
     /// couldn't be created; later a Failed Task or a failed merge, each through <see cref="IIntentFailures"/>), as a failure outweighs a
-    /// question; then orange, labelled Needs Attention, when <see cref="Intent.NeedsAttention"/> (so far an unanswered Round and an
-    /// Intent In Review, through <see cref="IIntentAttention"/>, and a Spec awaiting approval, which its state says; later an agent's
-    /// question, through <see cref="IIntentAttention"/>). An Intent In Review Needs Attention whenever no agent is working on it, as
-    /// only the user can move it on: so far that is always.
+    /// question; then orange, labelled Needs Attention, when <see cref="Intent.NeedsAttention"/> (so far an unanswered Round, an
+    /// agent's unanswered question during a Task and an Intent In Review, through <see cref="IIntentAttention"/>, and a Spec awaiting
+    /// approval, which its state says). An Intent In Review Needs Attention whenever no agent is working on it, as only the user can
+    /// move it on: so far that is always.
     /// </summary>
     public static IntentLight? LightOf(Intent intent) =>
         intent.HasFailed ? IntentLight.Red

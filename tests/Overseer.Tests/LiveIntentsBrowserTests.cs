@@ -465,7 +465,7 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         overseer.Sandboxes.ScriptAgentSessions(
             AgentRole.Developer,
             new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = first.Task }),
-            new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.AskedQuestion("Which port?")) { EndsAfter = second.Task }));
+            new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = second.Task }));
         var spec = SpecTests.Spec();
         spec["tasks"] = new JsonArray(
             SpecTests.TaskJson("Add the export endpoint", "Every order as CSV.", ["acme/web"]),
@@ -485,11 +485,45 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         first.SetResult();
         await Expect(states).ToHaveTextAsync(["Done", "Running"]);
         second.SetResult();
-        await Expect(states).ToHaveTextAsync(["Done", "Pending"]);
-        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Red");
-        await Expect(detail.Locator(".implementation").GetByRole(AriaRole.Alert))
-            .ToHaveTextAsync("The Developer asked a question during Task 2, which can't be answered yet: Which port?");
+        await Expect(states).ToHaveTextAsync(["Done", "Done"]);
         Assert.True(await WasNotReloadedAsync(detail));
+    }
+
+    [Fact]
+    public async Task An_open_detail_page_shows_an_agents_question_live_and_sends_the_answer_typed_there()
+    {
+        await using var overseer = await StartOverseerAsync();
+        var asking = new TaskCompletionSource();
+        var working = new TaskCompletionSource();
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(
+            new FakeAgentTurn([], new AgentOutcome.AskedQuestion("Which port?")) { EndsAfter = asking.Task },
+            new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = working.Task }));
+        var address = await ImplementationTests.AwaitingApprovalAsync(overseer, "Export data", "acme/web");
+        await using var session = await chromium.LogInAsync(overseer);
+        var detail = await OpenAsync(session, address);
+        using var approved = await ImplementationTests.ApproveAsync(overseer, address, start: true);
+        var tasks = detail.GetByRole(AriaRole.Region, new PageGetByRoleOptions { Name = "Tasks", Exact = true });
+        var states = tasks.Locator(".intent-task-state");
+        await Expect(states).ToHaveTextAsync(["Running"]);
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Green");
+
+        asking.SetResult();
+
+        await Expect(tasks.Locator(".task-question-text")).ToHaveTextAsync("Which port?");
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Orange");
+        await Expect(states).ToHaveTextAsync(["Running"]);
+        var answer = tasks.GetByLabel("Your answer");
+        await answer.FillAsync("8080.");
+
+        await tasks.GetByRole(AriaRole.Button, new LocatorGetByRoleOptions { Name = "Send answer" }).ClickAsync();
+
+        await Expect(tasks.Locator(".task-question-answer")).ToHaveTextAsync("8080.");
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Green");
+        await Expect(answer).ToHaveCountAsync(0);
+        working.SetResult();
+        await Expect(detail.Locator(".intent-state")).ToHaveTextAsync("In Review");
+        // Kept with the Task.
+        await Expect(tasks.Locator(".task-question-text")).ToHaveTextAsync("Which port?");
     }
 
     [Fact]

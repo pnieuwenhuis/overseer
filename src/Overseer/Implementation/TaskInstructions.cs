@@ -46,10 +46,13 @@ internal static class TaskInstructions
           Overseer's own runs of `setup`, `build` and `test` wrote isn't committed, unless you change it: don't commit it yourself.
         - Leave pushing to Overseer: never run `git push`, don't open or change pull requests, and don't change anything else on
           GitHub. Stay on the Intent branch.
-        - No one can answer questions during a Task. Where the Spec and your Task leave something open, decide for yourself.
-        - Don't end your turn with a question, nor with an offer such as "Shall I go on?": Overseer takes a last message that ends
-          in a question mark as a question, which stops the implementation. End your turn with a short statement of what you did and
-          what you decided.
+        - Where the Spec and your Task leave something open, decide for yourself.
+        - Ask the human a question only when you can't reasonably decide something yourself, as your Task waits until they answer.
+          To ask, end your turn with the question as your last message, ending in a question mark and holding what they need to
+          know to answer it: their answer comes as your next message.
+        - Otherwise don't end your turn with a question, nor with an offer such as "Shall I go on?": Overseer takes a last message
+          that ends in a question mark as a question to the human. End your turn with a short statement of what you did and what you
+          decided.
 
         # The Approved Spec
 
@@ -107,6 +110,16 @@ internal static class TaskInstructions
         {FailuresOf(failed)}
 
         Fix it, and end your turn as before. Overseer then verifies your work again.
+        """;
+
+    /// <summary>What a Task's session is told once the human has answered its question.</summary>
+    public static string Answer(IntentTask task, string answer) =>
+        $"""
+        The human answered your question:
+
+        {answer}
+
+        Go on with Task {task.Number}, and end your turn as before.
         """;
 
     /// <summary>The description of the fix-up Task, in Markdown: why there is one, and what failed.</summary>

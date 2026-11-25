@@ -80,7 +80,6 @@ public class TaskTests(PostgresServer postgres)
     [Theory]
     [InlineData("doesn't start", "The Developer's session for Task 2 failed: opencode is not installed.")]
     [InlineData("breaks off", "The Developer's session for Task 2 failed: The agent process exited with code 1.")]
-    [InlineData("asks", "The Developer asked a question during Task 2, which can't be answered yet: Which port should it listen on?")]
     public async Task A_session_that_fails_turns_the_Intent_red_with_the_reason_and_Retry_runs_that_Task_again_in_a_new_session_in_the_same_Sandbox(
         string failure, string error)
     {
@@ -88,9 +87,8 @@ public class TaskTests(PostgresServer postgres)
         var failing = failure switch
         {
             "doesn't start" => new FakeAgentSession { StartFailure = "opencode is not installed." },
-            "breaks off" => new FakeAgentSession(
+            _ => new FakeAgentSession(
                 new FakeAgentTurn([new AgentUpdate.Message("Reading the code")], new AgentOutcome.Done()) { Failure = "The agent process exited with code 1." }),
-            _ => new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.AskedQuestion("Which port should it listen on?"))),
         };
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneOnce(Task.CompletedTask));
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, failing, new FakeAgentSession(FakeAgentTurn.Endless()));
@@ -261,16 +259,13 @@ public class TaskTests(PostgresServer postgres)
         Assert.Contains(second.Sandboxes.CommandsRun, run => run.Sandbox == message.Sandbox && run.Command.Contains("git checkout"));
     }
 
-    [Theory]
-    [InlineData("breaks off")]
-    [InlineData("asks")]
-    public async Task What_a_failed_session_says_never_puts_the_GitHub_token_in_the_error_or_the_database(string failure)
+    [Fact]
+    public async Task What_a_failed_session_says_never_puts_the_GitHub_token_in_the_error_or_the_database()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         var said = $"git said: Bearer {Token} was refused. Now what?";
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(failure == "asks"
-            ? new FakeAgentTurn([], new AgentOutcome.AskedQuestion(said))
-            : new FakeAgentTurn([], new AgentOutcome.Done()) { Failure = said }));
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Developer, new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { Failure = said }));
 
         var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
 
@@ -316,7 +311,7 @@ public class TaskTests(PostgresServer postgres)
     [Theory]
     [InlineData(AgentRole.Designer, "You are the Designer of Overseer", "placeholder data")]
     [InlineData(AgentRole.Developer, "You are a Developer of Overseer", "Always include unit tests and integration tests for your own work")]
-    public async Task The_first_message_of_a_Tasks_session_holds_its_roles_instructions_which_leave_pushing_to_Overseer_and_rule_out_a_question(
+    public async Task The_first_message_of_a_Tasks_session_holds_its_roles_instructions_which_leave_pushing_to_Overseer_and_a_question_for_when_it_is_stuck(
         AgentRole role, string who, string duty)
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/api", "acme/web");
@@ -329,7 +324,8 @@ public class TaskTests(PostgresServer postgres)
         Assert.StartsWith(who, message);
         Assert.Contains(duty, message);
         Assert.Contains("Leave pushing to Overseer: never run `git push`", message);
-        Assert.Contains("Don't end your turn with a question", message);
+        Assert.Contains("Ask the human a question only when you can't reasonably decide something yourself", message);
+        Assert.Contains("their answer comes as your next message", message);
     }
 
     /// <summary>Waits for the Squad's agents to have been sent this many messages.</summary>

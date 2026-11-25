@@ -15,16 +15,18 @@ namespace Overseer.Implementation;
 /// (<see cref="TaskLoop"/>), runs the final verification once all are Done (<see cref="FinalVerification"/>), which, should it
 /// fail, adds a fix-up Task whose verification is the final one, and once it is passed opens the pull requests
 /// (<see cref="PullRequests"/>) and has the Intent move to In Review, all in the background. Where each
-/// implementation stands, and the Sandbox it was prepared in, is kept in PostgreSQL. An implementation that fails leaves the Intent
-/// Implementing, in its slot, and red until a Retry, which goes on in the prepared Sandbox when there is one, and otherwise
-/// prepares a fresh one; once the final verification has passed, a Retry only opens the pull requests still missing, which needs no
-/// Sandbox. One with a Failed Task has no such Retry: the human retries that Task instead (<see cref="RetryTaskAsync"/>). A
-/// restart of serve fails too, for now, every implementation that hadn't failed: its Sandbox goes with the restart.
+/// implementation stands, and the Sandbox it was prepared in, is kept in PostgreSQL. A Task's agent that asks a question leaves the
+/// implementation waiting, its Intent orange, until the human answers (<see cref="AnswerAsync"/>). An implementation that fails
+/// leaves the Intent Implementing, in its slot, and red until a Retry, which goes on in the prepared Sandbox when there is one, and
+/// otherwise prepares a fresh one; once the final verification has passed, a Retry only opens the pull requests still missing, which
+/// needs no Sandbox. One with a Failed Task has no such Retry: the human retries that Task instead
+/// (<see cref="RetryTaskAsync"/>). A restart of serve fails too, for now, every implementation that hadn't failed: its Sandbox goes
+/// with the restart.
 /// </summary>
 public sealed class TaskRunner(
     IntentLifecycle lifecycle, SandboxRegistry sandboxes, SandboxPreparation preparation, IntentTasks tasks,
-    TaskLoop loop, FinalVerification finalVerification, PullRequests pullRequests, IDbContextFactory<OverseerDbContext> databases,
-    ILogger<TaskRunner> logger)
+    TaskLoop loop, TaskQuestions questions, FinalVerification finalVerification, PullRequests pullRequests,
+    IDbContextFactory<OverseerDbContext> databases, ILogger<TaskRunner> logger)
     : IHostedService
 {
     private const string Interrupted = "Overseer restarted, which interrupted the implementation. Retry to prepare a fresh Sandbox.";
@@ -35,10 +37,10 @@ public sealed class TaskRunner(
     private readonly SandboxedWork _work = new(logger);
 
     /// <summary>
-    /// Raised whenever an implementation changes phase, one of its Tasks changes or is verified, or one of its pull requests is
-    /// opened, on the thread that changed it, once the change is committed. Handlers must not throw; read again with
-    /// <see cref="ProgressOfAsync"/>, <see cref="IntentTasks.OfAsync"/>, <see cref="VerificationAttempts.OfAsync"/> and
-    /// <see cref="PullRequests.OfAsync"/>.
+    /// Raised whenever an implementation changes phase, one of its Tasks changes or is verified, its agent asks a question or gets
+    /// the answer, or one of its pull requests is opened, on the thread that changed it, once the change is committed. Handlers must
+    /// not throw; read again with <see cref="ProgressOfAsync"/>, <see cref="IntentTasks.OfAsync"/>,
+    /// <see cref="VerificationAttempts.OfAsync"/>, <see cref="TaskQuestions.OfAsync"/> and <see cref="PullRequests.OfAsync"/>.
     /// </summary>
     public event Action? Changed;
 
@@ -177,6 +179,24 @@ public sealed class TaskRunner(
         }
         TakeUpAgain(intentId);
         return true;
+    }
+
+    /// <summary>
+    /// Answers the question a Task's agent asked: the answer goes to the same session, which goes on with the Task.
+    /// </summary>
+    /// <param name="question">The question's number among the Intent's.</param>
+    /// <returns>
+    /// Why the answer was refused, as when that question doesn't await one, because it has its answer or its session has ended;
+    /// <c>null</c> when it is recorded and on its way to the agent.
+    /// </returns>
+    public async Task<string?> AnswerAsync(Guid intentId, int question, string answer, CancellationToken cancellationToken)
+    {
+        if (await questions.AnswerAsync(intentId, question, answer, cancellationToken) is { } refusal)
+        {
+            return refusal;
+        }
+        Changed?.Invoke();
+        return null;
     }
 
     /// <summary>The implementation of the Intent, when it is Implementing and that has failed.</summary>
@@ -485,6 +505,9 @@ public enum ImplementationPhase
 
     /// <summary>The Sandbox is ready for the Squad.</summary>
     Ready,
+
+    /// <summary>A Task's agent asked a question, and waits for the human's answer.</summary>
+    AwaitingAnswer,
 
     /// <summary>Every Task is Done, and the Intent branch is built and tested as a whole.</summary>
     FinalVerification,

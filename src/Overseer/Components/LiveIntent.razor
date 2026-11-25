@@ -7,6 +7,7 @@
 @inject SpecStore Specs
 @inject IntentTasks Tasks
 @inject VerificationAttempts Attempts
+@inject TaskQuestions Questions
 @inject PullRequests PullRequests
 
 @if (Shown is { WhyNot: { } why })
@@ -16,6 +17,10 @@
 @if (AnswersRefused is { } refused)
 {
     <p role="alert" class="callout-warning mb-4">Your answers were not sent: @refused</p>
+}
+@if (AnswerRefused is { } notAnswered)
+{
+    <p role="alert" class="callout-warning mb-4">Your answer was not sent: @notAnswered</p>
 }
 @if (ApprovalRefused is { } notApproved)
 {
@@ -100,7 +105,7 @@
         @if (Shown.Tasks.Count > 0)
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
-                <IntentTaskList IntentId="Id" Tasks="Shown.Tasks" Attempts="Shown.Attempts"
+                <IntentTaskList IntentId="Id" Tasks="Shown.Tasks" Attempts="Shown.Attempts" Questions="Shown.Questions"
                                 ImplementationFailed="@(Shown.Implementation is { Phase: ImplementationPhase.Failed })" />
             </div>
         }
@@ -173,6 +178,10 @@
     [Parameter]
     public string? AnswersRefused { get; set; }
 
+    /// <summary>Why an answer to a Task's agent's question was just refused; <c>null</c> unless it was.</summary>
+    [Parameter]
+    public string? AnswerRefused { get; set; }
+
     /// <summary>Why comments sending the Spec back were just not sent; <c>null</c> unless they weren't.</summary>
     [Parameter]
     public string? CommentsRefused { get; set; }
@@ -224,7 +233,8 @@
             intent is { State: IntentState.AwaitingSpecApproval } ? await Lifecycle.WhyNotApprovedAndStartedAsync(Id, cancellationToken) : null,
             intent is null ? [] : await Tasks.OfAsync(intent.Id, cancellationToken),
             intent is null ? [] : await Attempts.OfAsync(intent.Id, cancellationToken),
-            intent is null ? [] : await PullRequests.OfAsync(intent.Id, cancellationToken));
+            intent is null ? [] : await PullRequests.OfAsync(intent.Id, cancellationToken),
+            intent is null ? [] : await Questions.OfAsync(intent.Id, cancellationToken));
     }
 
     /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
@@ -245,10 +255,12 @@
     /// <param name="Tasks">The Intent's own Tasks, in order; empty until its implementation has begun.</param>
     /// <param name="Attempts">The verification attempts on its Tasks, by Task, in the order they were made.</param>
     /// <param name="PullRequests">Its pull requests, ordered by repository; empty when none is opened.</param>
+    /// <param name="Questions">The questions its Tasks' agents asked, in the order they were asked.</param>
     public sealed record Detail(
         Intent? Intent, string? WhyNot, RefinementProgress? Refinement, ImplementationProgress? Implementation, IReadOnlyList<Round> Transcript,
         SpecVersion? Spec, IReadOnlyList<SpecVersionHeading> SpecVersions, IReadOnlyList<SpecComment> Comments, string? WhyNotApprovedAndStarted,
-        IReadOnlyList<IntentTask> Tasks, IReadOnlyList<VerificationAttempt> Attempts, IReadOnlyList<PullRequest> PullRequests);
+        IReadOnlyList<IntentTask> Tasks, IReadOnlyList<VerificationAttempt> Attempts, IReadOnlyList<PullRequest> PullRequests,
+        IReadOnlyList<TaskQuestion> Questions);
 
     /// <summary>A change of an Intent's state that the page offers with a button, disabled while it can't be made.</summary>
     public enum StateChange
