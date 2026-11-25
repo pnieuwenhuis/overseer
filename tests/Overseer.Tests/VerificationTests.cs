@@ -652,13 +652,13 @@ public class VerificationTests(PostgresServer postgres)
 
         await StatesAsync(overseer, address, "Done");
         var branch = $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}";
-        var failure = $"acme/api isn't on the Intent branch {branch}, but on main.";
+        var failure = $"acme/api isn't on the Intent branch {branch}, but on main. Check out the Intent branch again, bringing "
+            + "along what belongs on it, without forcing it to another commit.";
         var attempts = AttemptsOn(await GetAsync(overseer, address), 1);
         Assert.Equal([$"Attempt 1: failed. {failure}", "Attempt 2: passed."], attempts.Select(attempt => attempt.Heading));
         // Nothing is built or tested on the wrong branch.
         Assert.Equal(["The Intent branch of acme/api"], attempts[0].Steps.Select(step => step.Name));
         Assert.Contains(failure, SquadMessages(overseer)[1].Message);
-        Assert.Contains("Check out the Intent branch again", SquadMessages(overseer)[1].Message);
     }
 
     /// <summary>What the command that asks which branch the repository's clone is on holds.</summary>

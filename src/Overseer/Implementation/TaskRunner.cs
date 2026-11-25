@@ -12,8 +12,9 @@ namespace Overseer.Implementation;
 /// <summary>
 /// The Task Runner: when the Intent Lifecycle moves an Intent to Implementing, it gives the Intent its Task list, prepares the
 /// Intent's Sandbox for the Squad (<see cref="SandboxPreparation"/>), has the Squad carry out the Tasks there
-/// (<see cref="TaskLoop"/>), runs the final verification once all are Done (<see cref="FinalVerification"/>), and once that passes
-/// opens the pull requests (<see cref="PullRequests"/>) and has the Intent move to In Review, all in the background. Where each
+/// (<see cref="TaskLoop"/>), runs the final verification once all are Done (<see cref="FinalVerification"/>), which, should it
+/// fail, adds a fix-up Task whose verification is the final one, and once it is passed opens the pull requests
+/// (<see cref="PullRequests"/>) and has the Intent move to In Review, all in the background. Where each
 /// implementation stands, and the Sandbox it was prepared in, is kept in PostgreSQL. An implementation that fails leaves the Intent
 /// Implementing, in its slot, and red until a Retry, which goes on in the prepared Sandbox when there is one, and otherwise
 /// prepares a fresh one; once the final verification has passed, a Retry only opens the pull requests still missing, which needs no

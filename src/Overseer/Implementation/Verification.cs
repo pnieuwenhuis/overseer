@@ -70,7 +70,7 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
         string? notSetAside;
         try
         {
-            steps = await RunAsync(sandbox, intent.RepositoriesInScope, repositories, changes, full, cancellationToken);
+            steps = await RunCommandsAsync(sandbox, intent.RepositoriesInScope, repositories, changes, full, cancellationToken);
         }
         finally
         {
@@ -103,17 +103,17 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
         {
             if (await branches.OffIntentBranchAsync(sandbox, repository, intent.Branch, cancellationToken) is { } head)
             {
-                var failure = $"{repository} isn't on the Intent branch {intent.Branch}, but on {head}.";
+                var failure = $"{repository} isn't on the Intent branch {intent.Branch}, but on {head}. Check out the Intent branch "
+                    + "again, bringing along what belongs on it, without forcing it to another commit.";
                 steps.Add(new VerificationStep(
                     repository, $"The Intent branch of {repository}", Command: null,
-                    await commands.RedactedAsync(failure, cancellationToken),
-                    "Check out the Intent branch again, bringing along what belongs on it, without forcing it to another commit."));
+                    await commands.RedactedAsync(failure, cancellationToken), Output: ""));
             }
         }
         return steps;
     }
 
-    private async Task<IReadOnlyList<VerificationStep>> RunAsync(
+    private async Task<IReadOnlyList<VerificationStep>> RunCommandsAsync(
         Sandbox sandbox, IReadOnlyList<RepositoryName> scope, IReadOnlyCollection<RepositoryName> repositories,
         IReadOnlyDictionary<RepositoryName, IReadOnlyList<string>> changes, bool full, CancellationToken cancellationToken)
     {

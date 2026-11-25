@@ -102,12 +102,20 @@ The agent-written, versioned description of how an Intent will be implemented, d
 _Avoid_: Plan, design doc, requirements
 
 **Task**:
-A unit of work in a Spec, assigned to one agent role and touching one or more Repositories in scope. A Spec's Tasks form an ordered list and are carried out one at a time. A finished Task is never reopened; later changes to its work are new Tasks.
+A unit of work, assigned to one agent role and touching one or more Repositories in scope. A Spec divides its work into an ordered list of Tasks; the Intent gets a Task list of its own, copied from the Approved Spec's, and that is what is carried out, one Task at a time. A finished Task is never reopened; later changes to its work are new Tasks.
 _Avoid_: Ticket, job, step, subtask
 
 **Failed Task**:
-A Task whose work still does not pass verification after the allowed number of attempts; it stops the Intent until the human intervenes.
+A Task whose work still does not pass verification after the allowed number of attempts; it stops the Intent until the human intervenes, who may change it in the Intent's Task list before it is retried. The Approved Spec stays as approved.
 _Avoid_: Broken task, errored task
+
+**Final verification**:
+The build and tests of every Repository in scope on the Intent branch, once every Task is finished, which have to pass before any pull request is opened.
+_Avoid_: Integration run, final check, CI
+
+**Fix-up Task**:
+The one Task added to an Intent's Task list when final verification fails, to make it pass. Its work is verified by the final verification itself.
+_Avoid_: Repair task, follow-up Task
 
 **Analyst's Choice**:
 A decision in a Spec that the human left to the Analyst by accepting its suggested answer instead of giving their own. When the human edits the Spec, a decision stays an Analyst's Choice only while they leave its text unchanged.
