@@ -464,23 +464,6 @@ public class VerificationTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task A_question_while_fixing_fails_the_implementation_without_making_the_Task_a_Failed_Task()
-    {
-        await using var overseer = await StartAsync("acme/web");
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(
-            new FakeAgentTurn([], new AgentOutcome.Done()),
-            new FakeAgentTurn([], new AgentOutcome.AskedQuestion("Skip that test?"))));
-        overseer.Sandboxes.ScriptCommandsContaining("npm test", new CommandResult(1, "1 test failed"));
-
-        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
-
-        var failed = await ImplementationTests.FailedAsync(overseer, address);
-        Assert.Equal("The Developer asked a question during Task 1, which can't be answered yet: Skip that test?", failed.Status);
-        await StatesAsync(overseer, address, "Pending");
-        Assert.NotNull(failed.RetryAction);
-    }
-
-    [Fact]
     public async Task A_push_that_fails_turns_the_Intent_red_with_GitHubs_error_and_Retry_only_pushes_again()
     {
         await using var overseer = await StartAsync("acme/api", "acme/web");

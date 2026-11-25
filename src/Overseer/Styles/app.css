@@ -1573,6 +1573,52 @@
         white-space: pre-wrap;
         overflow-wrap: anywhere;
     }
+
+    /* The questions a Task's agent asked, each with its answer, the open one as a form. */
+    .task-question {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        border-left: 2px solid var(--color-line);
+        font-size: 0.875rem;
+        padding-left: 0.875rem;
+    }
+
+    .task-question[data-open] {
+        background: var(--color-warning-soft);
+        border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
+        border-radius: 0.625rem;
+        padding: 0.875rem 1rem;
+    }
+
+    .task-question-label {
+        color: var(--color-muted);
+        font-size: 0.6875rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+
+    .task-question-text,
+    .task-question-answer {
+        white-space: pre-line;
+        overflow-wrap: anywhere;
+    }
+
+    .task-question-unanswered {
+        color: var(--color-muted);
+        font-size: 0.8125rem;
+        font-style: italic;
+    }
+
+    .task-question-form {
+        margin-top: 0.5rem;
+    }
+
+    .task-question-form textarea {
+        font-family: var(--font-sans);
+        font-size: 0.9375rem;
+    }
 }
 
 @keyframes light-glow {

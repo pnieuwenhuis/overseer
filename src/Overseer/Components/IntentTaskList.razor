@@ -1,5 +1,5 @@
-@* An Intent's Tasks in the order they are carried out, each with its role, the repositories it touches, its state and the verification
-   attempts on it; a Failed Task also with what recovers it. *@
+@* An Intent's Tasks in the order they are carried out, each with its role, the repositories it touches, its state, the verification
+   attempts on it and the questions its agents asked; a Failed Task also with what recovers it. *@
 @using System.Globalization
 @using Overseer.Implementation
 
@@ -27,6 +27,7 @@
                     var attempts = Attempts.Where(attempt => attempt.TaskNumber == task.Number).ToList();
                 }
                 <TaskAttempts Attempts="attempts" />
+                <TaskQuestionList IntentId="IntentId" Questions="@([.. Questions.Where(question => question.TaskNumber == task.Number)])" />
                 @* Offered once the implementation has stopped at it, which comes just after the Task is a Failed Task. *@
                 @if (task.State == IntentTaskState.Failed && ImplementationFailed)
                 {
@@ -67,4 +68,8 @@
     /// <summary>The verification attempts on the Tasks, in the order they were made.</summary>
     [Parameter, EditorRequired]
     public required IReadOnlyList<VerificationAttempt> Attempts { get; set; }
+
+    /// <summary>The questions the Tasks' agents asked, in the order they were asked.</summary>
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<TaskQuestion> Questions { get; set; }
 }

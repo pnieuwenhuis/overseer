@@ -23,6 +23,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<IntentTaskRecord> IntentTasks => Set<IntentTaskRecord>();
     public DbSet<VerificationAttemptRecord> VerificationAttempts => Set<VerificationAttemptRecord>();
     public DbSet<PullRequestRecord> PullRequests => Set<PullRequestRecord>();
+    public DbSet<TaskQuestionRecord> TaskQuestions => Set<TaskQuestionRecord>();
     public DbSet<SpecVersionRecord> SpecVersions => Set<SpecVersionRecord>();
     public DbSet<SpecCommentRecord> SpecComments => Set<SpecCommentRecord>();
 
@@ -89,6 +90,12 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
         {
             step.ToTable("VerificationSteps");
             step.HasKey(record => new { record.IntentId, record.TaskNumber, record.Run, record.AttemptNumber, record.Number });
+        });
+        modelBuilder.Entity<TaskQuestionRecord>(question =>
+        {
+            question.ToTable("TaskQuestions");
+            question.HasKey(record => new { record.IntentId, record.Number });
+            question.HasOne<IntentTaskRecord>().WithMany().HasForeignKey(record => new { record.IntentId, record.TaskNumber });
         });
         modelBuilder.Entity<PullRequestRecord>(pullRequest =>
         {

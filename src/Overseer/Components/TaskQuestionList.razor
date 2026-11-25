@@ -1,0 +1,43 @@
+@* The questions the agents asked during one Task, in the order they were asked, each with the human's answer, and the one that
+   awaits an answer as a form to give it. *@
+@using Overseer.Implementation
+
+@foreach (var question in Questions)
+{
+    <div @key="question.Number" class="task-question" data-question="@question.Number" data-open="@question.AwaitsAnswer">
+        <p class="task-question-label">The agent asked</p>
+        <p class="task-question-text">@question.Question</p>
+        @if (question.Answer is { } answer)
+        {
+            <p class="task-question-label">Your answer</p>
+            <p class="task-question-answer">@answer</p>
+        }
+        else if (question.AwaitsAnswer)
+        {
+            @* A plain form, posted by the browser, so an answer goes the same with or without the live connection. The static page handles it, under this name. *@
+            <form method="post" action="intents/@IntentId" class="task-question-form form">
+                <input type="hidden" name="_handler" value="@Pages.IntentDetail.AnswerQuestionFormName" />
+                <input type="hidden" name="@Pages.IntentDetail.QuestionField" value="@question.Number" />
+                <AntiforgeryToken />
+                <label>
+                    <span>Your answer</span>
+                    <textarea name="@Pages.IntentDetail.QuestionAnswerField" rows="3" required></textarea>
+                </label>
+                <button type="submit" class="btn-primary">Send answer</button>
+            </form>
+        }
+        else
+        {
+            <p class="task-question-unanswered">Never answered: the session that asked it has ended.</p>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public required Guid IntentId { get; set; }
+
+    /// <summary>The Task's questions.</summary>
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<TaskQuestion> Questions { get; set; }
+}

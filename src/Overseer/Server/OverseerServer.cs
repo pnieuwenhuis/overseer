@@ -69,6 +69,7 @@ public static class OverseerServer
         builder.Services.AddSingleton<IIntentFailures, RefinementFailures>();
         builder.Services.AddSingleton<IIntentFailures, ImplementationFailures>();
         builder.Services.AddSingleton<IIntentAttention, RefinementAttention>();
+        builder.Services.AddSingleton<IIntentAttention, ImplementationAttention>();
         builder.Services.AddSingleton<IIntentAttention, ReviewAttention>();
         builder.Services.AddSingleton<IntentLifecycle>();
         builder.Services.AddSingleton<SpecStore>();
@@ -84,6 +85,7 @@ public static class OverseerServer
         builder.Services.AddSingleton<Verification>();
         builder.Services.AddSingleton<IntentTasks>();
         builder.Services.AddSingleton<VerificationAttempts>();
+        builder.Services.AddSingleton<TaskQuestions>();
         builder.Services.AddSingleton<TaskLoop>();
         builder.Services.AddSingleton<FinalVerification>();
         builder.Services.AddSingleton<PullRequests>();

@@ -16,8 +16,8 @@ namespace Overseer.Implementation;
 /// (<see cref="IntentBranches"/>); only then is the Task Done and the next one started.
 /// </summary>
 public sealed class TaskLoop(
-    IntentTasks tasks, VerificationAttempts attempts, Verification verification, IntentBranches branches, SpecStore specs,
-    SandboxRegistry sandboxes, SettingsStore settings, RepositoryCommands commands, ILogger<TaskLoop> logger)
+    IntentTasks tasks, VerificationAttempts attempts, TaskQuestions questions, Verification verification, IntentBranches branches,
+    SpecStore specs, SandboxRegistry sandboxes, SettingsStore settings, RepositoryCommands commands, ILogger<TaskLoop> logger)
 {
     /// <summary>
     /// Carries out the Intent's Tasks that aren't Done until none is left, or one can't be finished. A Task whose verified work
@@ -126,7 +126,8 @@ public sealed class TaskLoop(
 
     /// <summary>
     /// Has a new agent session of the Task's role work on it, verifying its work each time its turn ends as done and telling it what
-    /// failed, and stops the session once the work passes or the Task can't go on.
+    /// failed, and stops the session once the work passes or the Task can't go on. A turn that ends in a question instead waits
+    /// for the human's answer (<see cref="TaskQuestions"/>), which goes to the same session.
     /// </summary>
     private async Task<Work> CarryOutAsync(
         Intent intent, Sandbox sandbox, IntentTask task, Action changed, CancellationToken cancellationToken)
@@ -152,21 +153,34 @@ public sealed class TaskLoop(
             return SessionFailed(intent, task, exception);
         }
         await using var stopping = session;
-        for (var number = 1; ; number++)
+        // The number of the last verification attempt this session made. A turn that ends in a question leads to none.
+        var number = 0;
+        while (true)
         {
+            AgentOutcome outcome;
             try
             {
-                if (await session.TakeTurnAsync(message, cancellationToken) is AgentOutcome.AskedQuestion asked)
-                {
-                    return new Work.Unfinished(
-                        $"The {task.Role} asked a question during Task {task.Number}, which can't be answered yet: {asked.Question}");
-                }
+                outcome = await session.TakeTurnAsync(message, cancellationToken);
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
             {
                 return SessionFailed(intent, task, exception);
             }
+            if (outcome is AgentOutcome.AskedQuestion asked)
+            {
+                // The Sandbox holds the GitHub token, so an agent can say it; a secret never goes into PostgreSQL.
+                var question = await commands.RedactedAsync(asked.Question, cancellationToken);
+                var answer = await questions.AskAsync(intent.Id, task.Number, question, changed, cancellationToken);
+                // The answer may be a long time coming, and the token replaced meanwhile.
+                if (await RefreshGitHubTokenAsync(intent, sandbox, cancellationToken) is { } notRefreshedSince)
+                {
+                    return new Work.Unfinished(notRefreshedSince);
+                }
+                message = TaskInstructions.Answer(task, answer);
+                continue;
+            }
 
+            number++;
             VerificationAttempt attempt;
             IReadOnlyList<RepositoryName> changedRepositories;
             try

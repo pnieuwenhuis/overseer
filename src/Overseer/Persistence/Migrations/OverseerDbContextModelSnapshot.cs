@@ -112,6 +112,37 @@ namespace Overseer.Persistence.Migrations
                     b.ToTable("PullRequests", (string)null);
                 });
 
+            modelBuilder.Entity("Overseer.Implementation.TaskQuestionRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Answer")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("AnsweredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("AskedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Question")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("TaskNumber")
+                        .HasColumnType("integer");
+
+                    b.HasKey("IntentId", "Number");
+
+                    b.HasIndex("IntentId", "TaskNumber");
+
+                    b.ToTable("TaskQuestions", (string)null);
+                });
+
             modelBuilder.Entity("Overseer.Implementation.VerificationAttemptRecord", b =>
                 {
                     b.Property<Guid>("IntentId")
@@ -542,6 +573,15 @@ namespace Overseer.Persistence.Migrations
                     b.HasOne("Overseer.Intents.IntentRecord", null)
                         .WithMany()
                         .HasForeignKey("IntentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.TaskQuestionRecord", b =>
+                {
+                    b.HasOne("Overseer.Implementation.IntentTaskRecord", null)
+                        .WithMany()
+                        .HasForeignKey("IntentId", "TaskNumber")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
