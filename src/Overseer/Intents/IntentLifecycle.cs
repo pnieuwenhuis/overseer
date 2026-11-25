@@ -10,8 +10,11 @@ using Overseer.Settings;
 namespace Overseer.Intents;
 
 /// <summary>Owns the Intents' state: everything else asks it to capture or change an Intent and never sets state directly.</summary>
+/// <param name="failures">One for each module whose work can fail an Intent.</param>
+/// <param name="attention">One for each module that can ask for the human's attention.</param>
 public sealed class IntentLifecycle(
-    IDbContextFactory<OverseerDbContext> databases, SettingsStore settings, TimeProvider time, IIntentFailures failures, IIntentAttention attention)
+    IDbContextFactory<OverseerDbContext> databases, SettingsStore settings, TimeProvider time, IEnumerable<IIntentFailures> failures,
+    IEnumerable<IIntentAttention> attention)
 {
     /// <summary>The states of an Active Intent, each occupying a slot; what counts towards the maximum is defined here and nowhere else.</summary>
     private static readonly IntentState[] ActiveStates = [IntentState.Refining, IntentState.Implementing, IntentState.InReview];
@@ -377,13 +380,12 @@ public sealed class IntentLifecycle(
     /// The light an Intent shows, or <c>null</c> when it has none. This is the one place a light is derived. The tickets that introduce a
     /// condition add it here, reading whatever <see cref="Intent"/> then carries, each with its member of <see cref="IntentLight"/>, its
     /// colour and its label in <see cref="IntentWords"/>, so that the light doesn't come to rely on the colour. Checked in this order:
-    /// first red, labelled Failed, when <see cref="Intent.HasFailed"/> (so far a failed Refinement, as when its Sandbox couldn't be
-    /// created; later a Failed Task or a failed merge, each through <see cref="IIntentFailures"/>), as a failure outweighs a question; then
-    /// orange, labelled Needs Attention, when <see cref="Intent.NeedsAttention"/> (so far an unanswered Round, through
+    /// first red, labelled Failed, when <see cref="Intent.HasFailed"/> (so far a failed Refinement or implementation, as when its Sandbox
+    /// couldn't be created; later a Failed Task or a failed merge, each through <see cref="IIntentFailures"/>), as a failure outweighs a
+    /// question; then orange, labelled Needs Attention, when <see cref="Intent.NeedsAttention"/> (so far an unanswered Round, through
     /// <see cref="IIntentAttention"/>, and a Spec awaiting approval, which its state says; later an agent's question and Review Comments
-    /// awaiting triage, through <see cref="IIntentAttention"/>). Implementing and
-    /// InReview aren't settled by the green below: the tickets that make them reachable decide their light, as an Intent In Review can be up
-    /// to the user rather than to agents.
+    /// awaiting triage, through <see cref="IIntentAttention"/>). InReview isn't settled by the green below: the ticket that makes it
+    /// reachable decides its light, as an Intent In Review can be up to the user rather than to agents.
     /// </summary>
     public static IntentLight? LightOf(Intent intent) =>
         intent.HasFailed ? IntentLight.Red
@@ -634,8 +636,8 @@ public sealed class IntentLifecycle(
     /// <summary>These Intents of <paramref name="database"/>, newest first.</summary>
     private async Task<IReadOnlyList<Intent>> ReadAsync(OverseerDbContext database, IQueryable<IntentRecord> intents, CancellationToken cancellationToken)
     {
-        var failed = failures.FailedIn(database);
-        var needingAttention = attention.NeedingAttentionIn(database);
+        var failed = FromEveryModule(database, failures.Select(module => module.FailedIn(database)));
+        var needingAttention = FromEveryModule(database, attention.Select(module => module.NeedingAttentionIn(database)));
         var stored = await intents
             // One query for the Repositories in scope and one for the transitions, rather than a row for each combination of them.
             .AsSplitQuery()
@@ -666,6 +668,10 @@ public sealed class IntentLifecycle(
             ApprovedSpecVersion = intent.ApprovedSpecVersion,
         })];
     }
+
+    /// <summary>The Intent ids any of the modules gives, as one query in <paramref name="database"/>; none when there is no module.</summary>
+    private static IQueryable<Guid> FromEveryModule(OverseerDbContext database, IEnumerable<IQueryable<Guid>> modules) =>
+        modules.Aggregate(database.Intents.Where(intent => false).Select(intent => intent.Id), (all, module) => all.Concat(module));
 
     /// <summary>
     /// The state Resume moves an Intent in <paramref name="state"/> with these transitions back to: the one the last transition into
@@ -791,6 +797,12 @@ public sealed partial record Intent(
     /// <summary>The number of the Spec version the human approved, the Approved Spec; <c>null</c> until they do.</summary>
     public int? ApprovedSpecVersion { get; init; }
 
+    /// <summary>
+    /// The Intent branch: the branch the Intent's work goes on, with the same name in every Repository in scope, for the Intent's
+    /// life. It follows from the Intent's id alone, so nothing that changes about the Intent changes it.
+    /// </summary>
+    public string Branch => $"overseer/intent-{Id:N}";
+
     /// <summary>The Repositories in scope, in a line of their own.</summary>
     public string RepositoriesInScopeLine =>
         RepositoriesInScope.Count == 0 ? "No Repositories in scope" : $"Repositories in scope: {string.Join(", ", RepositoriesInScope)}";
@@ -826,9 +838,13 @@ public enum IntentState
     /// <summary>The human approved the Spec but has not started the implementation; it holds no slot.</summary>
     Approved,
 
-    // Nothing reaches these yet but Paused, except by an update of the database in tests. The transitions to and from them come with their triggers.
-    // Implementing is reached from Approved; the Task Runner hooks into that transition later.
+    /// <summary>
+    /// The Squad implements the Approved Spec, in a Sandbox the Task Runner prepares as the Intent moves here. Nothing moves an
+    /// Intent on from here yet.
+    /// </summary>
     Implementing,
+
+    // Nothing reaches this yet, except by an update of the database in tests. The transitions to and from it come with their triggers.
     InReview,
 
     /// <summary>

@@ -5,7 +5,7 @@ namespace Overseer.Refinement;
 
 /// <summary>
 /// Which Repositories in scope have no Repository Manifest on their default branch, as the GitHub Gateway says, and which it
-/// couldn't tell. Only whether the file is there: what it holds is read once Tasks are implemented.
+/// couldn't tell. Only whether the file is there: what it holds is read from the Sandbox, once implementation starts.
 /// </summary>
 /// <param name="Lacking">Those GitHub finds no Repository Manifest in, in scope order.</param>
 /// <param name="Unknown">Those GitHub couldn't be asked about, in scope order, each with why.</param>

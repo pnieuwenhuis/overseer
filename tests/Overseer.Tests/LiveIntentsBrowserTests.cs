@@ -415,6 +415,46 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         Assert.True(await WasNotReloadedAsync(detail));
     }
 
+    [Fact]
+    public async Task An_open_detail_page_follows_the_implementations_Sandbox_live_from_provisioning_through_each_phase_to_ready()
+    {
+        var time = new FakeTimeProvider();
+        await using var overseer = await StartOverseerAsync(time);
+        overseer.Sandboxes.AddRepositoryFile("acme/web", ".overseer.yml", "setup: npm ci\nbuild: npm run build\ntest: npm test\ncompose: compose.yml\n");
+        var checkingOut = new TaskCompletionSource();
+        var settingUp = new TaskCompletionSource();
+        var starting = new TaskCompletionSource();
+        overseer.Sandboxes.HoldCommandsContaining("git checkout", checkingOut.Task);
+        overseer.Sandboxes.HoldCommandsContaining("npm ci", settingUp.Task);
+        overseer.Sandboxes.HoldCommandsContaining("docker compose", starting.Task);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(SpecTests.HandsInSpec(SpecTests.Spec())));
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+        await using var session = await chromium.LogInAsync(overseer);
+        var detail = await OpenAsync(session, address);
+        await AwaitDetailConnectedAsync(overseer, address, "Export data", detail);
+        using var started = await overseer.SubmitFormAsync(address, "start-intent", []);
+        await Expect(detail.Locator(".intent-state")).ToHaveTextAsync("Awaiting Spec Approval");
+        overseer.Sandboxes.ProvisioningDelay = TimeSpan.FromMinutes(4);
+
+        using var approved = await ImplementationTests.ApproveAsync(overseer, address, start: true);
+
+        var implementation = detail.Locator(".implementation");
+        var status = implementation.GetByRole(AriaRole.Status);
+        await Expect(status).ToHaveTextAsync("Provisioning a Sandbox for the Squad. A new Sandbox takes a few minutes.");
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Green");
+        await AdvanceUntilAsync(time, implementation, "CheckingOutIntentBranch");
+        await Expect(status).ToHaveTextAsync("Putting acme/web on the Intent branch.");
+        checkingOut.SetResult();
+        await Expect(status).ToHaveTextAsync("Running the setup command of acme/web.");
+        settingUp.SetResult();
+        await Expect(status).ToHaveTextAsync("Starting the Compose services of acme/web.");
+        starting.SetResult();
+        await Expect(status).ToHaveTextAsync("The Intent is ready: its Sandbox is prepared for the Squad.");
+        await Expect(implementation.Locator(".step-done")).ToHaveCountAsync(4);
+        Assert.True(await WasNotReloadedAsync(detail));
+    }
+
     /// <summary>
     /// Waits until the detail page of an Active Intent is live, which its Working Time going on as the clock advances shows. Until then
     /// its live rendering may still replace what is typed into it.
@@ -431,19 +471,19 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
     }
 
     /// <summary>
-    /// Advances the clock until the Refinement shows this phase: until the fake Sandbox Provider has started waiting, advancing it doesn't
-    /// end its wait, so it is advanced on each look.
+    /// Advances the clock until the Refinement or implementation shows this phase: until the fake Sandbox Provider has started waiting,
+    /// advancing it doesn't end its wait, so it is advanced on each look.
     /// </summary>
-    private static Task AdvanceUntilAsync(FakeTimeProvider time, ILocator refinement, string phase) =>
+    private static Task AdvanceUntilAsync(FakeTimeProvider time, ILocator steps, string phase) =>
         RepositorySetupPortal.EventuallyAsync(async () =>
         {
-            if (await refinement.GetAttributeAsync("data-phase") == phase)
+            if (await steps.GetAttributeAsync("data-phase") == phase)
             {
                 return "";
             }
             time.Advance(TimeSpan.FromMinutes(4));
             return null;
-        }, $"the Refinement to show {phase}");
+        }, $"the page to show {phase}");
 
     private async Task<RunningOverseer> StartOverseerAsync(TimeProvider? time = null) =>
         await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/web"], time, PortalChromium.ServerEnvironment);

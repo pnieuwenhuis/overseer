@@ -150,9 +150,6 @@ public sealed partial class AzureSandboxProvider(
         _targets[name] = target;
     }
 
-    /// <summary>Where each Repository in scope is cloned in a Sandbox: <c>/home/overseer/repositories/owner/name</c>.</summary>
-    public static string CloneDirectory(string repository) => $"/home/{Username}/repositories/{repository}";
-
     [GeneratedRegex(@"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")]
     private static partial Regex RepositoryNamePattern();
 
@@ -190,7 +187,7 @@ public sealed partial class AzureSandboxProvider(
 
         foreach (var repository in repositoriesInScope)
         {
-            var directory = CloneDirectory(repository);
+            var directory = Sandbox.CloneDirectory(repository);
             await RunStepAsync(target, token, $"Cloning {repository} failed", $"""
                 set -e
                 export GIT_TERMINAL_PROMPT=0
@@ -299,24 +296,48 @@ public sealed partial class AzureSandboxProvider(
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$")]
     private static partial Regex EnvironmentVariableName();
 
+    /// <inheritdoc cref="ISandboxProvider.ReadFileAsync"/>
+    /// <exception cref="InvalidOperationException">
+    /// The Sandbox does not exist, or its key is gone; or something is at the path, but couldn't be read.
+    /// </exception>
+    /// <exception cref="SandboxUnreachableException">The Sandbox does not accept SSH, for instance from a new public IP of the developer's.</exception>
+    public Task<string?> ReadFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken)
+    {
+        var quoted = ShellText.Quoted(path);
+        // A symlink that leads nowhere is something at the path too, which cat then says it can't read.
+        return FileContentAsync(sandbox, path, "read", $"""
+            [ -e {quoted} ] || [ -L {quoted} ] || exit {NoSuchFile}
+            cat -- {quoted}
+            """, cancellationToken);
+    }
+
     /// <inheritdoc cref="ISandboxProvider.TakeFileAsync"/>
     /// <exception cref="InvalidOperationException">
     /// The Sandbox does not exist, or its key is gone; or the file is there, but couldn't be read or removed.
     /// </exception>
     /// <exception cref="SandboxUnreachableException">The Sandbox does not accept SSH, for instance from a new public IP of the developer's.</exception>
-    public async Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken)
+    public Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken)
     {
-        const int NoSuchFile = 3;
-        var quoted = $"'{path.Replace("'", "'\\''")}'";
-        var result = await RunCommandAsync(sandbox, $"""
+        var quoted = ShellText.Quoted(path);
+        return FileContentAsync(sandbox, path, "taken", $"""
             [ -f {quoted} ] || exit {NoSuchFile}
             cat -- {quoted} && rm -f -- {quoted}
             """, cancellationToken);
+    }
+
+    /// <summary>What a command that prints a file exits with when there is no file.</summary>
+    private const int NoSuchFile = 3;
+
+    /// <summary>Runs a command that prints the file at <paramref name="path"/>, or exits with <see cref="NoSuchFile"/>.</summary>
+    /// <param name="done">What couldn't be done with the file when the command fails otherwise, as in "could not be read".</param>
+    private async Task<string?> FileContentAsync(Sandbox sandbox, string path, string done, string command, CancellationToken cancellationToken)
+    {
+        var result = await RunCommandAsync(sandbox, command, cancellationToken);
         return result.ExitCode switch
         {
             0 => result.Output,
             NoSuchFile => null,
-            _ => throw new InvalidOperationException($"The file {path} in the Sandbox could not be taken: {result.Output}"),
+            _ => throw new InvalidOperationException($"The file {path} in the Sandbox could not be {done}: {result.Output}"),
         };
     }
 

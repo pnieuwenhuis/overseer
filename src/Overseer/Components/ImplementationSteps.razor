@@ -1,0 +1,47 @@
+@* Where an Implementing Intent's implementation stands: its steps, what is happening now, and Retry once it has failed. *@
+@using Overseer.Implementation
+@using Overseer.Intents
+
+<section class="implementation" data-phase="@Implementation.Phase" aria-label="Implementation">
+    <ol class="steps">
+        <li class="@StepClass(ImplementationPhase.ProvisioningSandbox)">Provision a Sandbox holding the Repositories in scope</li>
+        <li class="@StepClass(ImplementationPhase.CheckingOutIntentBranch)">
+            <span>Put each repository on the Intent branch <span class="intent-branch">@Intent.Branch</span></span>
+        </li>
+        <li class="@StepClass(ImplementationPhase.RunningSetup)">Run each repository's setup command</li>
+        <li class="@StepClass(ImplementationPhase.StartingDependencies)">Start the services of each repository's Compose file</li>
+    </ol>
+    @if (Implementation.Phase == ImplementationPhase.Failed)
+    {
+        <p class="implementation-status" role="alert">@Implementation.Error</p>
+        @* A plain form, posted by the browser, so Retry works the same with or without the live connection. *@
+        <form method="post" action="intents/@Intent.Id/implementation/retry">
+            <AntiforgeryToken />
+            <button type="submit" class="btn-primary">Retry</button>
+        </form>
+    }
+    else
+    {
+        <p class="implementation-status" role="status">@Status</p>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public required Intent Intent { get; set; }
+
+    [Parameter, EditorRequired]
+    public required ImplementationProgress Implementation { get; set; }
+
+    private string Status => Implementation.Phase switch
+    {
+        ImplementationPhase.ProvisioningSandbox => "Provisioning a Sandbox for the Squad. A new Sandbox takes a few minutes.",
+        ImplementationPhase.CheckingOutIntentBranch => $"Putting {Implementation.Repository} on the Intent branch.",
+        ImplementationPhase.RunningSetup => $"Running the setup command of {Implementation.Repository}.",
+        ImplementationPhase.StartingDependencies => $"Starting the Compose services of {Implementation.Repository}.",
+        ImplementationPhase.Ready => "The Intent is ready: its Sandbox is prepared for the Squad.",
+        _ => "",
+    };
+
+    private string StepClass(ImplementationPhase step) => Steps.ClassOf(Implementation.Phase, step, failed: ImplementationPhase.Failed);
+}

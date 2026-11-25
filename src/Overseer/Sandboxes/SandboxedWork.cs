@@ -3,12 +3,13 @@ using System.Collections.Concurrent;
 namespace Overseer.Sandboxes;
 
 /// <summary>
-/// Work that agents do in the background in Sandboxes owned by one kind of owner, such as Refinements or Repository Setups,
-/// shaped the same way for each: it runs until serve stops, which interrupts it and waits for it, and the Sandboxes it leaves
-/// behind are destroyed when serve starts again. The module it belongs to keeps where each piece of work stands, and takes up the
-/// work a stop interrupted when serve starts: Repository Setups mark it failed, and Refinements continue it.
+/// Work done in the background in Sandboxes, such as Refinements, implementations or Repository Setups, shaped the same way for
+/// each: it runs until serve stops, which interrupts it and waits for it, and the Sandboxes it leaves behind are destroyed when
+/// serve starts again (<see cref="DestroyLeftOverAsync"/>). The module it belongs to keeps where each piece of work stands, and
+/// takes up the work a stop interrupted when serve starts: Repository Setups and implementations mark it failed, and Refinements
+/// continue it.
 /// </summary>
-public sealed class SandboxedWork(SandboxRegistry sandboxes, SandboxOwnerKind ownerKind, ILogger logger)
+public sealed class SandboxedWork(SandboxRegistry sandboxes, ILogger logger)
 {
     // Cancelled when serve stops: the work running then is interrupted, and the next start takes it up.
     private readonly CancellationTokenSource _stopping = new();
@@ -21,7 +22,7 @@ public sealed class SandboxedWork(SandboxRegistry sandboxes, SandboxOwnerKind ow
     /// destruction. Call it as serve starts, before any work runs; the Sandboxes are listed before it returns, so that work
     /// started afterwards isn't among them, but destroyed in the background, since in Azure that takes minutes.
     /// </summary>
-    public async Task DestroyLeftOverAsync(CancellationToken cancellationToken)
+    public async Task DestroyLeftOverAsync(SandboxOwnerKind ownerKind, CancellationToken cancellationToken)
     {
         var leftOver = await sandboxes.ListRecordedAsync(ownerKind, cancellationToken);
         if (leftOver.Count == 0)

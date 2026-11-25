@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Overseer.Implementation;
 using Overseer.Intents;
 using Overseer.Refinement;
 using Overseer.Repositories;
@@ -18,6 +19,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<IntentRecord> Intents => Set<IntentRecord>();
     public DbSet<RefinementRecord> Refinements => Set<RefinementRecord>();
     public DbSet<RoundRecord> Rounds => Set<RoundRecord>();
+    public DbSet<ImplementationRecord> Implementations => Set<ImplementationRecord>();
     public DbSet<SpecVersionRecord> SpecVersions => Set<SpecVersionRecord>();
     public DbSet<SpecCommentRecord> SpecComments => Set<SpecCommentRecord>();
 
@@ -53,6 +55,13 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             refinement.HasKey(record => record.IntentId);
             refinement.Property(record => record.Phase).HasConversion<string>();
             refinement.HasOne<IntentRecord>().WithOne().HasForeignKey<RefinementRecord>(record => record.IntentId);
+        });
+        modelBuilder.Entity<ImplementationRecord>(implementation =>
+        {
+            implementation.ToTable("Implementations");
+            implementation.HasKey(record => record.IntentId);
+            implementation.Property(record => record.Phase).HasConversion<string>();
+            implementation.HasOne<IntentRecord>().WithOne().HasForeignKey<ImplementationRecord>(record => record.IntentId);
         });
         modelBuilder.Entity<RoundRecord>(round =>
         {

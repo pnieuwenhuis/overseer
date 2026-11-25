@@ -24,6 +24,26 @@ namespace Overseer.Persistence.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Overseer.Implementation.ImplementationRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Phase")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Repository")
+                        .HasColumnType("text");
+
+                    b.HasKey("IntentId");
+
+                    b.ToTable("Implementations", (string)null);
+                });
+
             modelBuilder.Entity("Overseer.Intents.IntentRecord", b =>
                 {
                     b.Property<Guid>("Id")
@@ -370,6 +390,15 @@ namespace Overseer.Persistence.Migrations
                     b.HasKey("IntentId", "Number");
 
                     b.ToTable("SpecVersions", (string)null);
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.ImplementationRecord", b =>
+                {
+                    b.HasOne("Overseer.Intents.IntentRecord", null)
+                        .WithOne()
+                        .HasForeignKey("Overseer.Implementation.ImplementationRecord", "IntentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Overseer.Intents.IntentTransitionRecord", b =>

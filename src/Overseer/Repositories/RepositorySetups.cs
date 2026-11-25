@@ -15,7 +15,7 @@ public sealed class RepositorySetups(
     IDbContextFactory<OverseerDbContext> databases, IGitHubGateway gitHub, StarterFiles starterFiles, SandboxRegistry sandboxes,
     TimeProvider time, ILogger<RepositorySetups> logger) : IHostedService
 {
-    private readonly SandboxedWork _work = new(sandboxes, SandboxOwnerKind.RepositorySetup, logger);
+    private readonly SandboxedWork _work = new(sandboxes, logger);
 
     /// <summary>
     /// Marks the Repository Setups that a stop of serve interrupted as failed, so they can be retried, and destroys the
@@ -39,7 +39,7 @@ public sealed class RepositorySetups(
         }
 
         // No Repository Setup runs yet, so every Sandbox one owns is left over.
-        await _work.DestroyLeftOverAsync(cancellationToken);
+        await _work.DestroyLeftOverAsync(SandboxOwnerKind.RepositorySetup, cancellationToken);
     }
 
     Task IHostedService.StopAsync(CancellationToken cancellationToken) => _work.StopAsync(cancellationToken);

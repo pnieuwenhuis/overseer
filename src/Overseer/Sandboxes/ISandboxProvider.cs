@@ -29,6 +29,12 @@ public interface ISandboxProvider
     /// <summary>Runs a shell command in the Sandbox and waits for it to finish.</summary>
     Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken);
 
+    /// <summary>Reads the file at <paramref name="path"/> in the Sandbox, leaving it there, such as a file of a repository.</summary>
+    /// <param name="path">An absolute path in the Sandbox.</param>
+    /// <returns>The file's content as UTF-8 text; <c>null</c> when there is nothing at the path.</returns>
+    /// <exception cref="InvalidOperationException">Something is at the path, but couldn't be read, such as a directory.</exception>
+    Task<string?> ReadFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken);
+
     /// <summary>
     /// Reads the file at <paramref name="path"/> in the Sandbox and removes it, so that it is taken only once, as when an
     /// agent hands in what it wrote there.
@@ -57,7 +63,15 @@ public interface ISandboxProvider
 }
 
 /// <param name="ResourceId">The provider's identifier for the machine, such as an Azure resource ID.</param>
-public sealed record Sandbox(string ResourceId, SandboxOwner Owner);
+public sealed record Sandbox(string ResourceId, SandboxOwner Owner)
+{
+    /// <summary>
+    /// Where every Sandbox has each Repository in scope cloned, whatever its provider:
+    /// <c>/home/overseer/repositories/owner/name</c>.
+    /// </summary>
+    /// <param name="repository">The repository as <c>owner/name</c>, as the Sandbox was created with it.</param>
+    public static string CloneDirectory(string repository) => $"/home/overseer/repositories/{repository}";
+}
 
 /// <summary>The machine a Sandbox runs on, as chosen on the Settings page when it is created.</summary>
 /// <param name="VmSize">The name of one of <see cref="VmSizes"/>.</param>

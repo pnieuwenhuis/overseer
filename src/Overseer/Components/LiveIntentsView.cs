@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Overseer.Implementation;
 using Overseer.Intents;
 using Overseer.Refinement;
 
@@ -6,9 +7,10 @@ namespace Overseer.Components;
 
 /// <summary>
 /// A view of Intents that stays current: it reads what it shows when it starts and when its parameters change, and again whenever an
-/// Intent or its Refinement changes. Rendered with <c>InteractiveServer</c> it updates over Blazor's SignalR connection.
+/// Intent, its Refinement or its implementation changes. Rendered with <c>InteractiveServer</c> it updates over Blazor's SignalR
+/// connection.
 /// </summary>
-/// <typeparam name="TShown">What the view reads from the Intent Lifecycle and Refinement to show.</typeparam>
+/// <typeparam name="TShown">What the view reads from the Intent Lifecycle, Refinement and the Task Runner to show.</typeparam>
 public abstract class LiveIntentsView<TShown> : ComponentBase, IDisposable
 {
     private readonly CancellationTokenSource _disposed = new();
@@ -19,6 +21,9 @@ public abstract class LiveIntentsView<TShown> : ComponentBase, IDisposable
 
     [Inject]
     protected Refinements Refinements { get; set; } = default!;
+
+    [Inject]
+    protected TaskRunner TaskRunner { get; set; } = default!;
 
     /// <summary>
     /// What was last read; <c>null</c> until the first read is done. Persisted from the server's rendering of the page into the live
@@ -37,6 +42,7 @@ public abstract class LiveIntentsView<TShown> : ComponentBase, IDisposable
         {
             Lifecycle.Changed += OnChanged;
             Refinements.Changed += OnChanged;
+            TaskRunner.Changed += OnChanged;
         }
     }
 
@@ -70,6 +76,7 @@ public abstract class LiveIntentsView<TShown> : ComponentBase, IDisposable
     {
         Lifecycle.Changed -= OnChanged;
         Refinements.Changed -= OnChanged;
+        TaskRunner.Changed -= OnChanged;
         _disposed.Cancel();
         _disposed.Dispose();
         GC.SuppressFinalize(this);

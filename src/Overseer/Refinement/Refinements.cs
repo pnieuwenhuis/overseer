@@ -39,7 +39,7 @@ public sealed class Refinements(
     /// </summary>
     public const int HandInAttempts = 3;
 
-    private readonly SandboxedWork _work = new(sandboxes, SandboxOwnerKind.Intent, logger);
+    private readonly SandboxedWork _work = new(sandboxes, logger);
 
     /// <summary>The Refinements waiting for the human's answers to their open Round, each completed once they are recorded.</summary>
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource> _awaitingAnswers = new();
@@ -51,10 +51,10 @@ public sealed class Refinements(
     public event Action? Changed;
 
     /// <summary>
-    /// Destroys the Sandboxes that the Refinements a stop of serve interrupted left behind, and continues each of them in a fresh
-    /// Sandbox from its transcript; from then on launches the Analyst for each Intent that moves to Refining. Runs as serve starts,
-    /// before the Portal takes requests, and sets them to provision their Sandbox before it does, so that no answers come for a
-    /// Round whose Analyst session is gone.
+    /// Continues each Refinement a stop of serve interrupted in a fresh Sandbox from its transcript (the Sandbox it left behind is
+    /// destroyed by <see cref="LeftOverIntentSandboxes"/>); from then on launches the Analyst for each Intent that moves to
+    /// Refining. Runs as serve starts, before the Portal takes requests, and sets them to provision their Sandbox before it does,
+    /// so that no answers come for a Round whose Analyst session is gone.
     /// </summary>
     async Task IHostedService.StartAsync(CancellationToken cancellationToken)
     {
@@ -74,8 +74,6 @@ public sealed class Refinements(
             }
         }
 
-        // No Refinement runs yet, so every Sandbox an Intent owns is left over.
-        await _work.DestroyLeftOverAsync(cancellationToken);
         lifecycle.Transitioned += OnTransitioned;
         foreach (var intentId in interrupted)
         {

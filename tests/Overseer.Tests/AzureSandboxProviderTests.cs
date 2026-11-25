@@ -428,6 +428,41 @@ public sealed class AzureSandboxProviderTests : IDisposable
             failure.Message);
     }
 
+    [Fact]
+    public async Task Reading_a_file_gives_its_content_over_SSH_and_leaves_it_there_whatever_its_path_holds_for_the_shell()
+    {
+        var provider = Provider();
+        var sandbox = await CreateAsync(provider);
+        _ssh.Answer = (_, command) => RunInShell(command);
+        var path = Path.Combine(_directory, "it's a \"$HOME\" `file`; rm -rf .yml");
+        await File.WriteAllTextAsync(path, "setup: npm ci\n", TestContext.Current.CancellationToken);
+
+        var read = await provider.ReadFileAsync(sandbox, path, TestContext.Current.CancellationToken);
+
+        Assert.Equal("setup: npm ci\n", read);
+        Assert.True(File.Exists(path));
+        Assert.Null(await provider.ReadFileAsync(sandbox, Path.Combine(_directory, ".overseer.yml"), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Reading_something_that_is_there_but_cant_be_read_fails_with_what_the_Sandbox_said()
+    {
+        var provider = Provider();
+        var sandbox = await CreateAsync(provider);
+        _ssh.Answer = (_, command) => RunInShell(command);
+        var directory = Directory.CreateDirectory(Path.Combine(_directory, "a-directory")).FullName;
+        var dangling = Path.Combine(_directory, "dangling");
+        File.CreateSymbolicLink(dangling, Path.Combine(_directory, "nowhere"));
+
+        foreach (var path in new[] { directory, dangling })
+        {
+            var failure = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => provider.ReadFileAsync(sandbox, path, TestContext.Current.CancellationToken));
+
+            Assert.StartsWith($"The file {path} in the Sandbox could not be read: cat: ", failure.Message);
+        }
+    }
+
     /// <summary>Runs a command in a local shell as SSH runs it in a Sandbox, with standard error merged into standard output.</summary>
     private static CommandResult RunInShell(string command)
     {

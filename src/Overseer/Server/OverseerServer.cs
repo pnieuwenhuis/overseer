@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Components;
 using Overseer.GitHub;
+using Overseer.Implementation;
 using Overseer.Intents;
 using Overseer.Login;
 using Overseer.ModelProviders;
@@ -60,15 +61,22 @@ public static class OverseerServer
         builder.Services.AddSingleton<RepositorySetups>();
         builder.Services.AddHostedService(services => services.GetRequiredService<RepositorySetups>());
         builder.Services.AddSingleton<ModelProviderTokens>();
+        // Each module whose work can fail an Intent or ask for the human's attention adds its own; the Intent Lifecycle reads them all.
         builder.Services.AddSingleton<IIntentFailures, RefinementFailures>();
+        builder.Services.AddSingleton<IIntentFailures, ImplementationFailures>();
         builder.Services.AddSingleton<IIntentAttention, RefinementAttention>();
         builder.Services.AddSingleton<IntentLifecycle>();
         builder.Services.AddSingleton<SpecStore>();
         builder.Services.AddSingleton<SpecEdits>();
         builder.Services.AddSingleton<SpecSendBack>();
         builder.Services.AddSingleton<SpecApproval>();
+        // Ahead of Refinements and the Task Runner, which create Sandboxes for Intents: hosted services start in this order.
+        builder.Services.AddHostedService<LeftOverIntentSandboxes>();
         builder.Services.AddSingleton<Refinements>();
         builder.Services.AddHostedService(services => services.GetRequiredService<Refinements>());
+        builder.Services.AddSingleton<SandboxPreparation>();
+        builder.Services.AddSingleton<TaskRunner>();
+        builder.Services.AddHostedService(services => services.GetRequiredService<TaskRunner>());
 
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(options =>
@@ -132,6 +140,17 @@ public static class OverseerServer
             }
             // Not retried when it hasn't failed, as after a second press: the detail page shows where it is.
             await refinements.RetryAsync(id, context.RequestAborted);
+            return Results.LocalRedirect($"/intents/{id}");
+        }).RequireAuthorization();
+        // The Retry button of an Intent whose implementation failed, on its detail page.
+        app.MapPost("/intents/{id:guid}/implementation/retry", async (Guid id, HttpContext context, IAntiforgery antiforgery, TaskRunner taskRunner) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+            {
+                return Results.BadRequest();
+            }
+            // Not retried when it hasn't failed, as after a second press: the detail page shows where it is.
+            await taskRunner.RetryAsync(id, context.RequestAborted);
             return Results.LocalRedirect($"/intents/{id}");
         }).RequireAuthorization();
         // Every page requires the logged-in user; only the login page opts out with [AllowAnonymous].

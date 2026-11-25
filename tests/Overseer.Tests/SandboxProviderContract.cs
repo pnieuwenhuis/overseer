@@ -105,6 +105,27 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Reading_a_file_in_a_Sandbox_gives_its_content_and_leaves_it_there()
+    {
+        var sandbox = await CreateAsync(NewIntent());
+        await GivenFileAsync(sandbox, "/home/overseer/.overseer/overseer.yml", "setup: npm ci\n");
+
+        var read = await Provider.ReadFileAsync(sandbox, "/home/overseer/.overseer/overseer.yml", TestContext.Current.CancellationToken);
+        var again = await Provider.ReadFileAsync(sandbox, "/home/overseer/.overseer/overseer.yml", TestContext.Current.CancellationToken);
+
+        Assert.Equal("setup: npm ci\n", read);
+        Assert.Equal(read, again);
+    }
+
+    [Fact]
+    public async Task Reading_a_file_that_isnt_there_gives_nothing()
+    {
+        var sandbox = await CreateAsync(NewIntent());
+
+        Assert.Null(await Provider.ReadFileAsync(sandbox, "/home/overseer/.overseer/overseer.yml", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task An_agent_turn_streams_updates_and_ends_with_its_outcome()
     {
         Assert.SkipWhen(AgentSessionsSkipReason is not null, AgentSessionsSkipReason ?? "");
@@ -261,7 +282,7 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
     public async Task A_Sandbox_holds_each_Repository_in_scope_cloned_on_its_default_branch_without_the_token_in_its_remote()
     {
         var sandbox = await CreateWithPushAsync(mayPush: true);
-        var directory = AzureSandboxProvider.CloneDirectory(Repository);
+        var directory = Sandbox.CloneDirectory(Repository);
 
         var branch = await _azure.RunCommandAsync(sandbox, $"git -C '{directory}' symbolic-ref --short HEAD", TestContext.Current.CancellationToken);
         var remote = await _azure.RunCommandAsync(sandbox, $"git -C '{directory}' remote get-url origin", TestContext.Current.CancellationToken);
@@ -275,7 +296,7 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
     public async Task In_a_Sandbox_without_push_access_git_push_and_gh_fail_for_lack_of_credentials()
     {
         var sandbox = await CreateWithPushAsync(mayPush: false);
-        var directory = AzureSandboxProvider.CloneDirectory(Repository);
+        var directory = Sandbox.CloneDirectory(Repository);
 
         var push = await _azure.RunCommandAsync(sandbox, $"cd '{directory}' && GIT_TERMINAL_PROMPT=0 git push origin HEAD", TestContext.Current.CancellationToken);
         var gh = await _azure.RunCommandAsync(sandbox, "gh auth status", TestContext.Current.CancellationToken);

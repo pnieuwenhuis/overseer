@@ -971,9 +971,11 @@
         text-decoration: underline;
     }
 
-    /* Repository Setups and a Refining Intent's Refinement, as a list of steps with what is happening now below it. */
+    /* Repository Setups, a Refining Intent's Refinement and an Implementing Intent's implementation, as a list of steps with what
+       is happening now below it. */
     .repository-setup,
-    .refinement {
+    .refinement,
+    .implementation {
         display: flex;
         flex-direction: column;
         align-items: flex-start;
@@ -1046,15 +1048,32 @@
     }
 
     .repository-setup-status,
-    .refinement-status {
+    .refinement-status,
+    .implementation-status {
         color: var(--color-muted);
         font-size: 0.8125rem;
     }
 
     .repository-setup-status[role="alert"],
-    .refinement-status[role="alert"] {
+    .refinement-status[role="alert"],
+    .implementation-status[role="alert"] {
         color: var(--color-danger);
         font-weight: 500;
+    }
+
+    /* An implementation's error can hold a command's output: its lines are kept, and a long one scrolls within its own box. */
+    .implementation-status[role="alert"] {
+        max-width: 100%;
+        max-height: 20rem;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+
+    .intent-branch {
+        font-family: var(--font-mono);
+        font-size: 0.8125rem;
+        overflow-wrap: anywhere;
     }
 
     /* The Refinement transcript: the Analyst's Rounds, the open one as a form. */

@@ -17,6 +17,11 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     private readonly ConcurrentQueue<AgentMessage> _messagesSent = new();
     private readonly ConcurrentQueue<AgentSessionStart> _agentSessionsStopped = new();
     private readonly ConcurrentDictionary<(string ResourceId, string Path), string> _files = new();
+    private readonly ConcurrentDictionary<(string Repository, string Path), string> _repositoryFiles = new();
+    private readonly ConcurrentQueue<SandboxCommand> _commandsRun = new();
+    private readonly ConcurrentQueue<(string Fragment, Sequence<CommandResult> Results)> _commandsContaining = new();
+    private readonly ConcurrentQueue<(string Fragment, Task Until)> _heldCommands = new();
+    private readonly ConcurrentDictionary<string, string> _unreadableFiles = new();
 
     /// <summary>Makes the next creation fail with <paramref name="error"/>. Call it again to fail the one after as well.</summary>
     public void FailNextCreation(string error) => _creationFailures.Enqueue(error);
@@ -32,6 +37,33 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     /// Unscripted commands succeed without output.
     /// </summary>
     public void ScriptCommand(string command, params CommandResult[] results) => _commands[command] = new Sequence<CommandResult>(results);
+
+    /// <summary>
+    /// Makes every command that holds <paramref name="fragment"/>, and isn't scripted as a whole, give <paramref name="results"/> in
+    /// turn, across all Sandboxes, repeating the last one: for a command whose exact text doesn't matter, such as one that wraps a
+    /// Repository Manifest's. The latest script that matches applies.
+    /// </summary>
+    public void ScriptCommandsContaining(string fragment, params CommandResult[] results) =>
+        _commandsContaining.Enqueue((fragment, new Sequence<CommandResult>(results)));
+
+    /// <summary>
+    /// Makes every command that holds <paramref name="fragment"/> finish only once <paramref name="until"/> completes, so that a test
+    /// can act while it runs, as a long setup does.
+    /// </summary>
+    public void HoldCommandsContaining(string fragment, Task until) => _heldCommands.Enqueue((fragment, until));
+
+    /// <summary>
+    /// Gives <paramref name="repository"/> a file, at <paramref name="path"/> from its root: every Sandbox created from now on that
+    /// holds the repository has it in its clone.
+    /// </summary>
+    public void AddRepositoryFile(string repository, string path, string content) => _repositoryFiles[(repository, path)] = content;
+
+    /// <summary>Makes reading the file at <paramref name="path"/> in a repository's clone fail with <paramref name="error"/>.</summary>
+    /// <param name="path">An absolute path in a Sandbox.</param>
+    public void FailReading(string path, string error) => _unreadableFiles[path] = error;
+
+    /// <summary>Every command run in a Sandbox, in the order they were run.</summary>
+    public IReadOnlyList<SandboxCommand> CommandsRun => [.. _commandsRun];
 
     /// <summary>
     /// Makes the next <paramref name="role"/> sessions play <paramref name="sessions"/> in turn, across all Sandboxes, repeating the last one.
@@ -86,13 +118,40 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         _machines[sandbox.ResourceId] = machine;
         _repositoriesInScope[sandbox.ResourceId] = [.. repositoriesInScope];
         _mayPush[sandbox.ResourceId] = mayPush;
+        foreach (var ((repository, path), content) in _repositoryFiles)
+        {
+            if (repositoriesInScope.Contains(repository, StringComparer.OrdinalIgnoreCase))
+            {
+                _files[(sandbox.ResourceId, $"{Sandbox.CloneDirectory(repository)}/{path}")] = content;
+            }
+        }
         _sandboxes[sandbox.ResourceId] = sandbox;
     }
 
-    public Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken)
+    public async Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken)
     {
         EnsureExists(sandbox);
-        return Task.FromResult(_commands.TryGetValue(command, out var results) ? results.Next() : new CommandResult(0, ""));
+        _commandsRun.Enqueue(new SandboxCommand(sandbox, command));
+        foreach (var (_, until) in _heldCommands.Where(held => command.Contains(held.Fragment, StringComparison.Ordinal)))
+        {
+            await until.WaitAsync(cancellationToken);
+        }
+        if (_commands.TryGetValue(command, out var results))
+        {
+            return results.Next();
+        }
+        return _commandsContaining.LastOrDefault(script => command.Contains(script.Fragment, StringComparison.Ordinal)).Results?.Next()
+            ?? new CommandResult(0, "");
+    }
+
+    public Task<string?> ReadFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken)
+    {
+        EnsureExists(sandbox);
+        if (_unreadableFiles.TryGetValue(path, out var error))
+        {
+            throw new InvalidOperationException(error);
+        }
+        return Task.FromResult(_files.GetValueOrDefault((sandbox.ResourceId, path)));
     }
 
     /// <summary>Writes a file in the Sandbox, replacing any at that path, as an agent or a command would.</summary>
@@ -220,6 +279,9 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
 /// <param name="Environment">The environment variables the agent runs with, such as model provider tokens.</param>
 public sealed record AgentSessionStart(
     Sandbox Sandbox, AgentRole Role, string HarnessJson, string Model, IReadOnlyDictionary<string, string> Environment);
+
+/// <summary>A shell command run in <paramref name="Sandbox"/>.</summary>
+public sealed record SandboxCommand(Sandbox Sandbox, string Command);
 
 /// <summary>A message sent to an agent session of <paramref name="Role"/> in <paramref name="Sandbox"/>.</summary>
 public sealed record AgentMessage(Sandbox Sandbox, AgentRole Role, string Message);

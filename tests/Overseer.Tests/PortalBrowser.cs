@@ -79,6 +79,10 @@ public sealed class PortalTab(PortalBrowser browser, string page, string antifor
             new("_handler", formName),
             new("__RequestVerificationToken", antiforgeryToken),
         ]), TestContext.Current.CancellationToken);
+
+    /// <summary>Presses a button of the page's that posts to an address of its own, such as Retry.</summary>
+    public Task<HttpResponseMessage> PostAsync(string action) =>
+        browser.Http.PostAsync(action, new FormUrlEncodedContent([new("__RequestVerificationToken", antiforgeryToken)]), TestContext.Current.CancellationToken);
 }
 
 public static class PortalResponses

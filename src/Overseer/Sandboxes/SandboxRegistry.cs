@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using Overseer.ModelProviders;
 using Overseer.Persistence;
@@ -75,17 +76,31 @@ public sealed class SandboxRegistry(
         return await provider.StartAgentSessionAsync(sandbox, role, harness, environment, cancellationToken);
     }
 
+    /// <inheritdoc cref="ISandboxProvider.RunCommandAsync"/>
+    public Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken) =>
+        provider.RunCommandAsync(sandbox, command, cancellationToken);
+
+    /// <inheritdoc cref="ISandboxProvider.ReadFileAsync"/>
+    public Task<string?> ReadFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken) =>
+        provider.ReadFileAsync(sandbox, path, cancellationToken);
+
     /// <inheritdoc cref="ISandboxProvider.TakeFileAsync"/>
     public Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken) =>
         provider.TakeFileAsync(sandbox, path, cancellationToken);
 
     /// <summary>The Sandboxes of an owner of <paramref name="ownerKind"/> that are recorded and not recorded destroyed.</summary>
-    public async Task<IReadOnlyList<Sandbox>> ListRecordedAsync(SandboxOwnerKind ownerKind, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<Sandbox>> ListRecordedAsync(SandboxOwnerKind ownerKind, CancellationToken cancellationToken) =>
+        ListUndestroyedAsync(record => record.OwnerKind == ownerKind, cancellationToken);
+
+    /// <summary>The Sandboxes of this owner that are recorded and not recorded destroyed.</summary>
+    public Task<IReadOnlyList<Sandbox>> ListRecordedAsync(SandboxOwner owner, CancellationToken cancellationToken) =>
+        ListUndestroyedAsync(record => record.OwnerKind == owner.Kind && record.OwnerId == owner.Id, cancellationToken);
+
+    private async Task<IReadOnlyList<Sandbox>> ListUndestroyedAsync(
+        Expression<Func<SandboxRecord, bool>> owned, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        var records = await database.Sandboxes
-            .Where(record => record.OwnerKind == ownerKind && record.DestroyedAt == null)
-            .ToListAsync(cancellationToken);
+        var records = await database.Sandboxes.Where(record => record.DestroyedAt == null).Where(owned).ToListAsync(cancellationToken);
         return [.. records.Select(record => new Sandbox(record.ResourceId, new SandboxOwner(record.OwnerKind, record.OwnerId)))];
     }
 
