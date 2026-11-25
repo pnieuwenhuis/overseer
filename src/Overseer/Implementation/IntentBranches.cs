@@ -22,8 +22,17 @@ public sealed class IntentBranches(RepositoryCommands commands)
     private const string CommitterEmail = "overseer@overseer.invalid";
 
     /// <summary>
+    /// Why no new Intent branch is made in a repository without a commit to start it from: GitHub makes the first branch pushed to
+    /// an empty repository its default branch.
+    /// </summary>
+    private const string NothingToBranchFrom =
+        "The repository has no commit on its default branch, as when it is empty. The Intent branch would become its default "
+        + "branch, and no pull request could be opened. Add a first commit to it on GitHub, such as a README, then Retry.";
+
+    /// <summary>
     /// Puts a fresh clone, on its default branch, on the Intent branch: the one on GitHub when it exists there, and otherwise a new
-    /// one from the default branch. What it then holds counts as verified. Commits made in the clone are by Overseer.
+    /// one from the default branch, which has to have a commit. What it then holds counts as verified. Commits made in the clone
+    /// are by Overseer.
     /// </summary>
     /// <returns>Why it couldn't be put there; <c>null</c> once it is.</returns>
     public async Task<string?> CheckOutAsync(
@@ -34,15 +43,15 @@ public sealed class IntentBranches(RepositoryCommands commands)
             set -e
             if git rev-parse --verify --quiet {ShellText.Quoted($"refs/remotes/origin/{branch}")} > /dev/null; then
               git checkout --quiet -b {ShellText.Quoted(branch)} --track {ShellText.Quoted($"origin/{branch}")}
-            else
+            elif git rev-parse --verify --quiet HEAD > /dev/null; then
               git checkout --quiet -b {ShellText.Quoted(branch)}
+            else
+              echo {ShellText.Quoted(NothingToBranchFrom)}
+              exit 1
             fi
             git config user.name {ShellText.Quoted(CommitterName)}
             git config user.email {ShellText.Quoted(CommitterEmail)}
-            # An empty repository has no commit to remember yet.
-            if git rev-parse --verify --quiet HEAD > /dev/null; then
-              git update-ref {Verified} HEAD
-            fi
+            git update-ref {Verified} HEAD
             """;
         var run = await commands.RunAsync(sandbox, repository, script, RepositoryCommands.GitLimit, cancellationToken);
         return run.ErrorOf($"Putting {repository} on the Intent branch {branch}");

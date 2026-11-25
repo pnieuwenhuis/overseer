@@ -109,20 +109,21 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
     }
 
     [Fact]
-    public async Task In_an_empty_repository_every_file_is_changed()
+    public async Task An_empty_repository_is_refused_before_anything_can_be_pushed_to_it_saying_what_to_do()
     {
         var commands = await CommandsOverseerRunsAsync();
         var clone = Path.Combine(_directory, "clone");
         Git(_directory, "init --quiet --bare --initial-branch=trunk origin.git");
         Git(_directory, "clone --quiet origin.git clone");
-        Run(clone, commands.CheckOut);
-        Write(clone, "README.md", "# New");
 
-        Assert.Equal(["README.md"], ChangedFiles(clone, commands));
-        Run(clone, commands.Commit);
-        Assert.Equal(["README.md"], ChangedFiles(clone, commands));
-        Run(clone, commands.Push);
-        Assert.Empty(ChangedFiles(clone, commands));
+        var (exitCode, output) = Execute(clone, commands.CheckOut);
+
+        // Pushed first, the Intent branch would become the default branch on GitHub, with nothing to open a pull request into.
+        Assert.NotEqual(0, exitCode);
+        Assert.Equal(
+            "The repository has no commit on its default branch, as when it is empty. The Intent branch would become its default "
+            + "branch, and no pull request could be opened. Add a first commit to it on GitHub, such as a README, then Retry.",
+            output.Trim());
     }
 
     [Fact]
@@ -164,25 +165,6 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         Run(clone, commands.Commit);
         Run(clone, commands.Push);
         Assert.Empty(Files(clone, commands.IntentBranchChanges));
-    }
-
-    [Fact]
-    public async Task An_empty_repository_changes_nothing_until_something_is_pushed_to_it()
-    {
-        var commands = await CommandsOverseerRunsAsync();
-        var clone = Path.Combine(_directory, "clone");
-        Git(_directory, "init --quiet --bare --initial-branch=trunk origin.git");
-        Git(_directory, "clone --quiet origin.git clone");
-        Run(clone, commands.CheckOut);
-        Assert.Empty(Files(clone, commands.Differs));
-        Assert.Empty(Files(clone, commands.IntentBranchChanges));
-
-        Write(clone, "README.md", "# New");
-        Assert.Equal(["README.md"], Files(clone, commands.Differs));
-        Run(clone, commands.Commit);
-        Run(clone, commands.Push);
-
-        Assert.Equal(["README.md"], Files(clone, commands.IntentBranchChanges));
     }
 
     /// <summary>
