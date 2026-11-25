@@ -84,9 +84,12 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
     }
 
     /// <summary>Records that the Task is Done: its work is verified and pushed.</summary>
-    public async Task FinishAsync(Guid intentId, int number, CancellationToken cancellationToken)
+    /// <param name="alongside">What else its being Done records, in the same transaction.</param>
+    public async Task FinishAsync(
+        Guid intentId, int number, Func<OverseerDbContext, CancellationToken, Task> alongside, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await database.IntentTasks
             .Where(task => task.IntentId == intentId && task.Number == number)
             .ExecuteUpdateAsync(
@@ -94,6 +97,8 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
                     .SetProperty(record => record.State, IntentTaskState.Done)
                     .SetProperty(record => record.AwaitingPush, (List<string>?)null),
                 cancellationToken);
+        await alongside(database, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     /// <summary>
@@ -154,15 +159,15 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
     /// </summary>
     /// <param name="description">Markdown.</param>
     /// <param name="repositories">The Repositories in scope that failed it.</param>
-    /// <returns>Whether it was added: not when the Intent has its fix-up Task already, in whatever state.</returns>
-    public async Task<bool> AddFixUpAsync(
+    /// <exception cref="InvalidOperationException">The Intent has its fix-up Task already, in whatever state.</exception>
+    public async Task AddFixUpAsync(
         Guid intentId, string title, string description, IReadOnlyList<RepositoryName> repositories, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         var tasks = database.IntentTasks.Where(task => task.IntentId == intentId);
         if (await tasks.AnyAsync(task => task.IsFixUp, cancellationToken))
         {
-            return false;
+            throw new InvalidOperationException("The Intent has had its fix-up Task: it gets no second one.");
         }
         var last = await tasks.MaxAsync(task => (int?)task.Number, cancellationToken) ?? 0;
         database.IntentTasks.Add(new IntentTaskRecord
@@ -177,7 +182,6 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
             IsFixUp = true,
         });
         await database.SaveChangesAsync(cancellationToken);
-        return true;
     }
 
     /// <summary>

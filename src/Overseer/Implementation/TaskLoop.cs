@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Overseer.GitHub;
 using Overseer.Intents;
+using Overseer.Persistence;
 using Overseer.Sandboxes;
 using Overseer.Settings;
 using Overseer.Specs;
@@ -23,11 +24,18 @@ public sealed class TaskLoop(
     /// couldn't be pushed before is only pushed, unless the push was rejected: then an agent works on it again, told why.
     /// </summary>
     /// <param name="changed">Called whenever a Task changes, once the change is committed.</param>
+    /// <param name="passedFinalVerification">
+    /// Records, as the fix-up Task becomes Done and in the same transaction, that the work has passed its final verification, which
+    /// that Task's verification is, with the repositories that are each to have a pull request.
+    /// </param>
     /// <returns>
     /// Why a Task couldn't be finished, for the caller to fail the implementation with, which puts that Task, if still Running, back
     /// to Pending; <c>null</c> once every Task is Done.
     /// </returns>
-    public async Task<string?> RunAsync(Intent intent, Sandbox sandbox, Action changed, CancellationToken cancellationToken)
+    public async Task<string?> RunAsync(
+        Intent intent, Sandbox sandbox, Action changed,
+        Func<OverseerDbContext, IReadOnlyList<RepositoryName>, CancellationToken, Task> passedFinalVerification,
+        CancellationToken cancellationToken)
     {
         while (await tasks.NextAsync(intent.Id, cancellationToken) is { } task)
         {
@@ -42,7 +50,25 @@ public sealed class TaskLoop(
                 // The Sandbox holds the GitHub token, so an agent can say it; a secret never goes into PostgreSQL.
                 return await commands.RedactedAsync(error, cancellationToken);
             }
-            await tasks.FinishAsync(intent.Id, task.Number, cancellationToken);
+            if (!task.IsFixUp)
+            {
+                await tasks.FinishAsync(intent.Id, task.Number, (_, _) => Task.CompletedTask, cancellationToken);
+            }
+            else
+            {
+                IReadOnlyList<RepositoryName> toPull;
+                try
+                {
+                    toPull = await branches.ChangingDefaultBranchAsync(sandbox, intent.RepositoriesInScope, cancellationToken);
+                }
+                catch (InvalidOperationException exception)
+                {
+                    return await commands.RedactedAsync(exception.Message, cancellationToken);
+                }
+                await tasks.FinishAsync(
+                    intent.Id, task.Number, (database, stopping) => passedFinalVerification(database, toPull, stopping),
+                    cancellationToken);
+            }
             changed();
         }
         return null;

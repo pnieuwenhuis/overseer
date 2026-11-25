@@ -191,8 +191,8 @@ public sealed class IntentBranches(RepositoryCommands commands)
     /// Whether the repository's Intent branch on GitHub changes anything of its default branch's, so that there is something for a
     /// pull request: its last verified work differs from the default branch, since the two parted.
     /// </summary>
-    /// <exception cref="InvalidOperationException">git couldn't say; the message says why.</exception>
-    public async Task<bool> PushedWorkDiffersFromDefaultBranchAsync(
+    /// <exception cref="InvalidOperationException">As for <see cref="OutputOfAsync"/>.</exception>
+    private async Task<bool> PushedWorkDiffersFromDefaultBranchAsync(
         Sandbox sandbox, RepositoryName repository, CancellationToken cancellationToken)
     {
         var files = await FilesAsync(
@@ -203,6 +203,25 @@ public sealed class IntentBranches(RepositoryCommands commands)
             """,
             $"Comparing the Intent branch of {repository} with its default branch", cancellationToken);
         return files.Count > 0;
+    }
+
+    /// <summary>
+    /// Which of these repositories have an Intent branch on GitHub that changes their default branch, each to have a pull request,
+    /// in their order (<see cref="PushedWorkDiffersFromDefaultBranchAsync"/>).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">git couldn't say of one; the message says why.</exception>
+    public async Task<IReadOnlyList<RepositoryName>> ChangingDefaultBranchAsync(
+        Sandbox sandbox, IReadOnlyList<RepositoryName> repositories, CancellationToken cancellationToken)
+    {
+        var changing = new List<RepositoryName>();
+        foreach (var repository in repositories)
+        {
+            if (await PushedWorkDiffersFromDefaultBranchAsync(sandbox, repository, cancellationToken))
+            {
+                changing.Add(repository);
+            }
+        }
+        return changing;
     }
 
     /// <summary>The paths a git script prints, each ending in a NUL, so that none needs quoting.</summary>

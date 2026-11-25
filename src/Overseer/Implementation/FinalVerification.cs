@@ -6,7 +6,8 @@ namespace Overseer.Implementation;
 
 /// <summary>
 /// The final verification: once every Task of an Intent is Done, the full verification (<see cref="Verification.VerifyAllAsync"/>)
-/// of the Intent branch in the Sandbox, so that pull requests are only opened for green code.
+/// of the Intent branch in the Sandbox, so that pull requests are only opened for green code. When it fails, the fix-up Task is
+/// added, which the full verification verifies: once that Task passes it, the work has passed its final verification.
 /// </summary>
 public sealed class FinalVerification(
     Verification verification, IntentBranches branches, IntentTasks tasks, RepositoryCommands commands,
@@ -15,8 +16,8 @@ public sealed class FinalVerification(
     private const string FixUpTitle = "Fix what fails the final verification";
 
     /// <summary>
-    /// Builds and tests every Repository in scope, and says which of them changed when all pass, or what to do about it when they
-    /// don't.
+    /// Builds and tests every Repository in scope, and says which of them changed when all pass, and adds the fix-up Task when they
+    /// don't. Only for an Intent that has no fix-up Task yet.
     /// </summary>
     public async Task<FinalVerificationResult> RunAsync(Intent intent, Sandbox sandbox, CancellationToken cancellationToken)
     {
@@ -25,24 +26,13 @@ public sealed class FinalVerification(
             var steps = (await verification.VerifyAllAsync(sandbox, intent, cancellationToken)).Steps;
             if (steps.Where(step => !step.Passed).ToList() is { Count: > 0 } failed)
             {
-                var added = await tasks.AddFixUpAsync(
+                await tasks.AddFixUpAsync(
                     intent.Id, FixUpTitle, TaskInstructions.FixUp(failed), [.. failed.Select(step => step.Repository).Distinct()],
                     cancellationToken);
-                // The fix-up Task has been carried out, and there is no second one.
-                return added
-                    ? new FinalVerificationResult.FixUpAdded()
-                    : new FinalVerificationResult.Failed(
-                        $"The final verification failed after the fix-up Task was carried out.\n\n{TaskInstructions.FailuresOf(failed)}");
+                return new FinalVerificationResult.FixUpAdded();
             }
-            var changed = new List<RepositoryName>();
-            foreach (var repository in intent.RepositoriesInScope)
-            {
-                if (await branches.PushedWorkDiffersFromDefaultBranchAsync(sandbox, repository, cancellationToken))
-                {
-                    changed.Add(repository);
-                }
-            }
-            return new FinalVerificationResult.Passed(changed);
+            return new FinalVerificationResult.Passed(
+                await branches.ChangingDefaultBranchAsync(sandbox, intent.RepositoriesInScope, cancellationToken));
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {

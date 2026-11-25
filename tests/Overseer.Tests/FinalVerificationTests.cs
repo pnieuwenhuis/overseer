@@ -214,33 +214,96 @@ public class FinalVerificationTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task A_final_verification_that_fails_once_the_fix_up_Task_is_Done_fails_the_implementation_with_the_output_and_Retry_runs_it_again()
+    public async Task The_full_verification_that_the_fix_up_Task_passes_is_the_final_one_and_the_pull_requests_follow()
     {
         await using var overseer = await StartWithManifestsAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/api", "acme/web"]);
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneOnce(Task.CompletedTask));
-        // Fails the final verification, passes as the fix-up Task's, fails the final one after it, and then passes.
+        // Fails the final verification and passes as the fix-up Task's. Were anything verified again, a flaky test would fail it.
         overseer.Sandboxes.ScriptCommandsContaining(
             ManifestCommandIn("acme/api", "npm test"),
-            new CommandResult(1, "first"), new CommandResult(0, ""), new CommandResult(1, "1 test failed: flaky"), new CommandResult(0, ""));
+            new CommandResult(1, "first"), new CommandResult(0, ""), new CommandResult(1, "1 test failed: flaky"));
 
         var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/api", "acme/web");
 
-        var failed = await ImplementationTests.FailedAsync(overseer, address);
-        Assert.StartsWith("The final verification failed after the fix-up Task was carried out.", failed.Status);
-        Assert.Contains("The test command of acme/api failed with exit code 1.", failed.Status);
-        Assert.Contains("npm test", failed.Status);
-        Assert.Contains("1 test failed: flaky", failed.Status);
-        Assert.Equal($"intents/{address["/intents/".Length..]}/implementation/retry", failed.RetryAction);
+        await InReviewAsync(overseer, address);
         await StatesAsync(overseer, address, "Done", "Done");
+        Assert.Equal(
+            2, overseer.Sandboxes.CommandsRun.Count(run => run.Command.Contains(ManifestCommandIn("acme/api", "npm test"))));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Once_the_fix_up_Task_has_passed_a_Retry_only_opens_the_pull_requests_also_after_a_restart(bool restarted)
+    {
+        var connectionString = await postgres.CreateEmptyDatabaseAsync();
+        var first = await StartWithManifestsAsync(connectionString, ["acme/web"]);
+        var overseer = first;
+        try
+        {
+            overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneOnce(Task.CompletedTask));
+            // The Task's own verification passes, the final one fails, and the fix-up Task's passes.
+            overseer.Sandboxes.ScriptCommandsContaining(
+                ManifestCommandIn("acme/web", "npm test"), new CommandResult(0, ""), new CommandResult(1, "failed"), new CommandResult(0, ""));
+            overseer.Sandboxes.ScriptCommandsContaining(IntentBranchComparedIn("acme/web"), new CommandResult(0, "src/orders.ts\0"));
+            overseer.GitHub.RefusePullRequests("acme/web", "Server Error (HTTP 500)");
+            var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+            var failed = await ImplementationTests.FailedAsync(overseer, address);
+            Assert.StartsWith("The pull request of acme/web could not be opened", failed.Status);
+            await StatesAsync(overseer, address, "Done", "Done");
+            if (restarted)
+            {
+                await overseer.DisposeAsync();
+                overseer = await StartWithManifestsAsync(connectionString, []);
+                overseer.GitHub.AddRepository("acme/web");
+            }
+            overseer.GitHub.AllowPullRequests("acme/web");
+            overseer.GitHub.AddBranch("acme/web", $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}");
+            var commands = overseer.Sandboxes.CommandsRun.Count;
+
+            using var retried = await ImplementationTests.RetryAsync(overseer, address);
+
+            await InReviewAsync(overseer, address);
+            Assert.Single(overseer.GitHub.PullRequests);
+            Assert.Equal(commands, overseer.Sandboxes.CommandsRun.Count);
+        }
+        finally
+        {
+            await overseer.DisposeAsync();
+            if (overseer != first)
+            {
+                await first.DisposeAsync();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task A_fix_up_Task_whose_changed_repositories_cant_be_told_isnt_Done_and_Retry_goes_on_to_the_pull_requests()
+    {
+        await using var overseer = await StartWithManifestsAsync(await postgres.CreateEmptyDatabaseAsync(), ["acme/web"]);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneOnce(Task.CompletedTask));
+        overseer.Sandboxes.ScriptCommandsContaining(
+            ManifestCommandIn("acme/web", "npm test"), new CommandResult(0, ""), new CommandResult(1, "failed"), new CommandResult(0, ""));
+        // git can't say what the Intent branch changes, once.
+        overseer.Sandboxes.ScriptCommandsContaining(
+            IntentBranchComparedIn("acme/web"), new CommandResult(128, "fatal: bad object"), new CommandResult(0, ""));
+
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+
+        var failed = await ImplementationTests.FailedAsync(overseer, address);
+        Assert.Equal(
+            "Comparing the Intent branch of acme/web with its default branch failed with exit code 128:\nfatal: bad object",
+            failed.Status);
+        await StatesAsync(overseer, address, "Done", "Pending");
         var sessions = SquadSessionsStarted(overseer).Count;
-        var sandbox = Assert.Single(await overseer.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
 
         using var retried = await ImplementationTests.RetryAsync(overseer, address);
 
         await InReviewAsync(overseer, address);
         await StatesAsync(overseer, address, "Done", "Done");
         Assert.Equal(sessions, SquadSessionsStarted(overseer).Count);
-        Assert.Equal([sandbox], await overseer.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
+        // The Task's verification, the final one, and the fix-up Task's: nothing was verified again.
+        Assert.Equal(3, overseer.Sandboxes.CommandsRun.Count(run => run.Command.Contains(ManifestCommandIn("acme/web", "npm test"))));
     }
 
     [Fact]

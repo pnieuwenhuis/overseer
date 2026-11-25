@@ -270,12 +270,20 @@ public sealed class TaskRunner(
             }
             await EnterPhaseAsync(intentId, ImplementationPhase.Ready, repository: null, error: null, cancellationToken, sandbox);
         }
-        // Until the final verification passes: its first failure adds a fix-up Task, which is carried out like any other.
+        // Until the final verification passes: should it fail, it adds the fix-up Task, which is carried out like any other, and
+        // passes it by being verified.
         while (true)
         {
-            if (await loop.RunAsync(intent, sandbox, () => Changed?.Invoke(), cancellationToken) is { } unfinished)
+            if (await loop.RunAsync(
+                intent, sandbox, () => Changed?.Invoke(),
+                (database, changed, stopping) => AwaitPullRequestsAsync(database, intentId, changed, stopping),
+                cancellationToken) is { } unfinished)
             {
                 return unfinished;
+            }
+            if (await AwaitingPullRequestsOfAsync(intentId, cancellationToken) is { } fixedUp)
+            {
+                return await OpenPullRequestsAsync(intent, fixedUp, cancellationToken);
             }
             await EnterPhaseAsync(intentId, ImplementationPhase.FinalVerification, repository: null, error: null, cancellationToken);
             switch (await finalVerification.RunAsync(intent, sandbox, cancellationToken))
@@ -286,8 +294,10 @@ public sealed class TaskRunner(
                 case FinalVerificationResult.Failed failed:
                     return failed.Error;
                 case FinalVerificationResult.Passed passed:
-                    // From here on a Retry only opens the pull requests: the work is verified, and pushed.
-                    await AwaitPullRequestsAsync(intentId, passed.Changed, cancellationToken);
+                    await using (var database = await databases.CreateDbContextAsync(cancellationToken))
+                    {
+                        await AwaitPullRequestsAsync(database, intentId, passed.Changed, cancellationToken);
+                    }
                     return await OpenPullRequestsAsync(intent, passed.Changed, cancellationToken);
                 default:
                     throw new UnreachableException();
@@ -336,14 +346,14 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Records that the Intent's work passed the final verification, so that what is left is a pull request for each of these
-    /// repositories, the ones that changed.
+    /// Records in <paramref name="database"/> that the Intent's work passed the final verification, so that what is left is a pull
+    /// request for each of these repositories, the ones that changed: from here on a Retry only opens those.
     /// </summary>
-    private async Task AwaitPullRequestsAsync(Guid intentId, IReadOnlyList<RepositoryName> changed, CancellationToken cancellationToken)
+    private static Task AwaitPullRequestsAsync(
+        OverseerDbContext database, Guid intentId, IReadOnlyList<RepositoryName> changed, CancellationToken cancellationToken)
     {
         var repositories = changed.Select(repository => repository.ToString()).ToList();
-        await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        await database.Implementations
+        return database.Implementations
             .Where(implementation => implementation.IntentId == intentId)
             .ExecuteUpdateAsync(
                 implementation => implementation.SetProperty(record => record.AwaitingPullRequests, repositories), cancellationToken);
