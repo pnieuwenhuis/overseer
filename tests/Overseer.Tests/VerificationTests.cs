@@ -189,6 +189,35 @@ public class VerificationTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task What_setup_and_each_verification_write_is_set_aside_before_an_agent_goes_on_so_that_its_never_committed()
+    {
+        await using var overseer = await StartAsync("acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneAtOnce());
+        Changes(overseer, "acme/web", "src/orders.ts");
+        overseer.Sandboxes.ScriptCommandsContaining("npm test", new CommandResult(1, "1 test failed"), Passes);
+
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+
+        await FinalVerificationTests.InReviewAsync(overseer, address);
+        string[] verification = ["look at the work", "npm run build", "npm test", "set aside"];
+        Assert.Equal(
+            [
+                "npm ci", "set aside",
+                // The Task's two attempts, the one that failed and the one that passed.
+                .. verification, .. verification, "commit", "git push",
+                // The final verification.
+                .. verification,
+            ],
+            CommandsIn(overseer, "acme/web")
+                .Select(command =>
+                    command.Contains("git commit ") ? "commit"
+                    : command.Contains("# The agent's work, as it is now.") ? "look at the work"
+                    : command.Contains("# What Overseer's commands wrote.") ? "set aside"
+                    : new[] { "npm ci", "npm run build", "npm test", "git push" }.FirstOrDefault(command.Contains))
+                .OfType<string>());
+    }
+
+    [Fact]
     public async Task What_is_verified_is_every_repository_the_Task_lists_and_any_other_it_changed()
     {
         await using var overseer = await StartAsync("acme/api", "acme/docs", "acme/web");
@@ -610,7 +639,7 @@ public class VerificationTests(PostgresServer postgres)
 
     /// <summary>What a command that asks the repository's changed files holds.</summary>
     private static string ChangesAskedIn(string repository) =>
-        $"{repository}' || exit\nerrors=$(mktemp) || exit\n{{\nbase=$(git rev-parse";
+        $"{repository}' || exit\nerrors=$(mktemp) || exit\n{{\n(\nset -e\n# The agent's work, as it is now.";
 
     /// <summary>What git answers when these files changed.</summary>
     private static CommandResult Changed(params string[] files) => new(0, string.Concat(files.Select(file => file + "\0")));

@@ -40,8 +40,9 @@ internal static class TaskInstructions
         - Read the agent guidance of each repository you change, such as its `AGENTS.md`, and follow it.
         - Before you end your turn, run the `build` and `test` commands of each repository you changed, and make them pass.
         - When you end your turn, Overseer verifies your work itself: {VerifiedBy(task)} What fails comes back
-          to you to fix. What passes, Overseer commits where you haven't, and pushes: leave nothing behind that doesn't belong in
-          the repository, such as build outputs that its `.gitignore` doesn't cover.
+          to you to fix. What passes, Overseer commits where you haven't, and pushes, as it was when you ended your turn: leave
+          nothing behind that doesn't belong in the repository, such as build outputs that its `.gitignore` doesn't cover. What
+          Overseer's own runs of `setup`, `build` and `test` wrote isn't committed, unless you change it: don't commit it yourself.
         - Leave pushing to Overseer: never run `git push`, don't open or change pull requests, and don't change anything else on
           GitHub. Stay on the Intent branch.
         - No one can answer questions during a Task. Where the Spec and your Task leave something open, decide for yourself.

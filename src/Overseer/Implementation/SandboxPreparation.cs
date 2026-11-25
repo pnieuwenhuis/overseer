@@ -97,9 +97,19 @@ public sealed class SandboxPreparation(
         var started = await dependencies.StartAsync(
             sandbox, composed, [.. composed.Select(project => project.Repository)], replacing: false,
             repository => entering(ImplementationPhase.StartingDependencies, repository), cancellationToken);
-        return started.LastOrDefault() is { Failed: true } notStarted
-            ? notStarted.Problem ?? notStarted.Run.ErrorOf(notStarted.What)
-            : null;
+        if (started.LastOrDefault() is { Failed: true } notStarted)
+        {
+            return notStarted.Problem ?? notStarted.Run.ErrorOf(notStarted.What);
+        }
+        // What setup and Compose wrote in any clone is no part of the Intent's work.
+        foreach (var repository in intent.RepositoriesInScope)
+        {
+            if (await branches.SetAsideCommandOutputAsync(sandbox, repository, cancellationToken) is { } notSetAside)
+            {
+                return notSetAside;
+            }
+        }
+        return null;
     }
 }
 

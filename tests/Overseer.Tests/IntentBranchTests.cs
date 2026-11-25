@@ -7,8 +7,8 @@ using static Overseer.Tests.RepositorySetupPortal;
 namespace Overseer.Tests;
 
 /// <summary>
-/// The git commands Overseer runs on the Intent branch in a Sandbox, run against real local git: what it takes as changed, and
-/// what it commits and pushes.
+/// The git commands Overseer runs on the Intent branch in a Sandbox, run against real local git: what it takes as changed, what
+/// it leaves out as written by its own commands, and what it commits and pushes.
 /// </summary>
 public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
 {
@@ -57,6 +57,7 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         Write(clone, "tracked.txt", "edited\n");
         File.Delete(Path.Combine(clone, "deleted.txt"));
         Write(clone, "untracked.txt", "new");
+        ChangedFiles(clone, commands);
         // A hook that refuses every commit: build and test are what verify the work.
         var hook = Path.Combine(clone, ".git", "hooks", "pre-commit");
         Write(clone, ".git/hooks/pre-commit", "#!/bin/sh\nexit 1\n");
@@ -86,6 +87,88 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         Run(clone, commands.Commit);
         Run(clone, commands.Push);
         Assert.Equal(head, Git(clone, "rev-parse HEAD"));
+    }
+
+    [Fact]
+    public async Task What_setup_writes_is_no_change_and_isnt_committed_until_the_agent_changes_it()
+    {
+        var commands = await CommandsOverseerRunsAsync();
+        var clone = Clone();
+        Run(clone, commands.CheckOut);
+        // As a setup does where .gitignore doesn't cover it: rewrites a file, creates some, and removes one.
+        Write(clone, "tracked.txt", "rewritten by setup\n");
+        Write(clone, "[1].txt", "by setup");
+        Write(clone, "new folder/it's \"generated\" ü.txt", "by setup");
+        File.Delete(Path.Combine(clone, "deleted.txt"));
+        Run(clone, commands.SetAside);
+
+        Assert.Empty(ChangedFiles(clone, commands));
+        Assert.Empty(Files(clone, commands.Differs));
+
+        // A name that [1].txt would match, taken as a pattern.
+        Write(clone, "1.txt", "by the agent");
+        Assert.Equal(["1.txt"], ChangedFiles(clone, commands));
+        Write(clone, "tracked.txt", "rewritten by setup, then by the agent\n");
+        Assert.Equal(["1.txt", "tracked.txt"], ChangedFiles(clone, commands).Order(StringComparer.Ordinal));
+        Assert.Equal(["1.txt", "tracked.txt"], Files(clone, commands.Differs).Order(StringComparer.Ordinal));
+
+        Run(clone, commands.Commit);
+        Run(clone, commands.Push);
+
+        Assert.Equal("1.txt\ntracked.txt", Git(clone, "show --name-only --format= HEAD"));
+        // What setup wrote stays in the clone, for the builds and tests that need it, and is still no change.
+        Assert.True(File.Exists(Path.Combine(clone, "[1].txt")));
+        Assert.False(File.Exists(Path.Combine(clone, "deleted.txt")));
+        Assert.Empty(ChangedFiles(clone, commands));
+        Assert.Equal(["1.txt", "tracked.txt"], Files(clone, commands.IntentBranchChanges).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_commit_holds_what_was_there_before_verification_ran_and_nothing_verification_wrote()
+    {
+        var commands = await CommandsOverseerRunsAsync();
+        var clone = Clone();
+        Run(clone, commands.CheckOut);
+        Write(clone, "source.txt", "by the agent");
+        Assert.Equal(["source.txt"], ChangedFiles(clone, commands));
+        // The build reformats the agent's file, rewrites another and leaves its output.
+        Write(clone, "source.txt", "reformatted by the build");
+        Write(clone, "tracked.txt", "rewritten by the build\n");
+        Write(clone, "build.out", "built");
+        Run(clone, commands.SetAside);
+
+        Run(clone, commands.Commit);
+        Run(clone, commands.Push);
+
+        Assert.Equal("source.txt", Git(clone, "show --name-only --format= HEAD"));
+        Assert.Equal("by the agent", Git(clone, "show HEAD:source.txt"));
+        // Nor is any of it a change of a Task that follows.
+        Assert.Empty(ChangedFiles(clone, commands));
+        Assert.Equal("built", File.ReadAllText(Path.Combine(clone, "build.out")));
+    }
+
+    [Fact]
+    public async Task After_a_failed_verification_the_agents_work_still_counts_and_what_verification_wrote_still_doesnt()
+    {
+        var commands = await CommandsOverseerRunsAsync();
+        var clone = Clone();
+        Run(clone, commands.CheckOut);
+        Write(clone, "source.txt", "by the agent");
+        ChangedFiles(clone, commands);
+        Write(clone, "tracked.txt", "rewritten by the tests\n");
+        Write(clone, "report.xml", "failed");
+        Run(clone, commands.SetAside);
+        // The agent's turn: it fixes its work.
+        Write(clone, "source.txt", "fixed by the agent");
+        Assert.Equal(["source.txt"], ChangedFiles(clone, commands));
+        Write(clone, "report.xml", "passed");
+        Run(clone, commands.SetAside);
+
+        Assert.Equal(["source.txt"], ChangedFiles(clone, commands));
+        Run(clone, commands.Commit);
+
+        Assert.Equal("source.txt", Git(clone, "show --name-only --format= HEAD"));
+        Assert.Equal("fixed by the agent", Git(clone, "show HEAD:source.txt"));
     }
 
     [Fact]
@@ -125,6 +208,7 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         var clone = Clone();
         Run(clone, commands.CheckOut);
         Write(clone, "untracked.txt", "new");
+        ChangedFiles(clone, commands);
         Run(clone, commands.Commit);
         var hook = Path.Combine(_directory, "origin.git", "hooks", "pre-receive");
         File.WriteAllText(hook, "#!/bin/sh\necho 'refused by the rules of this repository'\nexit 1\n");
@@ -174,6 +258,7 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         Write(clone, "untracked.txt", "new");
         Write(clone, "ignored.log", "noise");
         File.Delete(Path.Combine(clone, "deleted.txt"));
+        ChangedFiles(clone, commands);
 
         Assert.Equal(["deleted.txt", "untracked.txt"], Files(clone, commands.Differs).Order(StringComparer.Ordinal));
         // Not on GitHub yet.
@@ -190,6 +275,7 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         File.Delete(Path.Combine(clone, "build.out"));
         File.Delete(Path.Combine(clone, "untracked.txt"));
         Git(clone, "checkout --quiet origin/trunk -- deleted.txt");
+        ChangedFiles(clone, commands);
         Assert.Empty(Files(clone, commands.Differs));
         Run(clone, commands.Commit);
         Run(clone, commands.Push);
@@ -218,7 +304,7 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done())));
-        const string changedFilesAsked = "base=$(git rev-parse --verify --quiet refs/overseer/verified";
+        const string changedFilesAsked = "# The agent's work, as it is now.";
         overseer.Sandboxes.ScriptCommandsContaining(changedFilesAsked, new CommandResult(0, "a.txt\0"));
         var spec = SpecTests.Spec();
         spec["tasks"] = new System.Text.Json.Nodes.JsonArray(SpecTests.TaskJson(Title, "Every order as CSV.", ["acme/web"]));
@@ -229,14 +315,17 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
 
         var clone = Path.Combine(_directory, "clone");
         // Some run more than once, as in the Task's verification and the final one, always as the same command.
-        string Command(string holding) =>
-            Assert.Single(overseer.Sandboxes.CommandsRun.Select(run => run.Command).Distinct(), command => command.Contains(holding))
+        string Command(string holding, string? without = null) =>
+            Assert.Single(
+                    overseer.Sandboxes.CommandsRun.Select(run => run.Command).Distinct(),
+                    command => command.Contains(holding) && (without is null || !command.Contains(without)))
                 .Replace(Sandbox.CloneDirectory(new RepositoryName("acme", "web")), clone);
         return new Commands(
             $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}",
-            Command("git config user.name"), Command("head=$(git symbolic-ref"), Command(changedFilesAsked), Command("git commit"),
-            Command("git push"),
-            Command("base=$(git merge-base refs/remotes/origin/HEAD HEAD"), Command("if git rev-parse --verify --quiet refs/overseer/verified"));
+            Command("git config user.name"), Command("head=$(git symbolic-ref", without: "git commit "),
+            Command("# What Overseer's commands wrote.", without: "git commit "), Command(changedFilesAsked), Command("git commit "),
+            Command("git push"), Command("base=$(git merge-base refs/remotes/origin/HEAD HEAD"),
+            Command("base=$(git merge-base refs/remotes/origin/HEAD refs/overseer/verified"));
     }
 
     private IReadOnlyList<string> ChangedFiles(string clone, Commands commands) => Files(clone, commands.ChangedFiles);
@@ -291,8 +380,10 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
 
     /// <param name="IntentBranch">The name of the Intent branch.</param>
     /// <param name="Branch">Asks where the clone is, when it isn't on the Intent branch.</param>
+    /// <param name="SetAside">Sets aside what Overseer's commands wrote, as after setup and after each verification.</param>
     /// <param name="Differs">Asks what the clone holds differently from the default branch.</param>
     /// <param name="IntentBranchChanges">Asks what the Intent branch changes of the default branch.</param>
     private sealed record Commands(
-        string IntentBranch, string CheckOut, string Branch, string ChangedFiles, string Commit, string Push, string Differs, string IntentBranchChanges);
+        string IntentBranch, string CheckOut, string Branch, string SetAside, string ChangedFiles, string Commit, string Push,
+        string Differs, string IntentBranchChanges);
 }

@@ -7,7 +7,9 @@ namespace Overseer.Implementation;
 
 /// <summary>
 /// Verification: Overseer itself builds and tests repositories in a Sandbox, by their Repository Manifests (ADR 0003) as the
-/// clones hold them now, so that work counts as done only when its tests actually pass.
+/// clones hold them now, so that work counts as done only when its tests actually pass. It takes the work as it is before it runs
+/// anything (<see cref="IntentBranches.TakeWorkAsync"/>), and sets aside what its commands wrote afterwards, so that none of that
+/// becomes part of the work.
 /// </summary>
 public sealed class Verification(RepositoryCommands commands, ComposeDependencies dependencies, IntentBranches branches)
 {
@@ -57,15 +59,39 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
         var changes = new Dictionary<RepositoryName, IReadOnlyList<string>>();
         foreach (var repository in intent.RepositoriesInScope)
         {
-            var files = await branches.ChangedFilesAsync(sandbox, repository, cancellationToken);
+            var files = await branches.TakeWorkAsync(sandbox, repository, cancellationToken);
             if (files.Count > 0)
             {
                 changes.Add(repository, files);
             }
         }
         IReadOnlyList<RepositoryName> repositories = full ? intent.RepositoriesInScope : [.. listed.Union(changes.Keys)];
-        var steps = await RunAsync(sandbox, intent.RepositoriesInScope, repositories, changes, full, cancellationToken);
-        return new WorkVerification(steps, [.. intent.RepositoriesInScope.Where(changes.ContainsKey)]);
+        IReadOnlyList<VerificationStep> steps;
+        string? notSetAside;
+        try
+        {
+            steps = await RunAsync(sandbox, intent.RepositoriesInScope, repositories, changes, full, cancellationToken);
+        }
+        finally
+        {
+            // Also when verifying breaks off, as what ran until then has written all the same.
+            notSetAside = await SetAsideAsync(sandbox, intent, cancellationToken);
+        }
+        return notSetAside is null
+            ? new WorkVerification(steps, [.. intent.RepositoriesInScope.Where(changes.ContainsKey)])
+            : throw new InvalidOperationException(notSetAside);
+    }
+
+    /// <summary>Sets aside what the commands run wrote, in every clone: any of them may have written in any.</summary>
+    /// <returns>Why that of one couldn't be; <c>null</c> once all is.</returns>
+    private async Task<string?> SetAsideAsync(Sandbox sandbox, Intent intent, CancellationToken cancellationToken)
+    {
+        string? failed = null;
+        foreach (var repository in intent.RepositoriesInScope)
+        {
+            failed ??= await branches.SetAsideCommandOutputAsync(sandbox, repository, cancellationToken);
+        }
+        return failed;
     }
 
     /// <summary>A failed step for each clone in scope that isn't on the Intent branch: what it holds isn't what gets pushed.</summary>
@@ -112,7 +138,7 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
                     }
                     break;
                 case RepositoryManifestReading.Missing
-                    when full && await branches.DiffersFromDefaultBranchAsync(sandbox, repository, cancellationToken):
+                    when full && await branches.WorkDiffersFromDefaultBranchAsync(sandbox, repository, cancellationToken):
                     steps.Add(new VerificationStep(
                         repository, ManifestOf(repository), Command: null,
                         $"{repository} is changed and has no Repository Manifest ({RepositoryManifest.Path}), so its work can't be verified.",

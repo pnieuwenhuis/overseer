@@ -37,7 +37,7 @@ public sealed class FinalVerification(
             var changed = new List<RepositoryName>();
             foreach (var repository in intent.RepositoriesInScope)
             {
-                if (await branches.ChangesDefaultBranchAsync(sandbox, repository, cancellationToken))
+                if (await branches.PushedWorkDiffersFromDefaultBranchAsync(sandbox, repository, cancellationToken))
                 {
                     changed.Add(repository);
                 }

@@ -301,12 +301,12 @@ public class FinalVerificationTests(PostgresServer postgres)
     /// </summary>
     private static void HoldsMoreThanItsDefaultBranch(RunningOverseer overseer, string repository, params string[] files) =>
         overseer.Sandboxes.ScriptCommandsContaining(
-            $"{repository}' || exit\nerrors=$(mktemp) || exit\n{{\nbase=$(git merge-base",
+            $"{repository}' || exit\nerrors=$(mktemp) || exit\n{{\nbase=$(git merge-base refs/remotes/origin/HEAD HEAD",
             new CommandResult(0, string.Concat(files.Select(file => file + "\0"))));
 
     /// <summary>What the command that asks what the repository's Intent branch changes of its default branch holds.</summary>
     internal static string IntentBranchComparedIn(string repository) =>
-        $"{repository}' || exit\nerrors=$(mktemp) || exit\n{{\nif git rev-parse";
+        $"{repository}' || exit\nerrors=$(mktemp) || exit\n{{\nbase=$(git merge-base refs/remotes/origin/HEAD refs/overseer/verified";
 
     /// <summary>Makes the command fail in this repository the next time it runs, with this output, and pass from then on.</summary>
     private static void FailsOnce(RunningOverseer overseer, string repository, string command, string output) =>

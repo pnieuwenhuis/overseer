@@ -73,7 +73,7 @@ public class ImplementationTests(PostgresServer postgres)
         var branch = $"overseer/intent-{IdOf(address):N}";
         Assert.All(["acme/api", "acme/web"], repository =>
         {
-            var checkOuts = CommandsIn(overseer, repository);
+            var checkOuts = CommandsIn(overseer, repository).Where(command => command.Contains("git checkout")).ToList();
             Assert.Equal(2, checkOuts.Count);
             Assert.All(checkOuts, checkOut => Assert.Contains($"git checkout --quiet -b '{branch}'", checkOut));
         });
@@ -89,7 +89,7 @@ public class ImplementationTests(PostgresServer postgres)
         var address = await ImplementingAsync(overseer, "Export data", "acme/web");
         await ReadyAsync(overseer, address);
         var branch = $"overseer/intent-{IdOf(address):N}";
-        var checkOut = Assert.Single(CommandsIn(overseer, "acme/web"));
+        var checkOut = Assert.Single(CommandsIn(overseer, "acme/web"), command => command.Contains("git checkout"));
         // What GitHub holds: a commit on the default branch and, where an earlier Sandbox pushed it, the Intent branch one ahead.
         var directory = Directory.CreateTempSubdirectory("overseer-intent-branch-").FullName;
         try
@@ -664,11 +664,15 @@ public class ImplementationTests(PostgresServer postgres)
     private static void AddManifest(RunningOverseer overseer, string repository, string manifest) =>
         overseer.Sandboxes.AddRepositoryFile(repository, ".overseer.yml", manifest);
 
-    /// <summary>The commands run in the repository's directory in a Sandbox, in order.</summary>
+    /// <summary>
+    /// The commands run in the repository's directory in a Sandbox, in order, but for setting aside what they wrote, which ends
+    /// the preparation.
+    /// </summary>
     private static IReadOnlyList<string> CommandsIn(RunningOverseer overseer, string repository) =>
         [.. overseer.Sandboxes.CommandsRun
             .Where(run => run.Command.StartsWith($"cd '/home/overseer/repositories/{repository}' ", StringComparison.Ordinal))
-            .Select(run => run.Command)];
+            .Select(run => run.Command)
+            .Where(command => !command.Contains("# What Overseer's commands wrote.", StringComparison.Ordinal))];
 
     /// <summary>Has an Intent with these Repositories in scope approved and started, and gives its address.</summary>
     internal static async Task<string> ImplementingAsync(RunningOverseer overseer, string text, params string[] repositories)
