@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Time.Testing;
 using Microsoft.Playwright;
 using Overseer.Intents;
@@ -452,6 +453,42 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         starting.SetResult();
         await Expect(status).ToHaveTextAsync("The Intent is ready: its Sandbox is prepared for the Squad.");
         await Expect(implementation.Locator(".step-done")).ToHaveCountAsync(4);
+        Assert.True(await WasNotReloadedAsync(detail));
+    }
+
+    [Fact]
+    public async Task An_open_detail_page_follows_the_state_of_each_Task_live_as_the_Squad_carries_them_out()
+    {
+        await using var overseer = await StartOverseerAsync();
+        var first = new TaskCompletionSource();
+        var second = new TaskCompletionSource();
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Developer,
+            new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = first.Task }),
+            new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.AskedQuestion("Which port?")) { EndsAfter = second.Task }));
+        var spec = SpecTests.Spec();
+        spec["tasks"] = new JsonArray(
+            SpecTests.TaskJson("Add the export endpoint", "Every order as CSV.", ["acme/web"]),
+            SpecTests.TaskJson("Add the export button", "Above the table.", ["acme/web"]));
+        var address = await ImplementationTests.AwaitingApprovalAsync(overseer, spec, "Export data", "acme/web");
+        await using var session = await chromium.LogInAsync(overseer);
+        var detail = await OpenAsync(session, address);
+
+        using var approved = await ImplementationTests.ApproveAsync(overseer, address, start: true);
+
+        var tasks = detail.GetByRole(AriaRole.Region, new PageGetByRoleOptions { Name = "Tasks", Exact = true });
+        var states = tasks.Locator(".intent-task-state");
+        await Expect(tasks.Locator(".intent-task-title")).ToHaveTextAsync(["Add the export endpoint", "Add the export button"]);
+        await Expect(tasks.Locator(".intent-task-role")).ToHaveTextAsync(["Developer", "Developer"]);
+        await Expect(states).ToHaveTextAsync(["Running", "Pending"]);
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Green");
+        first.SetResult();
+        await Expect(states).ToHaveTextAsync(["Done", "Running"]);
+        second.SetResult();
+        await Expect(states).ToHaveTextAsync(["Done", "Pending"]);
+        await Expect(detail.Locator(".intent-light")).ToHaveAttributeAsync("data-light", "Red");
+        await Expect(detail.Locator(".implementation").GetByRole(AriaRole.Alert))
+            .ToHaveTextAsync("The Developer asked a question during Task 2, which can't be answered yet: Which port?");
         Assert.True(await WasNotReloadedAsync(detail));
     }
 

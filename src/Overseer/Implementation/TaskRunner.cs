@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Overseer.GitHub;
 using Overseer.Intents;
@@ -7,14 +8,16 @@ using Overseer.Sandboxes;
 namespace Overseer.Implementation;
 
 /// <summary>
-/// The Task Runner: when the Intent Lifecycle moves an Intent to Implementing, it prepares the Intent's Sandbox for the Squad in
-/// the background (<see cref="SandboxPreparation"/>). Where each implementation stands is kept in PostgreSQL. An implementation
-/// that fails leaves the Intent Implementing, in its slot, and red until a Retry, which prepares a fresh Sandbox. So does one
-/// that a restart of serve interrupts, which for now is every implementation that hadn't failed: its Sandbox goes with the restart.
+/// The Task Runner: when the Intent Lifecycle moves an Intent to Implementing, it gives the Intent its Task list, prepares the
+/// Intent's Sandbox for the Squad (<see cref="SandboxPreparation"/>) and has the Squad carry out the Tasks there
+/// (<see cref="TaskLoop"/>), all in the background. Where each implementation stands, and the Sandbox it was prepared in, is kept
+/// in PostgreSQL. An implementation that fails leaves the Intent Implementing, in its slot, and red until a Retry, which goes on
+/// in the prepared Sandbox when there is one, and otherwise prepares a fresh one. So does one that a restart of serve interrupts,
+/// which for now is every implementation that hadn't failed: its Sandbox goes with the restart.
 /// </summary>
 public sealed class TaskRunner(
-    IntentLifecycle lifecycle, SandboxRegistry sandboxes, SandboxPreparation preparation, IDbContextFactory<OverseerDbContext> databases,
-    ILogger<TaskRunner> logger)
+    IntentLifecycle lifecycle, SandboxRegistry sandboxes, SandboxPreparation preparation, IntentTasks tasks,
+    TaskLoop loop, IDbContextFactory<OverseerDbContext> databases, ILogger<TaskRunner> logger)
     : IHostedService
 {
     private const string Interrupted = "Overseer restarted, which interrupted the implementation. Retry to prepare a fresh Sandbox.";
@@ -22,15 +25,16 @@ public sealed class TaskRunner(
     private readonly SandboxedWork _work = new(logger);
 
     /// <summary>
-    /// Raised whenever an implementation changes phase, on the thread that changed it, once the change is committed. Handlers must
-    /// not throw; read the implementation again with <see cref="ProgressOfAsync"/>.
+    /// Raised whenever an implementation changes phase or one of its Tasks changes state, on the thread that changed it, once the
+    /// change is committed. Handlers must not throw; read again with <see cref="ProgressOfAsync"/> and
+    /// <see cref="IntentTasks.OfAsync"/>.
     /// </summary>
     public event Action? Changed;
 
     /// <summary>
-    /// Marks the implementations that a stop of serve interrupted as failed, so they can be retried; from then on prepares a
-    /// Sandbox for each Intent that moves to Implementing. Runs as serve starts, before the Portal takes requests, so that no
-    /// Intent shows as working while nothing works on it.
+    /// Marks the implementations that a stop of serve interrupted as failed, so they can be retried; from then on implements each
+    /// Intent that moves to Implementing. Runs as serve starts, before the Portal takes requests, so that no Intent shows as
+    /// working while nothing works on it.
     /// </summary>
     async Task IHostedService.StartAsync(CancellationToken cancellationToken)
     {
@@ -47,6 +51,12 @@ public sealed class TaskRunner(
         foreach (var intentId in interrupted)
         {
             await EnterPhaseAsync(intentId, ImplementationPhase.Failed, repository: null, Interrupted, cancellationToken);
+        }
+        await using (var database = await databases.CreateDbContextAsync(cancellationToken))
+        {
+            // No Sandbox outlives a restart (LeftOverSandboxes), so no implementation has one to go on in.
+            await database.Implementations.ExecuteUpdateAsync(
+                implementation => implementation.SetProperty(record => record.SandboxResourceId, (string?)null), cancellationToken);
         }
         lifecycle.Transitioned += OnTransitioned;
     }
@@ -71,14 +81,17 @@ public sealed class TaskRunner(
         var stored = await database.Implementations.AsNoTracking()
             .SingleOrDefaultAsync(implementation => implementation.IntentId == intent.Id, cancellationToken);
         return stored is null
-            ? new ImplementationProgress(ImplementationPhase.ProvisioningSandbox, Repository: null, Error: null)
+            ? new ImplementationProgress(ImplementationPhase.ProvisioningSandbox, Repository: null, Error: null, SandboxPrepared: false)
             : new ImplementationProgress(
-                stored.Phase, stored.Repository is { } repository ? RepositoryName.Parse(repository) : null, stored.Error);
+                stored.Phase, stored.Repository is { } repository ? RepositoryName.Parse(repository) : null, stored.Error,
+                SandboxPrepared: stored.SandboxResourceId is not null);
     }
 
     /// <summary>
-    /// Prepares the Sandbox of an Implementing Intent whose implementation failed again, a fresh one, destroying what is left of
-    /// the failed one. The Intent stays Implementing throughout.
+    /// Takes up the implementation of an Implementing Intent again after it failed. One that failed once its Sandbox was prepared,
+    /// as when a Task's session broke off, goes on in that Sandbox, with its first Pending Task. Otherwise, as when preparing
+    /// failed or a restart interrupted it, or when the prepared Sandbox is gone, a fresh Sandbox is prepared, once what is left of
+    /// the old one is destroyed. The Intent stays Implementing throughout.
     /// </summary>
     /// <returns>Whether it started again: not when there is no such Intent, or its implementation hasn't failed.</returns>
     public async Task<bool> RetryAsync(Guid intentId, CancellationToken cancellationToken)
@@ -90,7 +103,9 @@ public sealed class TaskRunner(
                 .Where(implementation => implementation.IntentId == intentId && implementation.Phase == ImplementationPhase.Failed
                     && database.Intents.Any(intent => intent.Id == intentId && intent.State == IntentState.Implementing))
                 .ExecuteUpdateAsync(implementation => implementation
-                    .SetProperty(record => record.Phase, ImplementationPhase.ProvisioningSandbox)
+                    .SetProperty(
+                        record => record.Phase,
+                        record => record.SandboxResourceId == null ? ImplementationPhase.ProvisioningSandbox : ImplementationPhase.Ready)
                     .SetProperty(record => record.Repository, (string?)null)
                     .SetProperty(record => record.Error, (string?)null), cancellationToken);
             if (retried == 0)
@@ -111,33 +126,80 @@ public sealed class TaskRunner(
         }
     }
 
-    /// <summary>Prepares the Intent's Sandbox in the background.</summary>
+    /// <summary>Implements the Intent in the background.</summary>
     private void Run(Guid intentId, bool retrying) => _work.Run(
         $"the implementation of the Intent {intentId}",
-        stopping => PrepareAsync(intentId, retrying, stopping),
+        stopping => ImplementAsync(intentId, retrying, stopping),
         error => error is null
             ? Task.CompletedTask
             : EnterPhaseAsync(intentId, ImplementationPhase.Failed, repository: null, error, CancellationToken.None));
 
     /// <returns>Why the implementation failed; <c>null</c> when it hasn't.</returns>
-    private async Task<string?> PrepareAsync(Guid intentId, bool retrying, CancellationToken cancellationToken)
+    private async Task<string?> ImplementAsync(Guid intentId, bool retrying, CancellationToken cancellationToken)
     {
         if (await lifecycle.FindAsync(intentId, cancellationToken) is not { State: IntentState.Implementing } intent)
         {
             return null;
         }
-        if (retrying && await DestroyFailedSandboxAsync(intentId, cancellationToken) is { } notDestroyed)
+        await tasks.CreateFromApprovedSpecAsync(intent, cancellationToken);
+        var sandbox = await PreparedSandboxOfAsync(intentId, cancellationToken);
+        if (sandbox is null)
         {
-            return notDestroyed;
+            Task EnterAsync(ImplementationPhase phase, RepositoryName? repository) =>
+                EnterPhaseAsync(intentId, phase, repository, error: null, cancellationToken);
+            if (retrying)
+            {
+                // Also when the Retry set out to go on in a Sandbox that turns out to be gone.
+                await EnterAsync(ImplementationPhase.ProvisioningSandbox, null);
+                if (await DestroyFailedSandboxAsync(intentId, cancellationToken) is { } notDestroyed)
+                {
+                    return notDestroyed;
+                }
+            }
+            switch (await preparation.PrepareAsync(intent, EnterAsync, cancellationToken))
+            {
+                case SandboxPreparationResult.Failed failed:
+                    return failed.Error;
+                case SandboxPreparationResult.Ready ready:
+                    sandbox = ready.Sandbox;
+                    break;
+                default:
+                    throw new UnreachableException();
+            }
+            await EnterPhaseAsync(intentId, ImplementationPhase.Ready, repository: null, error: null, cancellationToken, sandbox);
         }
-        Task EnterAsync(ImplementationPhase phase, RepositoryName? repository) =>
-            EnterPhaseAsync(intentId, phase, repository, error: null, cancellationToken);
-        if (await preparation.PrepareAsync(intent, EnterAsync, cancellationToken) is { } error)
+        return await loop.RunAsync(intent, sandbox, () => Changed?.Invoke(), cancellationToken);
+    }
+
+    /// <summary>
+    /// The Sandbox the Intent's implementation was prepared in, to go on in; <c>null</c> when there is none to, as before it is
+    /// prepared, after a restart of serve, or when it is gone.
+    /// </summary>
+    private async Task<Sandbox?> PreparedSandboxOfAsync(Guid intentId, CancellationToken cancellationToken)
+    {
+        string? resourceId;
+        await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
-            return error;
+            resourceId = await database.Implementations
+                .Where(implementation => implementation.IntentId == intentId)
+                .Select(implementation => implementation.SandboxResourceId)
+                .SingleOrDefaultAsync(cancellationToken);
         }
-        await EnterAsync(ImplementationPhase.Ready, null);
-        return null;
+        if (resourceId is null)
+        {
+            return null;
+        }
+        var sandbox = new Sandbox(resourceId, new SandboxOwner(SandboxOwnerKind.Intent, intentId));
+        try
+        {
+            return await sandboxes.ExistsAsync(sandbox, cancellationToken) ? sandbox : null;
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Not taken for gone: that would destroy the work in it.
+            throw new InvalidOperationException(
+                $"Overseer could not check whether the Sandbox is still there: {exception.Message}", exception);
+        }
     }
 
     /// <summary>
@@ -163,22 +225,44 @@ public sealed class TaskRunner(
         return null;
     }
 
-    /// <summary>Records where the Intent's implementation stands, whether or not it had a record before.</summary>
+    /// <summary>
+    /// Records where the Intent's implementation stands, whether or not it had a record before. In a failed one no Task runs: the
+    /// one that did waits to run again.
+    /// </summary>
+    /// <param name="sandbox">
+    /// The Sandbox the implementation is prepared in, with <see cref="ImplementationPhase.Ready"/>. A failure keeps the one
+    /// recorded; every other phase comes before there is one.
+    /// </param>
     private async Task EnterPhaseAsync(
-        Guid intentId, ImplementationPhase phase, RepositoryName? repository, string? error, CancellationToken cancellationToken)
+        Guid intentId, ImplementationPhase phase, RepositoryName? repository, string? error, CancellationToken cancellationToken,
+        Sandbox? sandbox = null)
     {
         var name = repository?.ToString();
         var stored = StorableText.Of(error);
+        var resourceId = sandbox?.ResourceId;
         await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
+            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            if (phase == ImplementationPhase.Failed)
+            {
+                await IntentTasks.StopRunningAsync(database, intentId, cancellationToken);
+            }
             await database.UpsertAsync(
-                new ImplementationRecord { IntentId = intentId, Phase = phase, Repository = name, Error = stored },
+                new ImplementationRecord { IntentId = intentId, Phase = phase, Repository = name, Error = stored, SandboxResourceId = resourceId },
                 implementation => implementation.IntentId == intentId,
-                implementation => implementation
-                    .SetProperty(record => record.Phase, phase)
-                    .SetProperty(record => record.Repository, name)
-                    .SetProperty(record => record.Error, stored),
+                implementation =>
+                {
+                    implementation
+                        .SetProperty(record => record.Phase, phase)
+                        .SetProperty(record => record.Repository, name)
+                        .SetProperty(record => record.Error, stored);
+                    if (phase != ImplementationPhase.Failed)
+                    {
+                        implementation.SetProperty(record => record.SandboxResourceId, resourceId);
+                    }
+                },
                 cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
         }
         Changed?.Invoke();
     }
@@ -222,7 +306,10 @@ public enum ImplementationPhase
 /// <summary>Where an Intent's implementation stands, and why it failed when it did.</summary>
 /// <param name="Repository">The repository the phase is about; <c>null</c> when it isn't about one.</param>
 /// <param name="Error"><c>null</c> unless <paramref name="Phase"/> is <see cref="ImplementationPhase.Failed"/>.</param>
-public sealed record ImplementationProgress(ImplementationPhase Phase, RepositoryName? Repository, string? Error);
+/// <param name="SandboxPrepared">
+/// Whether its Sandbox has been prepared, which a failure after that leaves so: a Retry then goes on in it, unless it is gone.
+/// </param>
+public sealed record ImplementationProgress(ImplementationPhase Phase, RepositoryName? Repository, string? Error, bool SandboxPrepared);
 
 /// <summary>An Intent's implementation, as PostgreSQL holds it: one per Intent.</summary>
 public sealed class ImplementationRecord
@@ -235,4 +322,10 @@ public sealed class ImplementationRecord
 
     /// <summary>Why the implementation failed, when it did.</summary>
     public string? Error { get; set; }
+
+    /// <summary>
+    /// The resource ID of the Sandbox the implementation was prepared in; <c>null</c> until it is prepared, and after a restart of
+    /// serve, which destroys it.
+    /// </summary>
+    public string? SandboxResourceId { get; set; }
 }

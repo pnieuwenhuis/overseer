@@ -1379,7 +1379,8 @@
     }
 
     .spec-decisions,
-    .spec-tasks {
+    .spec-tasks,
+    .intent-task-list {
         display: flex;
         flex-direction: column;
         gap: 0.75rem;
@@ -1407,7 +1408,9 @@
         text-transform: uppercase;
     }
 
-    .spec-task {
+    /* A Task, as a Spec lists it and as the Intent's own Task list does, where each also has its state. */
+    .spec-task,
+    .intent-task {
         display: flex;
         flex-direction: column;
         gap: 0.375rem;
@@ -1416,23 +1419,27 @@
         padding: 0.875rem 1rem;
     }
 
-    .spec-task-heading {
+    .spec-task-heading,
+    .intent-task-heading {
         display: flex;
         gap: 0.5rem;
         font-size: 0.9375rem;
         font-weight: 600;
     }
 
-    .spec-task-number {
+    .spec-task-number,
+    .intent-task-number {
         color: var(--color-muted);
         font-variant-numeric: tabular-nums;
     }
 
-    .spec-task-title {
+    .spec-task-title,
+    .intent-task-title {
         overflow-wrap: anywhere;
     }
 
-    .spec-task-facts {
+    .spec-task-facts,
+    .intent-task-facts {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
@@ -1440,7 +1447,8 @@
         font-size: 0.8125rem;
     }
 
-    .spec-task-role {
+    .spec-task-role,
+    .intent-task-role {
         background: var(--color-accent-soft);
         border-radius: 999px;
         color: var(--color-accent);
@@ -1448,10 +1456,41 @@
         padding: 0.0625rem 0.5rem;
     }
 
-    .spec-task-repositories {
+    .spec-task-repositories,
+    .intent-task-repositories {
         color: var(--color-muted);
         font-family: var(--font-mono);
         overflow-wrap: anywhere;
+    }
+
+    .intent-tasks {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .intent-task[data-state="Running"] {
+        border-color: var(--color-accent);
+    }
+
+    .intent-task-state {
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        color: var(--color-muted);
+        font-weight: 600;
+        padding: 0 0.5rem;
+    }
+
+    .intent-task[data-state="Running"] .intent-task-state {
+        color: var(--color-accent);
+    }
+
+    .intent-task[data-state="Done"] .intent-task-state {
+        color: var(--color-success);
+    }
+
+    .intent-task[data-state="Failed"] .intent-task-state {
+        color: var(--color-danger);
     }
 }
 

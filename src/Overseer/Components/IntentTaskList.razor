@@ -1,0 +1,24 @@
+@* An Intent's Tasks in the order they are carried out, each with its role, the repositories it touches and its state. *@
+@using Overseer.Implementation
+
+<section class="intent-tasks" aria-label="Tasks">
+    <h2>Tasks</h2>
+    <ol class="intent-task-list">
+        @foreach (var task in Tasks)
+        {
+            <li class="intent-task" data-task="@task.Number" data-state="@task.State">
+                <h3 class="intent-task-heading"><span class="intent-task-number">@task.Number.</span> <span class="intent-task-title">@task.Title</span></h3>
+                <p class="intent-task-facts">
+                    <span class="intent-task-state">@task.State</span>
+                    <span class="intent-task-role">@task.Role</span>
+                    <span class="intent-task-repositories">@string.Join(", ", task.Repositories)</span>
+                </p>
+            </li>
+        }
+    </ol>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<IntentTask> Tasks { get; set; }
+}

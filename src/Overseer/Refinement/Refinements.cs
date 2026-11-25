@@ -282,7 +282,7 @@ public sealed class Refinements(
                 // The Analyst catches up on the transcript first, and then the human answers the Round still open, rather than a new one.
                 try
                 {
-                    await TakeTurnAsync(session, message, cancellationToken);
+                    await session.TakeTurnAsync(message, cancellationToken);
                 }
                 catch (AgentSessionFailedException exception)
                 {
@@ -306,7 +306,7 @@ public sealed class Refinements(
                 AgentOutcome outcome;
                 try
                 {
-                    outcome = await TakeTurnAsync(session, message, cancellationToken);
+                    outcome = await session.TakeTurnAsync(message, cancellationToken);
                 }
                 catch (AgentSessionFailedException exception)
                 {
@@ -360,17 +360,6 @@ public sealed class Refinements(
         {
             await sandboxes.DestroyOrLeaveAsync(sandbox);
         }
-    }
-
-    /// <summary>Sends the Analyst a message and waits for the turn it starts to end.</summary>
-    /// <exception cref="AgentSessionFailedException">The turn broke off.</exception>
-    private static async Task<AgentOutcome> TakeTurnAsync(IAgentSession session, string message, CancellationToken cancellationToken)
-    {
-        var turn = await session.SendAsync(message, cancellationToken);
-        await foreach (var _ in turn.Updates.WithCancellation(cancellationToken))
-        {
-        }
-        return await turn.Outcome.WaitAsync(cancellationToken);
     }
 
     /// <summary>

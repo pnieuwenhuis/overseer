@@ -14,6 +14,21 @@ public interface IAgentSession : IAsyncDisposable
     Task<AgentTurn> SendAsync(string message, CancellationToken cancellationToken);
 }
 
+/// <summary>A whole turn of an agent session, for work that only needs how it ends.</summary>
+public static class AgentSessionTurns
+{
+    /// <summary>Sends the agent a message and waits for the turn it starts to end, past the updates it streams meanwhile.</summary>
+    /// <exception cref="AgentSessionFailedException">The turn broke off.</exception>
+    public static async Task<AgentOutcome> TakeTurnAsync(this IAgentSession session, string message, CancellationToken cancellationToken)
+    {
+        var turn = await session.SendAsync(message, cancellationToken);
+        await foreach (var _ in turn.Updates.WithCancellation(cancellationToken))
+        {
+        }
+        return await turn.Outcome.WaitAsync(cancellationToken);
+    }
+}
+
 /// <summary>The agent's response to one message.</summary>
 public sealed class AgentTurn(IAsyncEnumerable<string> updates, Task<AgentOutcome> outcome)
 {

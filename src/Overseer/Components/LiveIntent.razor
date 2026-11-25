@@ -5,6 +5,7 @@
 @using Overseer.Specs
 @inherits LiveIntentsView<LiveIntent.Detail>
 @inject SpecStore Specs
+@inject IntentTasks Tasks
 
 @if (Shown is { WhyNot: { } why })
 {
@@ -86,6 +87,12 @@
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
                 <ImplementationSteps Intent="intent" Implementation="implementation" />
+            </div>
+        }
+        @if (Shown.Tasks.Count > 0)
+        {
+            <div class="border-b border-line px-5 py-4 sm:px-6">
+                <IntentTaskList Tasks="Shown.Tasks" />
             </div>
         }
         @if (Shown.Spec is { } spec)
@@ -205,7 +212,8 @@
                     : await Specs.LatestOfAsync(intent.Id, cancellationToken),
             intent is null ? [] : await Specs.VersionsOfAsync(intent.Id, cancellationToken),
             intent is null ? [] : await Specs.CommentsOfAsync(intent.Id, cancellationToken),
-            intent is { State: IntentState.AwaitingSpecApproval } ? await Lifecycle.WhyNotApprovedAndStartedAsync(Id, cancellationToken) : null);
+            intent is { State: IntentState.AwaitingSpecApproval } ? await Lifecycle.WhyNotApprovedAndStartedAsync(Id, cancellationToken) : null,
+            intent is null ? [] : await Tasks.OfAsync(intent.Id, cancellationToken));
     }
 
     /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
@@ -223,9 +231,11 @@
     /// Why approving the Spec awaiting approval can't also start the Intent, as the page explains next to its Approve button; <c>null</c>
     /// when it can, or no Spec awaits approval.
     /// </param>
+    /// <param name="Tasks">The Intent's own Tasks, in order; empty until its implementation has begun.</param>
     public sealed record Detail(
         Intent? Intent, string? WhyNot, RefinementProgress? Refinement, ImplementationProgress? Implementation, IReadOnlyList<Round> Transcript,
-        SpecVersion? Spec, IReadOnlyList<SpecVersionHeading> SpecVersions, IReadOnlyList<SpecComment> Comments, string? WhyNotApprovedAndStarted);
+        SpecVersion? Spec, IReadOnlyList<SpecVersionHeading> SpecVersions, IReadOnlyList<SpecComment> Comments, string? WhyNotApprovedAndStarted,
+        IReadOnlyList<IntentTask> Tasks);
 
     /// <summary>A change of an Intent's state that the page offers with a button, disabled while it can't be made.</summary>
     public enum StateChange

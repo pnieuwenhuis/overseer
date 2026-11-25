@@ -20,6 +20,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<RefinementRecord> Refinements => Set<RefinementRecord>();
     public DbSet<RoundRecord> Rounds => Set<RoundRecord>();
     public DbSet<ImplementationRecord> Implementations => Set<ImplementationRecord>();
+    public DbSet<IntentTaskRecord> IntentTasks => Set<IntentTaskRecord>();
     public DbSet<SpecVersionRecord> SpecVersions => Set<SpecVersionRecord>();
     public DbSet<SpecCommentRecord> SpecComments => Set<SpecCommentRecord>();
 
@@ -62,6 +63,14 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             implementation.HasKey(record => record.IntentId);
             implementation.Property(record => record.Phase).HasConversion<string>();
             implementation.HasOne<IntentRecord>().WithOne().HasForeignKey<ImplementationRecord>(record => record.IntentId);
+        });
+        modelBuilder.Entity<IntentTaskRecord>(task =>
+        {
+            task.ToTable("IntentTasks");
+            task.HasKey(record => new { record.IntentId, record.Number });
+            task.Property(record => record.Role).HasConversion<string>();
+            task.Property(record => record.State).HasConversion<string>();
+            task.HasOne<IntentRecord>().WithMany().HasForeignKey(record => record.IntentId);
         });
         modelBuilder.Entity<RoundRecord>(round =>
         {

@@ -92,6 +92,14 @@ public sealed class SandboxRegistry(
     public Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken) =>
         provider.TakeFileAsync(sandbox, path, cancellationToken);
 
+    /// <summary>
+    /// Whether the Sandbox is still there to work in: not recorded destroyed, and the provider still has it, which it hasn't once
+    /// the machine was deleted behind Overseer's back, as an evicted spot instance is.
+    /// </summary>
+    public async Task<bool> ExistsAsync(Sandbox sandbox, CancellationToken cancellationToken) =>
+        (await ListRecordedAsync(sandbox.Owner, cancellationToken)).Contains(sandbox)
+            && (await provider.ListAsync(cancellationToken)).Any(existing => existing.ResourceId == sandbox.ResourceId);
+
     /// <summary>Every Sandbox that is recorded and not recorded destroyed.</summary>
     public Task<IReadOnlyList<Sandbox>> ListRecordedAsync(CancellationToken cancellationToken) =>
         ListUndestroyedAsync(record => true, cancellationToken);

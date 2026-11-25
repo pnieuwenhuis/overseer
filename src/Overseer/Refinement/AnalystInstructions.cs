@@ -45,7 +45,7 @@ internal static class AnalystInstructions
         var latest = sentBack is null
             ? ""
             : $"\n\nThe latest version of the Spec, version {sentBack.Number}, as the human read it when they sent it back "
-                + $"({(sentBack.WrittenBy == SpecAuthor.User ? "they edited it themselves" : "you wrote it")}):\n\n{SpecAsText(sentBack.Spec)}";
+                + $"({(sentBack.WrittenBy == SpecAuthor.User ? "they edited it themselves" : "you wrote it")}):\n\n{SpecText.Of(sentBack.Spec)}";
         var andComments = comments.Count > 0 ? " and the comments with which they sent your Spec back" : "";
         return $"""
             This Refinement began before, in an earlier session of yours that has ended. You start afresh, in a new Sandbox:
@@ -71,35 +71,6 @@ internal static class AnalystInstructions
         need to ask them something first, or with the new Spec, the whole Spec and not only what changed, handed in at {SpecHandIn.FilePath}.
         Keep what the human edited themselves unless their comments say otherwise.
         """;
-
-    /// <summary>A Spec version as Markdown, for the Analyst to read.</summary>
-    private static string SpecAsText(Spec spec)
-    {
-        List<string> sections =
-        [
-            $"## {SpecLabels.Summary}\n\n{spec.Summary}",
-            $"## {SpecLabels.Approach}\n\n{spec.Approach}",
-            $"## {SpecLabels.Decisions}\n\n" + (spec.Decisions.Count == 0
-                ? "None."
-                : string.Join("\n\n", spec.Decisions.Select((decision, index) =>
-                    $"{index + 1}. {(decision.IsAnalystsChoice ? "(Analyst's Choice) " : "")}{decision.Text}"))),
-            $"## {SpecLabels.AcceptanceCriteria}\n\n{spec.AcceptanceCriteria}",
-            $"## {SpecLabels.Dependencies}\n\n{spec.Dependencies}",
-        ];
-        foreach (var (label, text) in new (string, string?)[]
-        {
-            (SpecLabels.ApiEndpointChanges, spec.ApiEndpointChanges), (SpecLabels.DataModelChanges, spec.DataModelChanges), (SpecLabels.UiChanges, spec.UiChanges),
-        })
-        {
-            if (text is not null)
-            {
-                sections.Add($"## {label}\n\n{text}");
-            }
-        }
-        sections.Add($"## {SpecLabels.Tasks}\n\n" + string.Join("\n\n", spec.Tasks.Select(task =>
-            $"### Task {task.Number}: {task.Title}\n\nRole: {task.Role}. Repositories: {string.Join(", ", task.Repositories)}.\n\n{task.Description}")));
-        return string.Join("\n\n", sections);
-    }
 
     /// <summary>The instructions every Analyst session starts with, for the Intent.</summary>
     private static string Instructions(Intent intent, ManifestCheck manifests) =>

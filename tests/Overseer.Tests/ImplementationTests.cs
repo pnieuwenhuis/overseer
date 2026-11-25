@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Net;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Time.Testing;
@@ -680,8 +681,12 @@ public class ImplementationTests(PostgresServer postgres)
     /// <summary>Waits for the Intent's detail page to show its Sandbox prepared.</summary>
     internal static Task<ShownImplementation> ReadyAsync(RunningOverseer overseer, string address) => InPhaseAsync(overseer, address, "Ready");
 
-    /// <summary>Waits for the Intent's detail page to show its implementation failed.</summary>
-    internal static Task<ShownImplementation> FailedAsync(RunningOverseer overseer, string address) => InPhaseAsync(overseer, address, "Failed");
+    /// <summary>Waits for the Intent's detail page to show its implementation failed, with its light red.</summary>
+    internal static Task<ShownImplementation> FailedAsync(RunningOverseer overseer, string address) =>
+        EventuallyAsync(
+            // Both: the page reads the light a moment before where the implementation stands.
+            async () => ImplementationOn(await GetAsync(overseer, address)) is { Phase: "Failed", Light.Colour: "Red" } shown ? shown : null,
+            "the implementation to fail");
 
     internal static Task<ShownImplementation> InPhaseAsync(RunningOverseer overseer, string address, string phase) =>
         EventuallyAsync(
@@ -717,10 +722,14 @@ public class ImplementationTests(PostgresServer postgres)
     /// Captures an Intent with these Repositories in scope, one of them acme/web, and has the Analyst hand in its Spec; gives its
     /// address once it awaits approval and the Analyst's Sandbox is gone.
     /// </summary>
-    internal static async Task<string> AwaitingApprovalAsync(RunningOverseer overseer, string text, params string[] repositories)
+    internal static Task<string> AwaitingApprovalAsync(RunningOverseer overseer, string text, params string[] repositories) =>
+        AwaitingApprovalAsync(overseer, Spec(), text, repositories);
+
+    /// <summary>As <see cref="AwaitingApprovalAsync(RunningOverseer, string, string[])"/>, with this Spec, which suits the repositories.</summary>
+    internal static async Task<string> AwaitingApprovalAsync(RunningOverseer overseer, JsonObject spec, string text, params string[] repositories)
     {
         // Any Intent started afterwards keeps refining.
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(Spec())), new FakeAgentSession(FakeAgentTurn.Endless()));
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(HandsInSpec(spec)), new FakeAgentSession(FakeAgentTurn.Endless()));
         using var saved = await SaveAsync(overseer, text, repositories);
         var address = await AddressAsync(overseer, text);
         using var started = await StartAsync(overseer, address);

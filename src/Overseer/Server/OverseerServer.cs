@@ -75,6 +75,8 @@ public static class OverseerServer
         builder.Services.AddSingleton<Refinements>();
         builder.Services.AddHostedService(services => services.GetRequiredService<Refinements>());
         builder.Services.AddSingleton<SandboxPreparation>();
+        builder.Services.AddSingleton<IntentTasks>();
+        builder.Services.AddSingleton<TaskLoop>();
         builder.Services.AddSingleton<TaskRunner>();
         builder.Services.AddHostedService(services => services.GetRequiredService<TaskRunner>());
 

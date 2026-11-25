@@ -39,8 +39,7 @@ public sealed class SandboxPreparation(
     /// it is destroyed.
     /// </summary>
     /// <param name="entering">Called as each phase begins, with the repository it is about, if it is about one.</param>
-    /// <returns>Why the Sandbox couldn't be prepared, naming the repository at fault if one is; <c>null</c> once it is ready.</returns>
-    public async Task<string?> PrepareAsync(
+    public async Task<SandboxPreparationResult> PrepareAsync(
         Intent intent, Func<ImplementationPhase, RepositoryName?, Task> entering, CancellationToken cancellationToken)
     {
         await entering(ImplementationPhase.ProvisioningSandbox, null);
@@ -53,14 +52,14 @@ public sealed class SandboxPreparation(
         }
         catch (SandboxCreationFailedException exception)
         {
-            return $"The Sandbox could not be created: {exception.Message}";
+            return new SandboxPreparationResult.Failed($"The Sandbox could not be created: {exception.Message}");
         }
         var ready = false;
         try
         {
             var error = await PrepareRepositoriesAsync(sandbox, intent, entering, cancellationToken);
             ready = error is null;
-            return error;
+            return error is null ? new SandboxPreparationResult.Ready(sandbox) : new SandboxPreparationResult.Failed(error);
         }
         finally
         {
@@ -71,6 +70,7 @@ public sealed class SandboxPreparation(
         }
     }
 
+    /// <returns>Why the repositories couldn't be prepared, naming the one at fault if one is; <c>null</c> once they all are.</returns>
     private async Task<string?> PrepareRepositoriesAsync(
         Sandbox sandbox, Intent intent, Func<ImplementationPhase, RepositoryName?, Task> entering, CancellationToken cancellationToken)
     {
@@ -274,4 +274,18 @@ public sealed class SandboxPreparation(
         }
         return $"[…]\n{text[from..]}";
     }
+}
+
+/// <summary>What preparing an Intent's Sandbox came to.</summary>
+public abstract record SandboxPreparationResult
+{
+    private SandboxPreparationResult()
+    {
+    }
+
+    /// <summary>The Sandbox is ready for the Squad.</summary>
+    public sealed record Ready(Sandbox Sandbox) : SandboxPreparationResult;
+
+    /// <summary><paramref name="Error"/> says why it couldn't be prepared, naming the repository at fault if one is.</summary>
+    public sealed record Failed(string Error) : SandboxPreparationResult;
 }

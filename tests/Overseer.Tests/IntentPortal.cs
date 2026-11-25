@@ -32,8 +32,9 @@ public static class IntentPortal
         var overseer = await RunningOverseer.StartAsync(connectionString, environment, logs, time, provider =>
         {
             // A started Intent's Analyst works until the test scripts it otherwise, such as to hand in a Round; so does the Analyst of a
-            // Refinement that continues after a restart.
+            // Refinement that continues after a restart. So does the Squad on a Task, once an Intent is Implementing.
             AnalystKeepsWorking(provider);
+            SquadKeepsWorking(provider);
             sandboxes?.Invoke(provider);
         });
         await overseer.LogInAsync();
@@ -56,6 +57,13 @@ public static class IntentPortal
     /// <summary>Makes every Analyst session from now on work until it is stopped, as a started Intent's Analyst does while it refines.</summary>
     public static void AnalystKeepsWorking(FakeSandboxProvider sandboxes) =>
         sandboxes.ScriptAgentSessions(AgentRole.Analyst, new FakeAgentSession(FakeAgentTurn.Endless()));
+
+    /// <summary>Makes every Designer and Developer session from now on work until it is stopped, so that its Task stays Running.</summary>
+    public static void SquadKeepsWorking(FakeSandboxProvider sandboxes)
+    {
+        sandboxes.ScriptAgentSessions(AgentRole.Designer, new FakeAgentSession(FakeAgentTurn.Endless()));
+        sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(FakeAgentTurn.Endless()));
+    }
 
     /// <summary>Saves this maximum of Active Intents on the Settings page, with the other limits at their defaults.</summary>
     public static Task SetMaxActiveIntentsAsync(RunningOverseer overseer, int maximum) =>

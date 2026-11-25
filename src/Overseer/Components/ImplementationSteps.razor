@@ -30,5 +30,8 @@
         _ => "",
     };
 
-    private string StepClass(ImplementationPhase step) => Steps.ClassOf(Implementation.Phase, step, failed: ImplementationPhase.Failed);
+    // A failure after the Sandbox was prepared, as of a Task's session, leaves these steps done.
+    private string StepClass(ImplementationPhase step) => Steps.ClassOf(
+        Implementation is { Phase: ImplementationPhase.Failed, SandboxPrepared: true } ? ImplementationPhase.Ready : Implementation.Phase,
+        step, failed: ImplementationPhase.Failed);
 }

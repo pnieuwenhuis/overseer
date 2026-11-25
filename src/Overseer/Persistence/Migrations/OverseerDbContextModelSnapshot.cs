@@ -39,9 +39,45 @@ namespace Overseer.Persistence.Migrations
                     b.Property<string>("Repository")
                         .HasColumnType("text");
 
+                    b.Property<string>("SandboxResourceId")
+                        .HasColumnType("text");
+
                     b.HasKey("IntentId");
 
                     b.ToTable("Implementations", (string)null);
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.IntentTaskRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.PrimitiveCollection<List<string>>("Repositories")
+                        .IsRequired()
+                        .HasColumnType("text[]");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("IntentId", "Number");
+
+                    b.ToTable("IntentTasks", (string)null);
                 });
 
             modelBuilder.Entity("Overseer.Intents.IntentRecord", b =>
@@ -397,6 +433,15 @@ namespace Overseer.Persistence.Migrations
                     b.HasOne("Overseer.Intents.IntentRecord", null)
                         .WithOne()
                         .HasForeignKey("Overseer.Implementation.ImplementationRecord", "IntentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.IntentTaskRecord", b =>
+                {
+                    b.HasOne("Overseer.Intents.IntentRecord", null)
+                        .WithMany()
+                        .HasForeignKey("IntentId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

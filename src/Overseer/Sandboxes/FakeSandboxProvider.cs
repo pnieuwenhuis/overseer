@@ -14,6 +14,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     private readonly ConcurrentDictionary<AgentRole, Sequence<FakeAgentSession>> _agentSessions = new();
     private readonly ConcurrentQueue<string> _creationFailures = new();
     private readonly ConcurrentQueue<string> _destructionFailures = new();
+    private readonly ConcurrentQueue<string> _listingFailures = new();
     private readonly ConcurrentQueue<AgentSessionStart> _agentSessionsStarted = new();
     private readonly ConcurrentQueue<AgentMessage> _messagesSent = new();
     private readonly ConcurrentQueue<AgentSessionStart> _agentSessionsStopped = new();
@@ -40,6 +41,9 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     /// test can act meanwhile.
     /// </summary>
     public void HoldDestructions(Task until) => _destructionsHeld = until;
+
+    /// <summary>Makes the next <see cref="ListAsync"/> fail with <paramref name="error"/>.</summary>
+    public void FailNextListing(string error) => _listingFailures.Enqueue(error);
 
     /// <summary>Every Sandbox a destruction was begun of, in the order they were begun, whether or not it succeeded or has ended.</summary>
     public IReadOnlyList<Sandbox> DestructionsBegun => [.. _destructionsBegun];
@@ -213,7 +217,9 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     }
 
     public Task<IReadOnlyList<Sandbox>> ListAsync(CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<Sandbox>>([.. _sandboxes.Values]);
+        _listingFailures.TryDequeue(out var error)
+            ? throw new InvalidOperationException(error)
+            : Task.FromResult<IReadOnlyList<Sandbox>>([.. _sandboxes.Values]);
 
     private void EnsureExists(Sandbox sandbox)
     {
