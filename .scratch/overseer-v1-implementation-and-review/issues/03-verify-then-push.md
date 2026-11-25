@@ -8,12 +8,12 @@ The branch only ever receives verified work, so it is green between Tasks.
 
 **Blocked by:** 02 (Tasks run in order)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] After a turn that ends as done, Overseer runs `build` and `test` for the repositories the Task lists and any other it changed
-- [ ] A Task whose verification passes has its work committed and pushed to the Intent branch of every repository it changed, and only then is it Done and the next one started
-- [ ] A failed verification is sent to the same agent session with the command and its output, and verification runs again after its next turn
-- [ ] After the configured number of attempts the Task is Failed, the Intent turns red, nothing is pushed and no further Task runs
-- [ ] Each attempt and its verification output are kept in PostgreSQL, and the detail page shows them for a Task
-- [ ] A push that fails turns the Intent red with GitHub's error, and Retry tries again; the Task is not Done until the push succeeds
-- [ ] Covered by tests through the application, including "tests fail twice, then pass" and a Task that never passes
+- [x] After a turn that ends as done, Overseer runs `build` and `test` for the repositories the Task lists and any other it changed
+- [x] A Task whose verification passes has its work committed and pushed to the Intent branch of every repository it changed, and only then is it Done and the next one started
+- [x] A failed verification is sent to the same agent session with the command and its output, and verification runs again after its next turn
+- [x] After the configured number of attempts the Task is Failed, the Intent turns red, nothing is pushed and no further Task runs
+- [x] Each attempt and its verification output are kept in PostgreSQL, and the detail page shows them for a Task
+- [x] A push that fails turns the Intent red with GitHub's error, and Retry tries again; the Task is not Done until the push succeeds
+- [x] Covered by tests through the application, including "tests fail twice, then pass" and a Task that never passes
