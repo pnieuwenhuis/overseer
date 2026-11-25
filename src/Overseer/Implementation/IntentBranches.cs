@@ -252,10 +252,11 @@ public sealed class IntentBranches(RepositoryCommands commands)
     }
 
     /// <summary>
-    /// Pushes the Intent branch to GitHub, after which what it holds counts as verified. Pushing it again changes nothing.
+    /// Pushes the Intent branch to GitHub, never by force, after which what it holds counts as verified. Pushing it again changes
+    /// nothing.
     /// </summary>
-    /// <returns>Why it couldn't be pushed, with what GitHub said; <c>null</c> once it is.</returns>
-    public async Task<string?> PushAsync(
+    /// <returns>Why it couldn't be pushed; <c>null</c> once it is.</returns>
+    public async Task<PushFailure?> PushAsync(
         Sandbox sandbox, RepositoryName repository, string branch, CancellationToken cancellationToken)
     {
         var reference = ShellText.Quoted($"refs/heads/{branch}");
@@ -265,6 +266,18 @@ public sealed class IntentBranches(RepositoryCommands commands)
             git update-ref {Verified} {reference}
             """;
         var run = await commands.RunAsync(sandbox, repository, script, RepositoryCommands.GitLimit, cancellationToken);
-        return run.ErrorOf($"Pushing the Intent branch {branch} of {repository}");
+        // git push ends with 1 when what is pushed is refused: by GitHub, as where its branch holds commits the clone's doesn't or
+        // a rule forbids it, or by a pre-push hook. It ends otherwise when it doesn't get that far, as when GitHub rejects the
+        // credentials or can't be reached.
+        return run.ErrorOf($"Pushing the Intent branch {branch} of {repository}") is { } error
+            ? new PushFailure(error, Rejected: run is CommandRun.Failed { ExitCode: 1 })
+            : null;
     }
 }
+
+/// <summary>A push that didn't go through.</summary>
+/// <param name="Error">Why, with what GitHub said.</param>
+/// <param name="Rejected">
+/// Whether what was pushed was refused, so that pushing the same again would be too; otherwise pushing it later can succeed.
+/// </param>
+public sealed record PushFailure(string Error, bool Rejected);

@@ -68,6 +68,9 @@ namespace Overseer.Persistence.Migrations
                     b.Property<bool>("IsFixUp")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("RejectedPush")
+                        .HasColumnType("text");
+
                     b.PrimitiveCollection<List<string>>("Repositories")
                         .IsRequired()
                         .HasColumnType("text[]");

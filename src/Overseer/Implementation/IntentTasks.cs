@@ -51,7 +51,7 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
 
     /// <summary>
     /// Records that the Task's work passed verification and is committed, so that what is left is pushing the Intent branch of
-    /// these repositories, the ones it changed.
+    /// these repositories, the ones it changed. A push rejected before is dealt with by then.
     /// </summary>
     public async Task AwaitPushAsync(Guid intentId, int number, IReadOnlyList<RepositoryName> changed, CancellationToken cancellationToken)
     {
@@ -59,7 +59,28 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         await database.IntentTasks
             .Where(task => task.IntentId == intentId && task.Number == number)
-            .ExecuteUpdateAsync(task => task.SetProperty(record => record.AwaitingPush, repositories), cancellationToken);
+            .ExecuteUpdateAsync(
+                task => task
+                    .SetProperty(record => record.AwaitingPush, repositories)
+                    .SetProperty(record => record.RejectedPush, (string?)null),
+                cancellationToken);
+    }
+
+    /// <summary>
+    /// Records that pushing the Task's verified work was rejected, with <paramref name="error"/>: it is no longer waiting to be
+    /// pushed, but for an agent to work on the Task again.
+    /// </summary>
+    public async Task RejectPushAsync(Guid intentId, int number, string error, CancellationToken cancellationToken)
+    {
+        var stored = StorableText.Of(error);
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await database.IntentTasks
+            .Where(task => task.IntentId == intentId && task.Number == number)
+            .ExecuteUpdateAsync(
+                task => task
+                    .SetProperty(record => record.AwaitingPush, (List<string>?)null)
+                    .SetProperty(record => record.RejectedPush, stored),
+                cancellationToken);
     }
 
     /// <summary>Records that the Task is Done: its work is verified and pushed.</summary>
@@ -76,8 +97,8 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
     }
 
     /// <summary>
-    /// Forgets the verified work of the Intent's Tasks that is yet to be pushed, because the Sandbox that held it is gone: the Task
-    /// it was of is carried out again.
+    /// Forgets the work of the Intent's Tasks that is yet to be pushed, or whose push was rejected, because the Sandbox that held
+    /// it is gone: the Task it was of is carried out again.
     /// </summary>
     public Task ForgetUnpushedAsync(Guid intentId, CancellationToken cancellationToken) =>
         ForgetUnpushedAsync(task => task.IntentId == intentId, cancellationToken);
@@ -90,8 +111,12 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         await database.IntentTasks
             .Where(whose)
-            .Where(task => task.AwaitingPush != null)
-            .ExecuteUpdateAsync(task => task.SetProperty(record => record.AwaitingPush, (List<string>?)null), cancellationToken);
+            .Where(task => task.AwaitingPush != null || task.RejectedPush != null)
+            .ExecuteUpdateAsync(
+                task => task
+                    .SetProperty(record => record.AwaitingPush, (List<string>?)null)
+                    .SetProperty(record => record.RejectedPush, (string?)null),
+                cancellationToken);
     }
 
     /// <summary>
@@ -185,7 +210,7 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
 
     private static IntentTask Read(IntentTaskRecord task) => new(
         task.Number, task.Title, task.Description, task.Role, [.. task.Repositories.Select(RepositoryName.Parse)], task.State,
-        task.AwaitingPush?.Select(RepositoryName.Parse).ToList(), task.IsFixUp);
+        task.AwaitingPush?.Select(RepositoryName.Parse).ToList(), task.RejectedPush, task.IsFixUp);
 }
 
 /// <summary>A Task of an Intent's own Task list, numbered in the order the Tasks are carried out, from 1.</summary>
@@ -196,12 +221,15 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
 /// Once its work has passed verification and until it is Done: the repositories it changed, whose Intent branch is still to be
 /// pushed. <c>null</c> otherwise.
 /// </param>
+/// <param name="RejectedPush">
+/// Why pushing its verified work was rejected, until an agent's work on it passes verification again; <c>null</c> otherwise.
+/// </param>
 /// <param name="IsFixUp">
 /// Whether it is the fix-up Task, added to make the final verification pass: the full verification is what verifies it.
 /// </param>
 public sealed record IntentTask(
     int Number, string Title, string Description, AgentRole Role, IReadOnlyList<RepositoryName> Repositories, IntentTaskState State,
-    IReadOnlyList<RepositoryName>? AwaitingPush, bool IsFixUp);
+    IReadOnlyList<RepositoryName>? AwaitingPush, string? RejectedPush, bool IsFixUp);
 
 public enum IntentTaskState
 {
@@ -239,6 +267,9 @@ public sealed class IntentTaskRecord
     /// the Task not yet Done.
     /// </summary>
     public List<string>? AwaitingPush { get; set; }
+
+    /// <summary>Why pushing its verified work was rejected, until work on it passes verification again.</summary>
+    public string? RejectedPush { get; set; }
 
     /// <summary>Whether it is the fix-up Task, which the failure of a final verification added.</summary>
     public bool IsFixUp { get; init; }

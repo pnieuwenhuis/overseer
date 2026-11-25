@@ -10,7 +10,8 @@ internal static class TaskInstructions
 {
     /// <summary>
     /// The first message of a Task's session: the instructions of the Task's role, the Intent's Approved Spec, and the Task the
-    /// session is for, with the repositories it touches; and, when the Task's last verification failed, how.
+    /// session is for, with the repositories it touches; and, when the Task's last verification failed, how, or when pushing its
+    /// work was rejected, why.
     /// </summary>
     /// <param name="task">A Task of the Intent's own Task list, which may differ from the Approved Spec's.</param>
     /// <param name="taskCount">How many Tasks the Intent has.</param>
@@ -62,7 +63,8 @@ internal static class TaskInstructions
 
         Repositories it touches: {string.Join(", ", task.Repositories)}
 
-        {task.Description}{(failedLast.Count == 0 ? "" : $"\n\n{LastFailure(failedLast)}")}
+        {task.Description}{(failedLast.Count == 0 ? "" : $"\n\n{LastFailure(failedLast)}")}{(
+            task.RejectedPush is { } rejection ? $"\n\n{Rejected(rejection, intent.Branch)}" : "")}
         """;
 
     /// <summary>What a new session on a Task is told about the verification that failed before it.</summary>
@@ -73,6 +75,26 @@ internal static class TaskInstructions
         The last time Overseer verified work on your Task, before your session, it failed. Your work has to pass where that didn't.
 
         {FailuresOf(failed)}
+        """;
+
+    /// <summary>What a new session on a Task is told about the push of its work that was rejected.</summary>
+    private static string Rejected(string error, string branch) =>
+        $"""
+        # The push was rejected
+
+        Work on your Task passed verification and was committed, but pushing it was rejected, so GitHub doesn't have it:
+
+        {Fenced(error)}
+
+        Deal with what rejected it, in the repository named there:
+
+        - Where the Intent branch on GitHub holds commits that yours doesn't, as when someone else pushed to it, or a commit that
+          was on GitHub already has been amended or rebased, run `git fetch origin` and merge `origin/{branch}` into your
+          branch. Keep every commit that is on GitHub as it is: Overseer will never force push.
+        - Where a hook or a rule of the repository refused the work, change what it objects to. You may rewrite commits that aren't
+          on GitHub yet where it objects to those.
+
+        Leave pushing to Overseer, which verifies your work again and then pushes it.
         """;
 
     /// <summary>What a Task's session is told when its work failed verification, for it to fix.</summary>

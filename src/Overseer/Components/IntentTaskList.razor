@@ -17,6 +17,10 @@
                     {
                         <span class="intent-task-push">Verified, not pushed yet</span>
                     }
+                    else if (task.RejectedPush is not null)
+                    {
+                        <span class="intent-task-push">Push rejected: an agent has to deal with it</span>
+                    }
                 </p>
                 @{
                     var attempts = Attempts.Where(attempt => attempt.TaskNumber == task.Number).ToList();

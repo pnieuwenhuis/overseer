@@ -515,10 +515,85 @@ public class VerificationTests(PostgresServer postgres)
         Assert.DoesNotContain("Verified, not pushed yet", await GetAsync(overseer, address));
     }
 
+    [Fact]
+    public async Task A_rejected_push_puts_the_Task_back_to_Pending_for_a_new_agent_that_is_told_why_and_what_it_then_does_is_verified_and_pushed()
+    {
+        await using var overseer = await StartAsync("acme/web");
+        var integrating = new TaskCompletionSource();
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Developer,
+            DoneAtOnce(),
+            new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = integrating.Task }));
+        Changes(overseer, "acme/web", "src/orders.ts");
+        const string rejection = "! [rejected]        overseer -> overseer (fetch first)\nerror: failed to push some refs";
+        overseer.Sandboxes.ScriptCommandsContaining("git push", new CommandResult(1, rejection), Passes);
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        var failed = await ImplementationTests.FailedAsync(overseer, address);
+        var branch = $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}";
+        Assert.Equal($"Pushing the Intent branch {branch} of acme/web failed with exit code 1:\n{rejection}", failed.Status);
+        // Not a Failed Task: it is back to Pending, for an agent to deal with.
+        await StatesAsync(overseer, address, "Pending");
+        var page = await GetAsync(overseer, address);
+        Assert.Equal("Push rejected: an agent has to deal with it", ElementText(page, "intent-task-push"));
+        var sandbox = Assert.Single(await overseer.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
+        Assert.DoesNotContain("# The push was rejected", Assert.Single(SquadMessages(overseer)).Message);
+
+        using var retried = await ImplementationTests.RetryAsync(overseer, address);
+
+        var message = (await SquadMessagesAsync(overseer, 2))[1];
+        // In the same Sandbox, which holds the work.
+        Assert.Equal(sandbox, message.Sandbox);
+        Assert.Contains("# The push was rejected", message.Message);
+        Assert.Contains(rejection.ReplaceLineEndings("\n"), message.Message.ReplaceLineEndings("\n"));
+        Assert.Contains($"git fetch origin", message.Message);
+        Assert.Contains($"merge `origin/{branch}`", message.Message);
+        Assert.Contains("never force push", message.Message);
+        // Nothing is pushed again before the agent is done.
+        Assert.Single(CommandsIn(overseer, "acme/web"), command => command.Contains("git push"));
+
+        integrating.SetResult();
+
+        await FinalVerificationTests.InReviewAsync(overseer, address);
+        await StatesAsync(overseer, address, "Done");
+        Assert.Equal(
+            ["Run 1, attempt 1: passed.", "Run 2, attempt 1: passed."],
+            AttemptsOn(await GetAsync(overseer, address), 1).Select(attempt => attempt.Heading));
+        Assert.Equal(2, CommandsIn(overseer, "acme/web").Count(command => command.Contains("git push")));
+        Assert.DoesNotContain("--force", string.Concat(CommandsIn(overseer, "acme/web").Where(command => command.Contains("git push"))));
+        Assert.DoesNotContain("Push rejected", await GetAsync(overseer, address));
+    }
+
+    [Fact]
+    public async Task A_session_after_a_rejected_push_that_breaks_off_leaves_the_next_one_told_of_it_too()
+    {
+        await using var overseer = await StartAsync("acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Developer,
+            DoneAtOnce(),
+            new FakeAgentSession { StartFailure = "opencode is not installed." },
+            new FakeAgentSession(FakeAgentTurn.Endless()));
+        Changes(overseer, "acme/web", "src/orders.ts");
+        overseer.Sandboxes.ScriptCommandsContaining("git push", new CommandResult(1, "pre-push hook declined"));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        await ImplementationTests.FailedAsync(overseer, address);
+        using var retried = await ImplementationTests.RetryAsync(overseer, address);
+        await EventuallyAsync(
+            async () => ImplementationTests.ImplementationOn(await GetAsync(overseer, address)) is { Phase: "Failed", Status: var status }
+                && status.Contains("opencode is not installed") ? status : null,
+            "the session to fail");
+
+        using var again = await ImplementationTests.RetryAsync(overseer, address);
+
+        Assert.Contains("pre-push hook declined", (await SquadMessagesAsync(overseer, 2))[1].Message);
+    }
+
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Verified_work_that_was_never_pushed_is_lost_with_its_Sandbox_and_Retry_carries_the_Task_out_again(bool restarted)
+    [InlineData(false, 128)]
+    [InlineData(true, 128)]
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    public async Task Verified_work_that_was_never_pushed_is_lost_with_its_Sandbox_and_Retry_carries_the_Task_out_again(
+        bool restarted, int pushExitCode)
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"]);
@@ -527,7 +602,7 @@ public class VerificationTests(PostgresServer postgres)
         {
             overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneAtOnce());
             Changes(overseer, "acme/web", "src/orders.ts");
-            overseer.Sandboxes.ScriptCommandsContaining("git push", new CommandResult(128, "refused"));
+            overseer.Sandboxes.ScriptCommandsContaining("git push", new CommandResult(pushExitCode, "refused"));
             var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
             await ImplementationTests.FailedAsync(overseer, address);
             var old = Assert.Single(await overseer.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
@@ -550,6 +625,8 @@ public class VerificationTests(PostgresServer postgres)
             var message = await EventuallyAsync(
                 () => Task.FromResult(SquadMessages(overseer).LastOrDefault(message => message.Sandbox != old)), "the Task to be carried out again");
             Assert.Contains("Your Task is Task 1 of 1", message.Message);
+            // What was rejected went with the Sandbox that held it.
+            Assert.DoesNotContain("# The push was rejected", message.Message);
             Assert.True(SquadSessionsStarted(overseer).Count > sessions);
         }
         finally

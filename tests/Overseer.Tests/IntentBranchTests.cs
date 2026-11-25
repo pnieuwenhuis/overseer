@@ -202,6 +202,64 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
     }
 
     [Fact]
+    public async Task A_push_that_is_rejected_ends_with_1_and_one_that_cant_reach_GitHub_with_another_code()
+    {
+        var commands = await CommandsOverseerRunsAsync();
+        var clone = Clone();
+        Run(clone, commands.CheckOut);
+        Commit(clone, commands, "untracked.txt", "new");
+        // A hook of the repository's own, whatever it ends with.
+        Write(clone, ".git/hooks/pre-push", "#!/bin/sh\necho 'refused by the hook'\nexit 7\n");
+        Run(clone, "chmod +x .git/hooks/pre-push");
+
+        var hooked = Execute(clone, commands.Push);
+
+        Assert.Equal(1, hooked.ExitCode);
+        Assert.Contains("refused by the hook", hooked.Output);
+        File.Delete(Path.Combine(clone, ".git", "hooks", "pre-push"));
+        Run(clone, commands.Push);
+        // A commit that was pushed is amended.
+        Git(clone, "commit --quiet --amend -m 'Amended'");
+        Assert.Equal(1, Execute(clone, commands.Push).ExitCode);
+
+        Git(clone, $"remote set-url origin '{Path.Combine(_directory, "nowhere.git")}'");
+        Assert.Equal(128, Execute(clone, commands.Push).ExitCode);
+    }
+
+    [Fact]
+    public async Task What_someone_else_pushed_to_the_Intent_branch_is_merged_in_and_pushed_without_force()
+    {
+        var commands = await CommandsOverseerRunsAsync();
+        var clone = Clone();
+        Run(clone, commands.CheckOut);
+        Commit(clone, commands, "first.txt", "first");
+        Run(clone, commands.Push);
+        var other = Path.Combine(_directory, "other");
+        Git(_directory, $"clone --quiet --branch {commands.IntentBranch} origin.git other");
+        Write(other, "theirs.txt", "by someone else");
+        Git(other, "add --all");
+        Git(other, "commit --quiet -m 'By someone else'");
+        Git(other, "push --quiet");
+        Commit(clone, commands, "ours.txt", "ours");
+        Assert.Equal(1, Execute(clone, commands.Push).ExitCode);
+        // As the agent is told to, here leaving the merge for Overseer to commit.
+        Git(clone, "fetch --quiet origin");
+        Git(clone, $"merge --quiet --no-commit --no-ff origin/{commands.IntentBranch}");
+
+        Assert.Equal(["ours.txt", "theirs.txt"], ChangedFiles(clone, commands).Order(StringComparer.Ordinal));
+        Run(clone, commands.Commit);
+        Run(clone, commands.Push);
+
+        var origin = Path.Combine(_directory, "origin.git");
+        Assert.Equal(
+            "first.txt\nours.txt\ntheirs.txt",
+            string.Join('\n', Git(origin, $"ls-tree --name-only {commands.IntentBranch}").Split('\n').Where(file => file.EndsWith("s.txt") || file == "first.txt")));
+        // A merge: nothing either side had is gone.
+        Assert.Equal(2, Git(clone, "log -1 --format=%P").Split(' ').Length);
+        Assert.Empty(ChangedFiles(clone, commands));
+    }
+
+    [Fact]
     public async Task A_push_GitHub_refuses_leaves_the_work_unverified_and_says_why()
     {
         var commands = await CommandsOverseerRunsAsync();
@@ -329,6 +387,14 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
     }
 
     private IReadOnlyList<string> ChangedFiles(string clone, Commands commands) => Files(clone, commands.ChangedFiles);
+
+    /// <summary>Writes a file, and has Overseer take the work and commit it, as for a Task that passed verification.</summary>
+    private void Commit(string clone, Commands commands, string file, string content)
+    {
+        Write(clone, file, content);
+        ChangedFiles(clone, commands);
+        Run(clone, commands.Commit);
+    }
 
     /// <summary>The files a command that asks git for some prints.</summary>
     private IReadOnlyList<string> Files(string clone, string command) =>

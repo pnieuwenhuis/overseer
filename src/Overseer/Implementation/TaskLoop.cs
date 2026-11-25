@@ -20,7 +20,7 @@ public sealed class TaskLoop(
 {
     /// <summary>
     /// Carries out the Intent's Tasks that aren't Done until none is left, or one can't be finished. A Task whose verified work
-    /// couldn't be pushed before is only pushed.
+    /// couldn't be pushed before is only pushed, unless the push was rejected: then an agent works on it again, told why.
     /// </summary>
     /// <param name="changed">Called whenever a Task changes, once the change is committed.</param>
     /// <returns>
@@ -80,7 +80,14 @@ public sealed class TaskLoop(
         {
             if (await branches.PushAsync(sandbox, repository, intent.Branch, cancellationToken) is { } notPushed)
             {
-                return notPushed;
+                if (notPushed.Rejected)
+                {
+                    // Pushing the same again would be rejected again: the Task's next run has an agent deal with it.
+                    await tasks.RejectPushAsync(
+                        intent.Id, task.Number, await commands.RedactedAsync(notPushed.Error, cancellationToken), cancellationToken);
+                    changed();
+                }
+                return notPushed.Error;
             }
         }
         return null;
