@@ -68,13 +68,13 @@ public sealed class SessionLogs(SandboxRegistry sandboxes, IDbContextFactory<Ove
     public async Task<string?> SendMessageAsync(
         Guid intentId, int taskNumber, int session, string message, CancellationToken cancellationToken)
     {
-        var text = StorableText.Of(message).Trim().ReplaceLineEndings("\n");
-        if (text.Length == 0)
+        var written = StorableText.OfWritten(message);
+        if (written.Length == 0)
         {
             return "A message needs text: write what the agent should know.";
         }
         return _open.TryGetValue((intentId, taskNumber), out var log) && log.Number == session
-            && await log.TryTakeOnAsync(text, cancellationToken)
+            && await log.TryTakeOnAsync(await sandboxes.WithoutSecretsAsync(written, cancellationToken), cancellationToken)
                 ? null
                 : "The agent session it was written to takes no more messages: it has ended, or its work has passed verification.";
     }
@@ -204,7 +204,7 @@ public sealed class SessionLog : IAsyncDisposable
     }
 
     /// <summary>Takes on a message for the session's agent, unless the log takes no more.</summary>
-    /// <param name="text">The message, which may be stored once secrets are taken out of it.</param>
+    /// <param name="text">The message, as <see cref="SandboxRegistry.WithoutSecretsAsync"/> gives it.</param>
     internal async Task<bool> TryTakeOnAsync(string text, CancellationToken cancellationToken)
     {
         await _inbox.WaitAsync(cancellationToken);
@@ -214,7 +214,7 @@ public sealed class SessionLog : IAsyncDisposable
             {
                 return false;
             }
-            var message = new SentMessage(_messages + 1, Redaction.Without(text, _sandboxes.SecretsGiven));
+            var message = new SentMessage(_messages + 1, text);
             await using var database = await _databases.CreateDbContextAsync(cancellationToken);
             database.UndeliveredMessages.Add(new UndeliveredMessageRecord
             {

@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Net;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
+using Overseer.Implementation;
 using Overseer.Sandboxes;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
@@ -420,6 +422,45 @@ public class AgentMessageTests(PostgresServer postgres)
         var messages = await SquadMessagesAsync(overseer, 2);
         Assert.DoesNotContain(Token, messages[1].Message);
         await StreamAsync(overseer, task, Delivered("Use *** to fetch."));
+        Assert.DoesNotContain(await overseer.DumpDatabaseAsync(), table => table.Contains(Token));
+    }
+
+    [Fact]
+    public async Task A_message_never_keeps_a_token_saved_in_Settings_a_moment_ago_also_before_anything_has_used_it()
+    {
+        const string saved = "sk-gateway-0123456789abcdef";
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(FakeAgentTurn.Endless()));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        var task = address + "/tasks/1";
+        await BoxAsync(overseer, task);
+        // Saved after the session started, so no agent was given it.
+        await SessionLogTests.SaveProviderTokenAsync(overseer, saved);
+
+        using var sent = await SendAsync(overseer, task, session: 1, $"Use {saved}.");
+
+        Assert.Equal([Waiting("Use ***.")], StreamOn(await GetAsync(overseer, task)));
+        Assert.DoesNotContain(await overseer.DumpDatabaseAsync(), table => table.Contains(saved));
+    }
+
+    [Fact]
+    public async Task What_cant_be_stored_is_gone_from_a_message_before_it_is_checked_for_text_and_secrets()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(FakeAgentTurn.Endless()));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        var task = address + "/tasks/1";
+        await BoxAsync(overseer, task);
+        // The Portal's form takes no NUL, so the application is given the message directly.
+        var logs = overseer.Services.GetRequiredService<SessionLogs>();
+        Task<string?> Send(string message) =>
+            logs.SendMessageAsync(Guid.Parse(address.Split('/')[^1]), 1, session: 1, message, TestContext.Current.CancellationToken);
+
+        Assert.Equal("A message needs text: write what the agent should know.", await Send("\0 \r\n\0"));
+        // A NUL splits the token, and without it the token is whole again.
+        Assert.Null(await Send($"\0 Use {Token[..12]}\0{Token[12..]}. \0"));
+
+        Assert.Equal([Waiting("Use ***.")], StreamOn(await GetAsync(overseer, task)));
         Assert.DoesNotContain(await overseer.DumpDatabaseAsync(), table => table.Contains(Token));
     }
 

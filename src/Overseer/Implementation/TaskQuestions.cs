@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Intents;
 using Overseer.Persistence;
+using Overseer.Sandboxes;
 
 namespace Overseer.Implementation;
 
@@ -10,7 +11,7 @@ namespace Overseer.Implementation;
 /// answer, the implementation is <see cref="ImplementationPhase.AwaitingAnswer"/>, which is what makes it open: one whose session
 /// ended without an answer, as when Overseer restarted, stays unanswered.
 /// </summary>
-public sealed class TaskQuestions(IDbContextFactory<OverseerDbContext> databases, TimeProvider time)
+public sealed class TaskQuestions(SandboxRegistry sandboxes, IDbContextFactory<OverseerDbContext> databases, TimeProvider time)
 {
     /// <summary>The sessions waiting for an answer, by Intent, each completed with it.</summary>
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource<string>> _waiting = new();
@@ -19,9 +20,9 @@ public sealed class TaskQuestions(IDbContextFactory<OverseerDbContext> databases
     /// Puts the question the Task's agent ended its turn with to the human, which leaves the implementation awaiting their answer,
     /// and waits for it, for as long as that takes: unlike a Refinement, an implementation has no idle timeout.
     /// </summary>
-    /// <param name="question">Without any secret.</param>
+    /// <param name="question">As <see cref="SandboxRegistry.WithoutSecretsAsync"/> gives it.</param>
     /// <param name="changed">Called once the question is committed.</param>
-    /// <returns>The human's answer.</returns>
+    /// <returns>The human's answer, without any secret.</returns>
     public async Task<string> AskAsync(
         Guid intentId, int taskNumber, string question, Action changed, CancellationToken cancellationToken)
     {
@@ -41,7 +42,7 @@ public sealed class TaskQuestions(IDbContextFactory<OverseerDbContext> databases
                     IntentId = intentId,
                     Number = latest + 1,
                     TaskNumber = taskNumber,
-                    Question = StorableText.Of(question),
+                    Question = question,
                     AskedAt = time.GetUtcNow(),
                 });
                 await database.SaveChangesAsync(cancellationToken);
@@ -63,17 +64,19 @@ public sealed class TaskQuestions(IDbContextFactory<OverseerDbContext> databases
 
     /// <summary>
     /// Records the human's answer to the question a session waits on, which leaves the implementation ready again, and hands it to
-    /// that session. Refused unless that question awaits its answer now, so an answer is taken only once.
+    /// that session. Refused unless that question awaits its answer now, so an answer is taken only once. A secret in it is
+    /// replaced by <c>***</c>, in what is kept and in what the agent gets.
     /// </summary>
     /// <param name="number">The question's number among the Intent's.</param>
     /// <returns>Why the answer was refused; <c>null</c> when it is recorded and on its way to the agent.</returns>
     public async Task<string?> AnswerAsync(Guid intentId, int number, string answer, CancellationToken cancellationToken)
     {
-        var stored = StorableText.Of(answer.Trim().ReplaceLineEndings("\n"));
-        if (stored.Length == 0)
+        var written = StorableText.OfWritten(answer);
+        if (written.Length == 0)
         {
             return "An answer needs text: write what the agent should know.";
         }
+        var stored = await sandboxes.WithoutSecretsAsync(written, cancellationToken);
         await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);

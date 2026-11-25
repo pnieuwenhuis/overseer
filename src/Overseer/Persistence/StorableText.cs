@@ -17,4 +17,12 @@ public static class StorableText
     public static string? Of(string? text) =>
         // Encoding and decoding again replaces what UTF-8 can't hold.
         text is null ? null : Encoding.UTF8.GetString(Encoding.UTF8.GetBytes(text.Replace("\0", "")));
+
+    /// <summary>
+    /// What a human wrote in a box on a page, as it is kept: storable, without the blanks around it, and with <c>\n</c> between its
+    /// lines. Empty when they wrote nothing.
+    /// </summary>
+    public static string OfWritten(string written) =>
+        // Made storable first, as taking characters out afterwards could leave blanks around it.
+        Of(written).Trim().ReplaceLineEndings("\n");
 }

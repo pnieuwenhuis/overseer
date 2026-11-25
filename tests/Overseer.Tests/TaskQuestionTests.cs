@@ -1,7 +1,10 @@
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
+using Overseer.Implementation;
 using Overseer.Sandboxes;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
+using static Overseer.Tests.SessionLogTests;
 using static Overseer.Tests.TaskTests;
 
 namespace Overseer.Tests;
@@ -273,6 +276,94 @@ public class TaskQuestionTests(PostgresServer postgres)
         var page = await AskedAsync(overseer, address);
         Assert.Equal("git said: Bearer *** was refused. Now what?", Assert.Single(QuestionsOn(page, task: 1)).Text);
         Assert.DoesNotContain(await overseer.DumpDatabaseAsync(), table => table.Contains(RepositorySetupPortal.Token));
+    }
+
+    [Theory]
+    [InlineData(ProviderToken)]
+    // A NUL splits the token, and PostgreSQL takes no NUL: without it the token is whole again.
+    [InlineData("github_pat_11\0WORKING0123456789")]
+    [InlineData("sk-gateway-\00123456789abcdef")]
+    public async Task A_question_never_puts_a_secret_on_the_page_or_in_the_database_however_the_agent_writes_it(string written)
+    {
+        await using var overseer = await StartAsync("acme/web");
+        await SaveProviderTokenAsync(overseer, ProviderToken);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(Asks($"Is {written} still valid?")));
+
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+
+        var page = await AskedAsync(overseer, address);
+        Assert.Equal("Is *** still valid?", Assert.Single(QuestionsOn(page, task: 1)).Text);
+        await AssertNoSecretKeptAsync(overseer, ProviderToken, RepositorySetupPortal.Token);
+    }
+
+    [Theory]
+    [InlineData(ProviderToken)]
+    [InlineData(RepositorySetupPortal.Token)]
+    public async Task An_answer_never_puts_a_secret_on_the_page_or_in_the_database_or_in_front_of_the_agent(string written)
+    {
+        await using var overseer = await StartAsync("acme/web");
+        await SaveProviderTokenAsync(overseer, ProviderToken);
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(Asks("Which key?"), FakeAgentTurn.Endless()));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        await AskedAsync(overseer, address);
+
+        using var answered = await AnswerAsync(overseer, address, 1, $"Use {written}.");
+
+        var messages = await SquadMessagesAsync(overseer, 2);
+        Assert.Contains("Use ***.", messages[1].Message);
+        Assert.Equal("Use ***.", Assert.Single(QuestionsOn(await GetAsync(overseer, address), task: 1)).Answer);
+        await AssertNoSecretKeptAsync(overseer, ProviderToken, RepositorySetupPortal.Token);
+    }
+
+    [Fact]
+    public async Task A_token_saved_in_Settings_a_moment_ago_is_taken_out_of_an_answer_also_before_anything_has_used_it()
+    {
+        const string gitHubToken = "github_pat_11REPLACEMENT9876543210";
+        const string providerToken = "sk-gateway-REPLACEMENT";
+        await using var overseer = await StartAsync("acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(Asks("Which keys?"), FakeAgentTurn.Endless()));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        await AskedAsync(overseer, address);
+        overseer.GitHub.AcceptToken(gitHubToken, "octocat");
+        using var saved = await overseer.SubmitFormAsync(
+            "/settings", "github-token", new Dictionary<string, string> { ["GitHubToken"] = gitHubToken });
+        await SaveProviderTokenAsync(overseer, providerToken);
+
+        using var answered = await AnswerAsync(overseer, address, 1, $"{gitHubToken} and {providerToken}.");
+
+        Assert.Contains("*** and ***.", (await SquadMessagesAsync(overseer, 2))[1].Message);
+        await AssertNoSecretKeptAsync(overseer, gitHubToken, providerToken);
+    }
+
+    [Fact]
+    public async Task What_cant_be_stored_is_gone_from_an_answer_before_it_is_checked_for_text_and_secrets()
+    {
+        await using var overseer = await StartAsync("acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(Asks("Which key?"), FakeAgentTurn.Endless()));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        await AskedAsync(overseer, address);
+        // The Portal's form takes no NUL, so the application is given the answer directly.
+        var runner = overseer.Services.GetRequiredService<TaskRunner>();
+        Task<string?> Answer(string answer) =>
+            runner.AnswerAsync(Guid.Parse(address.Split('/')[^1]), 1, answer, TestContext.Current.CancellationToken);
+
+        Assert.Equal("An answer needs text: write what the agent should know.", await Answer("\0 \r\n\0"));
+        const string token = RepositorySetupPortal.Token;
+        // A NUL splits the token, and without it the token is whole again.
+        Assert.Null(await Answer($"\0 Use {token[..12]}\0{token[12..]}. \0"));
+
+        Assert.Contains("\n\nUse ***.\n\n", (await SquadMessagesAsync(overseer, 2))[1].Message.ReplaceLineEndings("\n"));
+        Assert.Equal("Use ***.", Assert.Single(QuestionsOn(await GetAsync(overseer, address), task: 1)).Answer);
+        await AssertNoSecretKeptAsync(overseer, token);
+    }
+
+    private const string ProviderToken = "sk-gateway-0123456789abcdef";
+
+    private static async Task AssertNoSecretKeptAsync(RunningOverseer overseer, params string[] secrets)
+    {
+        // No application seam can show what a database does not hold, so this reads it directly.
+        var tables = await overseer.DumpDatabaseAsync();
+        Assert.All(secrets, secret => Assert.DoesNotContain(tables, table => table.Contains(secret)));
     }
 
     /// <summary>Overseer with these repositories configured, each with a Repository Manifest in every Sandbox that holds it.</summary>

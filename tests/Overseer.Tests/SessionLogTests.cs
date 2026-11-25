@@ -221,7 +221,7 @@ public class SessionLogTests(PostgresServer postgres)
 
     private const string ProviderToken = "sk-gateway-0123456789abcdef";
 
-    private static async Task SaveProviderTokenAsync(RunningOverseer overseer, string token)
+    internal static async Task SaveProviderTokenAsync(RunningOverseer overseer, string token)
     {
         using var response = await overseer.SubmitFormAsync("/settings", "provider-token", new Dictionary<string, string>
         {
@@ -268,7 +268,13 @@ public class SessionLogTests(PostgresServer postgres)
     private static Task<string> TaskPageAsync(
         RunningOverseer overseer, string address, Func<IReadOnlyList<ShownSession>, bool> expected) =>
         EventuallyAsync(
-            async () => await GetAsync(overseer, address) is var page && expected(SessionsOn(page)) ? page : null,
+            async () =>
+            {
+                // The Intent has no Tasks, nor pages of them, until its implementation takes it up.
+                using var response = await overseer.Http.GetAsync(address, TestContext.Current.CancellationToken);
+                var page = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+                return response.IsSuccessStatusCode && expected(SessionsOn(page)) ? page : null;
+            },
             "the Task's page to show its sessions");
 
     /// <summary>The agent sessions a Task's page shows, in its order.</summary>

@@ -179,8 +179,8 @@ public sealed class TaskLoop(
             delivering = null;
             if (outcome is AgentOutcome.AskedQuestion asked)
             {
-                // The Sandbox holds the GitHub token, so an agent can say it; a secret never goes into PostgreSQL.
-                var question = await commands.RedactedAsync(asked.Question, cancellationToken);
+                // The agent has tokens to work with, so it can say one; a secret never goes into PostgreSQL.
+                var question = await sandboxes.WithoutSecretsAsync(asked.Question, cancellationToken);
                 var answer = await questions.AskAsync(intent.Id, task.Number, question, changed, cancellationToken);
                 // The answer may be a long time coming, and the token replaced meanwhile.
                 if (await RefreshGitHubTokenAsync(intent, sandbox, cancellationToken) is { } notRefreshedSince)

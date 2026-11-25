@@ -31,12 +31,16 @@ public sealed class SandboxRegistry(
     /// </summary>
     private readonly ConcurrentDictionary<string, bool> _gitHubTokens = new();
 
-    /// <summary>Every model provider token an agent session was started with since serve started, also once it is replaced.</summary>
+    /// <summary>
+    /// Every model provider token an agent session was started with since serve started, and every one found stored when a text had
+    /// its secrets taken out (<see cref="WithoutSecretsAsync"/>), also once it is replaced.
+    /// </summary>
     private readonly ConcurrentDictionary<string, bool> _providerTokens = new();
 
     /// <summary>
     /// The secrets that what comes out of a Sandbox or its agents can hold: every GitHub token a Sandbox may have been given and every
-    /// model provider token an agent session was started with since serve started, also those replaced or removed since.
+    /// model provider token an agent session was started with since serve started, also those replaced or removed since; and the
+    /// tokens found stored when a text had its secrets taken out (<see cref="WithoutSecretsAsync"/>).
     /// </summary>
     public IReadOnlyCollection<string> SecretsGiven => [.. _gitHubTokens.Keys, .. _providerTokens.Keys];
 
@@ -89,6 +93,13 @@ public sealed class SandboxRegistry(
     public async Task<IAgentSession> StartAgentSessionAsync(Sandbox sandbox, AgentRole role, CancellationToken cancellationToken)
     {
         var harness = await settings.GetAgentHarnessAsync(cancellationToken);
+        var environment = await RememberedProviderTokensAsync(cancellationToken);
+        return await provider.StartAgentSessionAsync(sandbox, role, harness, environment, cancellationToken);
+    }
+
+    /// <summary>The model provider tokens stored now, by environment variable, each remembered as one to take out.</summary>
+    private async Task<Dictionary<string, string>> RememberedProviderTokensAsync(CancellationToken cancellationToken)
+    {
         var environment = new Dictionary<string, string>();
         foreach (var token in await providerTokens.ListAsync(cancellationToken))
         {
@@ -99,7 +110,21 @@ public sealed class SandboxRegistry(
                 _providerTokens.TryAdd(value, true);
             }
         }
-        return await provider.StartAgentSessionAsync(sandbox, role, harness, environment, cancellationToken);
+        return environment;
+    }
+
+    /// <summary>
+    /// <paramref name="text"/> as it may be stored and shown, for a text that comes whole, such as a question of an agent's or what
+    /// the human wrote to one: storable (<see cref="StorableText.Of"/>), and with <c>***</c> in place of every secret it holds, of
+    /// <see cref="SecretsGiven"/> and of the tokens stored now, which may not have been used yet, as one saved a moment ago hasn't.
+    /// A secret never goes into PostgreSQL.
+    /// </summary>
+    public async Task<string> WithoutSecretsAsync(string text, CancellationToken cancellationToken)
+    {
+        await RememberedGitHubTokenAsync(cancellationToken);
+        await RememberedProviderTokensAsync(cancellationToken);
+        // Made storable first, as taking characters out afterwards could put a secret together.
+        return Redaction.Without(StorableText.Of(text), SecretsGiven);
     }
 
     /// <summary>
