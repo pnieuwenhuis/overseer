@@ -25,6 +25,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<PullRequestRecord> PullRequests => Set<PullRequestRecord>();
     public DbSet<AgentSessionRecord> AgentSessions => Set<AgentSessionRecord>();
     public DbSet<AgentSessionEntryRecord> AgentSessionEntries => Set<AgentSessionEntryRecord>();
+    public DbSet<UndeliveredMessageRecord> UndeliveredMessages => Set<UndeliveredMessageRecord>();
     public DbSet<TaskQuestionRecord> TaskQuestions => Set<TaskQuestionRecord>();
     public DbSet<SpecVersionRecord> SpecVersions => Set<SpecVersionRecord>();
     public DbSet<SpecCommentRecord> SpecComments => Set<SpecCommentRecord>();
@@ -101,6 +102,13 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
             session.HasOne<IntentTaskRecord>().WithMany().HasForeignKey(record => new { record.IntentId, record.TaskNumber });
             session.HasMany(record => record.Entries).WithOne()
                 .HasForeignKey(entry => new { entry.IntentId, entry.TaskNumber, entry.SessionNumber });
+            session.HasMany(record => record.Undelivered).WithOne()
+                .HasForeignKey(message => new { message.IntentId, message.TaskNumber, message.SessionNumber });
+        });
+        modelBuilder.Entity<UndeliveredMessageRecord>(message =>
+        {
+            message.ToTable("UndeliveredMessages");
+            message.HasKey(record => new { record.IntentId, record.TaskNumber, record.SessionNumber, record.Number });
         });
         modelBuilder.Entity<AgentSessionEntryRecord>(entry =>
         {

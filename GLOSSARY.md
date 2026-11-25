@@ -110,7 +110,7 @@ A Task whose work still does not pass verification after the allowed number of a
 _Avoid_: Broken task, errored task
 
 **Session log**:
-What an agent said and which tools it called in one of its sessions on a Task, kept with the Task; a retried Task has one for each of its sessions.
+What an agent said and which tools it called in one of its sessions on a Task, with the messages the human sent it there, kept with the Task; a retried Task has one for each of its sessions.
 _Avoid_: Transcript (that is Refinement's), console output
 
 **Final verification**:

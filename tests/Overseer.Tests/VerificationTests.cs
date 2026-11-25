@@ -780,7 +780,7 @@ public class VerificationTests(PostgresServer postgres)
     /// Has git find these files of the repository changed since its last verified work, each time it is asked. The fake Sandbox
     /// Provider has no git, so without this nothing is ever changed.
     /// </summary>
-    private static void Changes(RunningOverseer overseer, string repository, params string[] files) =>
+    internal static void Changes(RunningOverseer overseer, string repository, params string[] files) =>
         overseer.Sandboxes.ScriptCommandsContaining(ChangesAskedIn(repository), Changed(files));
 
     /// <summary>What a command that asks the repository's changed files holds.</summary>

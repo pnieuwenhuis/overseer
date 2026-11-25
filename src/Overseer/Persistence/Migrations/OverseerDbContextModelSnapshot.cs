@@ -190,6 +190,29 @@ namespace Overseer.Persistence.Migrations
                     b.ToTable("TaskQuestions", (string)null);
                 });
 
+            modelBuilder.Entity("Overseer.Implementation.UndeliveredMessageRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TaskNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SessionNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("IntentId", "TaskNumber", "SessionNumber", "Number");
+
+                    b.ToTable("UndeliveredMessages", (string)null);
+                });
+
             modelBuilder.Entity("Overseer.Implementation.VerificationAttemptRecord", b =>
                 {
                     b.Property<Guid>("IntentId")
@@ -651,6 +674,15 @@ namespace Overseer.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Overseer.Implementation.UndeliveredMessageRecord", b =>
+                {
+                    b.HasOne("Overseer.Implementation.AgentSessionRecord", null)
+                        .WithMany("Undelivered")
+                        .HasForeignKey("IntentId", "TaskNumber", "SessionNumber")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Overseer.Implementation.VerificationAttemptRecord", b =>
                 {
                     b.HasOne("Overseer.Implementation.IntentTaskRecord", null)
@@ -753,6 +785,8 @@ namespace Overseer.Persistence.Migrations
             modelBuilder.Entity("Overseer.Implementation.AgentSessionRecord", b =>
                 {
                     b.Navigation("Entries");
+
+                    b.Navigation("Undelivered");
                 });
 
             modelBuilder.Entity("Overseer.Implementation.VerificationAttemptRecord", b =>

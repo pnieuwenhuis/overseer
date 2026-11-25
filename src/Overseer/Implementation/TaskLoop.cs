@@ -129,7 +129,9 @@ public sealed class TaskLoop(
     /// <summary>
     /// Has a new agent session of the Task's role work on it, verifying its work each time its turn ends as done and telling it what
     /// failed, and stops the session once the work passes or the Task can't go on. A turn that ends in a question instead waits
-    /// for the human's answer (<see cref="TaskQuestions"/>), which goes to the same session.
+    /// for the human's answer (<see cref="TaskQuestions"/>), which goes to the same session. The messages the human sends meanwhile
+    /// (<see cref="SessionLogs.SendMessageAsync"/>) each become a turn of their own, in order, after a turn that ends as done and
+    /// before its work is verified; work that passes with one waiting is verified again after the turns they start.
     /// </summary>
     private async Task<Work> CarryOutAsync(
         Intent intent, Sandbox sandbox, IntentTask task, Action changed, CancellationToken cancellationToken)
@@ -155,20 +157,26 @@ public sealed class TaskLoop(
             return SessionFailed(intent, task, exception);
         }
         await using var stopping = session;
-        using var log = await logs.OpenAsync(intent.Id, task.Number, task.Role, cancellationToken);
-        // The number of the last verification attempt this session made. A turn that ends in a question leads to none.
+        await using var log = await logs.OpenAsync(intent.Id, task.Number, task.Role, cancellationToken);
+        // The number of the last verification attempt this session made, and how many of them failed. A turn that ends in a
+        // question, or with a message of the human's waiting, leads to none.
         var number = 0;
+        var failures = 0;
+        // The human's message the next turn delivers; null when it says something else.
+        SentMessage? delivering = null;
+        void Deliver(SentMessage sent) => (delivering, message) = (sent, TaskInstructions.MessageOfTheHuman(task, sent.Text));
         while (true)
         {
             AgentOutcome outcome;
             try
             {
-                outcome = await log.TakeTurnAsync(session, message, cancellationToken);
+                outcome = await log.TakeTurnAsync(session, message, cancellationToken, delivering);
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
             {
                 return SessionFailed(intent, task, exception);
             }
+            delivering = null;
             if (outcome is AgentOutcome.AskedQuestion asked)
             {
                 // The Sandbox holds the GitHub token, so an agent can say it; a secret never goes into PostgreSQL.
@@ -180,6 +188,12 @@ public sealed class TaskLoop(
                     return new Work.Unfinished(notRefreshedSince);
                 }
                 message = TaskInstructions.Answer(task, answer);
+                continue;
+            }
+            // Before verification, which then sees what the turn it starts did.
+            if (await log.NextMessageAsync(cancellationToken) is { } waiting)
+            {
+                Deliver(waiting);
                 continue;
             }
 
@@ -204,19 +218,28 @@ public sealed class TaskLoop(
             var failed = attempt.FailedSteps;
             if (failed.Count == 0)
             {
-                return new Work.Verified(changedRepositories);
+                if (await log.NextMessageOrTakeNoMoreAsync(cancellationToken) is not { } sentMeanwhile)
+                {
+                    return new Work.Verified(changedRepositories);
+                }
+                // The Task isn't Done yet: the work is verified again after the turn the message starts.
+                Deliver(sentMeanwhile);
+                continue;
             }
+            // An attempt that passed isn't counted against the allowed ones, though a message had the work verified again after it.
+            failures++;
             // As the Settings say now, so that raising the limit also helps a Task being worked on.
             var allowed = (await settings.GetOperatingLimitsAsync(cancellationToken)).VerificationAttemptsPerTask;
-            if (number >= allowed)
+            if (failures >= allowed)
             {
                 await tasks.EnterStateAsync(intent.Id, task.Number, IntentTaskState.Failed, cancellationToken);
                 changed();
                 return new Work.Unfinished(
-                    $"Task {task.Number} is a Failed Task: its work didn't pass verification in {number} "
-                    + $"{(number == 1 ? "attempt" : "attempts")}. In the last one: {string.Join(" ", failed.Select(step => step.Failure))}");
+                    $"Task {task.Number} is a Failed Task: its work didn't pass verification in {failures} "
+                    + $"{(failures == 1 ? "attempt" : "attempts")}. In the last one: {string.Join(" ", failed.Select(step => step.Failure))}");
             }
-            message = TaskInstructions.VerificationFailed(task, failed, number, allowed);
+            // A message that waits by now follows this turn.
+            message = TaskInstructions.VerificationFailed(task, failed, failures, allowed);
         }
     }
 

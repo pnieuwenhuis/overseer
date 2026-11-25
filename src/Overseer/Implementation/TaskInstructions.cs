@@ -122,6 +122,16 @@ internal static class TaskInstructions
         Go on with Task {task.Number}, and end your turn as before.
         """;
 
+    /// <summary>What a Task's session is told with a message the human sent it while it worked.</summary>
+    public static string MessageOfTheHuman(IntentTask task, string message) =>
+        $"""
+        The human sent you a message while you worked:
+
+        {message}
+
+        Take it into account, go on with Task {task.Number}, and end your turn as before.
+        """;
+
     /// <summary>The description of the fix-up Task, in Markdown: why there is one, and what failed.</summary>
     /// <param name="failed">The steps of the final verification that failed.</param>
     public static string FixUp(IReadOnlyList<VerificationStep> failed) =>

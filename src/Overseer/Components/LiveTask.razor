@@ -1,11 +1,22 @@
-@* One of an Intent's Tasks with the logs of the agent sessions on it, updated live as the agent works. *@
+@* One of an Intent's Tasks with the logs of the agent sessions on it, updated live as the agent works, and, while it runs, a box to
+   send its agent a message. *@
 @using Overseer.Implementation
 @using Overseer.Sandboxes
 @implements IDisposable
 @inject IntentTasks Tasks
 @inject TaskRunner TaskRunner
 @inject SessionLogs SessionLogs
+@inject TaskQuestions Questions
 
+@if (MessageRefused is { } refused)
+{
+    <p role="alert" class="callout-warning mb-4">Your message was not sent: @refused</p>
+    @if (_sessions is not null && _messagesTo is null && !string.IsNullOrWhiteSpace(MessageDraft))
+    {
+        <p class="agent-message-unsent-label">What you wrote</p>
+        <p class="agent-message-unsent">@MessageDraft</p>
+    }
+}
 @if (Shown is { } task)
 {
     <h1 class="mb-3">Task @Number: @task.Title</h1>
@@ -33,24 +44,63 @@
                 <ol class="agent-session-log">
                     @foreach (var entry in session.Entries)
                     {
-                        @if (entry.Kind == SessionEntryKind.Message)
+                        @switch (entry.Kind)
                         {
-                            <li class="session-message">@entry.Text</li>
+                            case SessionEntryKind.Message:
+                                <li class="session-message">@entry.Text</li>
+                                break;
+                            case SessionEntryKind.ToolCall:
+                                <li class="session-tool-call"><span class="session-tool-label">Tool call</span> <code class="session-tool-title">@entry.Text</code></li>
+                                break;
+                            case SessionEntryKind.UserMessage:
+                                <li class="session-user-message" data-delivery="Delivered">
+                                    <span class="session-user-label">You</span>
+                                    <span class="session-user-text">@entry.Text</span>
+                                </li>
+                                break;
                         }
-                        else
-                        {
-                            <li class="session-tool-call"><span class="session-tool-label">Tool call</span> <code class="session-tool-title">@entry.Text</code></li>
-                        }
+                    }
+                    @foreach (var message in session.Undelivered)
+                    {
+                        <li class="session-user-message" data-delivery="@(session.TakesMessages ? "Waiting" : "NotDelivered")">
+                            <span class="session-user-label">@(session.TakesMessages ? "You: waiting to be delivered" : "Not delivered: the agent session ended first")</span>
+                            <span class="session-user-text">@message</span>
+                        </li>
                     }
                 </ol>
             </section>
         }
     </section>
 }
+@if (_messagesTo is not null)
+{
+    @* A plain form, posted by the browser, so a message goes the same with or without the live connection. The static page handles it, under this name. *@
+    <form method="post" action="intents/@IntentId/tasks/@Number" class="agent-message-form form">
+        <input type="hidden" name="_handler" value="@Pages.TaskDetail.MessageFormName" />
+        <input type="hidden" name="@Pages.TaskDetail.SessionField" value="@_messagesTo" />
+        <AntiforgeryToken />
+        @if (_awaitsAnswer)
+        {
+            <p class="agent-message-question">The agent waits for your answer to its question, which you give on the Intent's page. A message doesn't answer it: it is delivered after the turn your answer starts.</p>
+        }
+        <label>
+            <span>Message to the agent</span>
+            <textarea name="@Pages.TaskDetail.MessageField" rows="3" required value="@MessageDraft"></textarea>
+        </label>
+        <p class="form-note">The agent isn't interrupted: it gets your message when its turn ends, before its work is verified.</p>
+        <button type="submit" class="btn-primary">Send message</button>
+    </form>
+}
 
 @code {
     private readonly CancellationTokenSource _disposed = new();
     private IReadOnlyList<LoggedSession>? _sessions;
+
+    /// <summary>The number of the session the page's message box writes to; <c>null</c> when it offers none.</summary>
+    private int? _messagesTo;
+
+    /// <summary>Whether the Task's agent waits for the answer to a question.</summary>
+    private bool _awaitsAnswer;
     private bool _reading;
     private bool _stale;
 
@@ -59,6 +109,14 @@
 
     [Parameter, EditorRequired]
     public required int Number { get; set; }
+
+    /// <summary>Why a message to the agent was just refused; <c>null</c> unless it was.</summary>
+    [Parameter]
+    public string? MessageRefused { get; set; }
+
+    /// <summary>The message that was just refused, as the user wrote it; <c>null</c> unless one was.</summary>
+    [Parameter]
+    public string? MessageDraft { get; set; }
 
     /// <summary>
     /// The Task as last read; <c>null</c> until the first read is done. Persisted from the server's rendering of the page into the live
@@ -119,6 +177,11 @@
                 _stale = false;
                 var task = (await Tasks.OfAsync(IntentId, _disposed.Token)).SingleOrDefault(task => task.Number == Number);
                 _sessions = await SessionLogs.OfAsync(IntentId, Number, _disposed.Token);
+                _messagesTo = task is { State: IntentTaskState.Running } && _sessions is [.., { TakesMessages: true } open]
+                    ? open.Number
+                    : null;
+                _awaitsAnswer = (await Questions.OfAsync(IntentId, _disposed.Token))
+                    .Any(question => question.TaskNumber == Number && question.AwaitsAnswer);
                 Shown = task is null
                     ? null
                     : new Heading(task.Title, task.State, task.Role, string.Join(", ", task.Repositories));

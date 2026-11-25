@@ -1,7 +1,9 @@
 @page "/intents/{Id:guid}/tasks/{Number:int}"
 @attribute [ExcludeFromInteractiveRouting]
+@using System.Globalization
 @using Overseer.Implementation
 @inject IntentTasks Tasks
+@inject SessionLogs SessionLogs
 @inject NavigationManager Navigation
 
 <PageTitle>Task @Number · Overseer</PageTitle>
@@ -9,10 +11,24 @@
 @if (_found)
 {
     <IntentBackLink IntentId="Id" />
-    <LiveTask IntentId="Id" Number="Number" @rendermode="InteractiveServer" />
+    <LiveTask IntentId="Id" Number="Number" MessageRefused="@_refused" MessageDraft="@_draft" @rendermode="InteractiveServer" />
+}
+@* Blazor handles a submitted form only when the page has a form of its name. The message box the user sees is LiveTask's, which comes and goes with the agent's session. *@
+@if (HttpMethods.IsPost(HttpContext.Request.Method))
+{
+    <form method="post" @formname="@MessageFormName" @onsubmit="SendMessageAsync"></form>
 }
 
 @code {
+    /// <summary>The name that a form submitted to this page sends the running agent a message under.</summary>
+    public const string MessageFormName = "message-agent";
+
+    /// <summary>The field of that form that holds the user's message.</summary>
+    public const string MessageField = "Message";
+
+    /// <summary>The field of that form that holds the number of the session the message is for.</summary>
+    public const string SessionField = "Session";
+
     [CascadingParameter]
     private HttpContext HttpContext { get; set; } = default!;
 
@@ -23,6 +39,8 @@
     public int Number { get; set; }
 
     private bool _found;
+    private string? _refused;
+    private string? _draft;
 
     protected override async Task OnInitializedAsync()
     {
@@ -31,5 +49,20 @@
         {
             Navigation.NotFound();
         }
+    }
+
+    private async Task SendMessageAsync()
+    {
+        var form = HttpContext.Request.Form;
+        var message = form[MessageField].ToString();
+        _refused = int.TryParse(form[SessionField], NumberStyles.None, CultureInfo.InvariantCulture, out var session)
+            ? await SessionLogs.SendMessageAsync(Id, Number, session, message, HttpContext.RequestAborted)
+            : "It didn't say which agent session it is for.";
+        if (_refused is null)
+        {
+            Navigation.NavigateTo($"/intents/{Id}/tasks/{Number}");
+            return;
+        }
+        _draft = message;
     }
 }
