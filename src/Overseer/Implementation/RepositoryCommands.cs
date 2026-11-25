@@ -1,16 +1,14 @@
 using Overseer.GitHub;
 using Overseer.Repositories;
 using Overseer.Sandboxes;
-using Overseer.Secrets;
 
 namespace Overseer.Implementation;
 
 /// <summary>
-/// Runs Overseer's commands on a repository's clone in a Sandbox, each under a time limit, with the GitHub token taken out of
+/// Runs Overseer's commands on a repository's clone in a Sandbox, each under a time limit, with every GitHub token taken out of
 /// whatever comes back, and says apart whether a command failed, hung, or couldn't be run at all.
 /// </summary>
-public sealed class RepositoryCommands(
-    SandboxRegistry sandboxes, ISecretReader secrets, TimeProvider time, ILogger<RepositoryCommands> logger)
+public sealed class RepositoryCommands(SandboxRegistry sandboxes, TimeProvider time, ILogger<RepositoryCommands> logger)
 {
     /// <summary>How much of a command's output is kept: its end, where the command says what went wrong.</summary>
     private const int OutputKept = 4000;
@@ -96,11 +94,11 @@ public sealed class RepositoryCommands(
     }
 
     /// <summary>
-    /// <paramref name="text"/> without the GitHub token. The Sandbox holds it to push with, so that anything from there can hold it,
-    /// and a secret never goes into PostgreSQL.
+    /// <paramref name="text"/> without any GitHub token. The Sandbox holds one to push with, so that anything from there can hold
+    /// it, and a secret never goes into PostgreSQL.
     /// </summary>
-    public async Task<string> RedactedAsync(string text, CancellationToken cancellationToken) =>
-        text.Length == 0 ? text : Redaction.Without(text, await secrets.ReadAsync(GitHubToken.SecretName, cancellationToken) ?? "");
+    public Task<string> RedactedAsync(string text, CancellationToken cancellationToken) =>
+        sandboxes.WithoutGitHubTokensAsync(text, cancellationToken);
 
     /// <summary>The end of a command's output, as much of it as is kept.</summary>
     public static string EndOf(string output)

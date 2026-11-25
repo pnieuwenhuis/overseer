@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
+using Overseer.GitHub;
 using Overseer.ModelProviders;
 using Overseer.Persistence;
 using Overseer.Secrets;
@@ -21,6 +22,15 @@ public sealed class SandboxRegistry(
     TimeProvider time,
     ILogger<SandboxRegistry> logger)
 {
+    /// <summary>How long a Sandbox may take to take a GitHub token before it is given up on.</summary>
+    private static readonly TimeSpan GitHubTokenLimit = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Every GitHub token a Sandbox may have been given since serve started, which what comes out of it can hold, also once the
+    /// token is replaced. In memory only: no Sandbox outlives a restart.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, bool> _gitHubTokens = new();
+
     /// <summary>One lock per Sandbox that was destroyed, or is being, since serve started, by resource ID.</summary>
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _destroying = new();
 
@@ -46,6 +56,8 @@ public sealed class SandboxRegistry(
             });
             await database.SaveChangesAsync(cancellationToken);
         }
+        // The one the provider clones with.
+        await RememberedGitHubTokenAsync(cancellationToken);
         try
         {
             await provider.CreateAsync(sandbox, machine, repositoriesInScope, mayPush, cancellationToken);
@@ -78,6 +90,54 @@ public sealed class SandboxRegistry(
             }
         }
         return await provider.StartAgentSessionAsync(sandbox, role, harness, environment, cancellationToken);
+    }
+
+    /// <summary>
+    /// Gives a Sandbox that may push the GitHub token Overseer uses now, in place of the one it holds: to be done before it is
+    /// used again, as the token may have been replaced since.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No GitHub token is set, or as for the provider.</exception>
+    /// <exception cref="TimeoutException">The Sandbox didn't take it in time.</exception>
+    /// <inheritdoc cref="ISandboxProvider.SetGitHubTokenAsync"/>
+    public async Task RefreshGitHubTokenAsync(Sandbox sandbox, CancellationToken cancellationToken)
+    {
+        var token = await RememberedGitHubTokenAsync(cancellationToken)
+            ?? throw new InvalidOperationException("No GitHub token is set: set one in Settings.");
+        using var timedOut = new CancellationTokenSource(GitHubTokenLimit, time);
+        using var giving = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timedOut.Token);
+        try
+        {
+            await provider.SetGitHubTokenAsync(sandbox, token, giving.Token).WaitAsync(giving.Token);
+        }
+        catch (Exception) when (timedOut.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"The Sandbox didn't take it within {GitHubTokenLimit.TotalMinutes:0} minutes.");
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="text"/> without any GitHub token that what comes out of a Sandbox can hold: the one Overseer uses now, and
+    /// those Sandboxes were given before. A secret never goes into PostgreSQL.
+    /// </summary>
+    public async Task<string> WithoutGitHubTokensAsync(string text, CancellationToken cancellationToken)
+    {
+        if (text.Length == 0)
+        {
+            return text;
+        }
+        await RememberedGitHubTokenAsync(cancellationToken);
+        return Redaction.Without(text, _gitHubTokens.Keys);
+    }
+
+    /// <summary>The GitHub token Overseer uses now, remembered as one to take out; <c>null</c> when none is set.</summary>
+    private async Task<string?> RememberedGitHubTokenAsync(CancellationToken cancellationToken)
+    {
+        var token = await secrets.ReadAsync(GitHubToken.SecretName, cancellationToken);
+        if (token is { Length: > 0 })
+        {
+            _gitHubTokens.TryAdd(token, true);
+        }
+        return token;
     }
 
     /// <inheritdoc cref="ISandboxProvider.RunCommandAsync"/>

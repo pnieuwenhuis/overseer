@@ -27,6 +27,17 @@ public interface ISandboxProvider
     /// <exception cref="SandboxCreationFailedException">The Sandbox could not be created; the message says why.</exception>
     Task CreateAsync(Sandbox sandbox, SandboxMachine machine, IReadOnlyCollection<string> repositoriesInScope, bool mayPush, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Gives a Sandbox that may push the GitHub token to work with from now on, in place of the one it holds, as after the token
+    /// was replaced.
+    /// </summary>
+    /// <param name="token">A secret: never log it.</param>
+    /// <exception cref="InvalidOperationException">
+    /// The Sandbox doesn't exist or was created without push access, which gets no token, or it couldn't take this one; the
+    /// message says why, without the token.
+    /// </exception>
+    Task SetGitHubTokenAsync(Sandbox sandbox, string token, CancellationToken cancellationToken);
+
     /// <summary>Runs a shell command in the Sandbox and waits for it to finish.</summary>
     Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken);
 

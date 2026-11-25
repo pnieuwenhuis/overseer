@@ -15,6 +15,9 @@ public abstract class SandboxProviderContract : IAsyncDisposable
 
     private protected readonly List<Sandbox> _created = [];
 
+    /// <summary>The repository the contract's Sandboxes hold.</summary>
+    protected virtual string Repository => "pnieuwenhuis/overseer";
+
     protected abstract ISandboxProvider Provider { get; }
 
     /// <summary>Why this provider's agent sessions are left untested, while it can't start them yet; <c>null</c> when it can.</summary>
@@ -126,6 +129,28 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_Sandbox_with_push_access_holds_the_GitHub_token_it_is_given_in_place_of_the_one_it_had()
+    {
+        var sandbox = await CreateAsync(NewIntent(), mayPush: true);
+        await GivenAStaleGitHubTokenAsync(sandbox);
+
+        await Provider.SetGitHubTokenAsync(sandbox, GitHubTokenToGive, TestContext.Current.CancellationToken);
+
+        Assert.Equal(GitHubTokenToGive, await GitHubTokenOfAsync(sandbox));
+    }
+
+    [Fact]
+    public async Task A_Sandbox_without_push_access_is_given_no_GitHub_token()
+    {
+        var sandbox = await CreateAsync(NewIntent(), mayPush: false);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Provider.SetGitHubTokenAsync(sandbox, GitHubTokenToGive, TestContext.Current.CancellationToken));
+
+        Assert.Null(await GitHubTokenOfAsync(sandbox));
+    }
+
+    [Fact]
     public async Task An_agent_turn_streams_updates_and_ends_with_its_outcome()
     {
         Assert.SkipWhen(AgentSessionsSkipReason is not null, AgentSessionsSkipReason ?? "");
@@ -190,6 +215,15 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     {
     }
 
+    /// <summary>A GitHub token to give a Sandbox, one it accepts.</summary>
+    protected virtual string GitHubTokenToGive => "github_pat_11ABCDEF0_replacement";
+
+    /// <summary>The GitHub token git in the Sandbox pushes with; <c>null</c> when it has none.</summary>
+    protected abstract Task<string?> GitHubTokenOfAsync(Sandbox sandbox);
+
+    /// <summary>Makes the token the Sandbox holds out of date. A scriptable provider's holds none to start with.</summary>
+    protected virtual Task GivenAStaleGitHubTokenAsync(Sandbox sandbox) => Task.CompletedTask;
+
     /// <summary>Puts a file with this content in the Sandbox, as an agent would write it there.</summary>
     protected abstract Task GivenFileAsync(Sandbox sandbox, string path, string content);
 
@@ -201,10 +235,10 @@ public abstract class SandboxProviderContract : IAsyncDisposable
         _created.Remove(sandbox);
     }
 
-    private async Task<Sandbox> CreateAsync(SandboxOwner owner, SandboxMachine? machine = null)
+    private async Task<Sandbox> CreateAsync(SandboxOwner owner, SandboxMachine? machine = null, bool mayPush = false)
     {
         var sandbox = await Provider.NameAndCreateAsync(
-            owner, machine ?? SandboxMachine.Default, ["pnieuwenhuis/overseer"], TestContext.Current.CancellationToken);
+            owner, machine ?? SandboxMachine.Default, [Repository], TestContext.Current.CancellationToken, mayPush);
         _created.Add(sandbox);
         return sandbox;
     }
@@ -236,6 +270,8 @@ public sealed class FakeSandboxProviderContract : SandboxProviderContract
         return Task.CompletedTask;
     }
 
+    protected override Task<string?> GitHubTokenOfAsync(Sandbox sandbox) => Task.FromResult(_fake.GitHubTokenOf(sandbox));
+
     protected override void GivenAgentSession(AgentRole role, params (string[] Updates, AgentOutcome Outcome)[] turns) =>
         _fake.ScriptAgentSessions(role, new FakeAgentSession([.. turns.Select(turn => new FakeAgentTurn(turn.Updates, turn.Outcome))]));
 }
@@ -251,7 +287,7 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
     private const string SubscriptionVariable = "TEST_SANDBOX_SUBSCRIPTION_ID";
     private const string ResourceGroupVariable = "TEST_SANDBOX_RESOURCE_GROUP";
     private const string TokenVariable = "TEST_GITHUB_TOKEN";
-    private static readonly string Repository = Environment.GetEnvironmentVariable("TEST_SANDBOX_REPOSITORY") ?? "pnieuwenhuis/overseer";
+    private readonly string _token = "";
 
     private readonly string _directory = Directory.CreateTempSubdirectory("overseer-azure-sandboxes-").FullName;
     private readonly AzureSandboxProvider _azure;
@@ -264,6 +300,7 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
             $"Set {SubscriptionVariable} and {ResourceGroupVariable} to an existing resource group to run the Azure Sandbox Provider contract.");
         var token = Environment.GetEnvironmentVariable(TokenVariable);
         Assert.SkipWhen(string.IsNullOrEmpty(token), $"Set {TokenVariable} to a GitHub token that reaches {Repository} to run the Azure Sandbox Provider contract.");
+        _token = token;
         var secrets = new FileSecretStore(Path.Combine(_directory, "secrets.json"));
         secrets.SetAsync(GitHubToken.SecretName, token, CancellationToken.None).GetAwaiter().GetResult();
         _azure = new AzureSandboxProvider(
@@ -277,6 +314,22 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
     }
 
     protected override ISandboxProvider Provider => _azure;
+
+    protected override string Repository => Environment.GetEnvironmentVariable("TEST_SANDBOX_REPOSITORY") ?? base.Repository;
+
+    // gh logs in only with a token GitHub knows.
+    protected override string GitHubTokenToGive => _token;
+
+    protected override async Task<string?> GitHubTokenOfAsync(Sandbox sandbox)
+    {
+        var filled = await _azure.RunCommandAsync(
+            sandbox, "printf 'protocol=https\\nhost=github.com\\n\\n' | GIT_TERMINAL_PROMPT=0 git credential fill",
+            TestContext.Current.CancellationToken);
+        return filled.Output.Split('\n').FirstOrDefault(line => line.StartsWith("password=", StringComparison.Ordinal))?["password=".Length..].Trim();
+    }
+
+    protected override Task GivenAStaleGitHubTokenAsync(Sandbox sandbox) =>
+        GivenFileAsync(sandbox, $"{Sandbox.HomeDirectory}/.overseer/github-token", "stale");
 
     [Fact]
     public async Task A_Sandbox_holds_each_Repository_in_scope_cloned_on_its_default_branch_without_the_token_in_its_remote()

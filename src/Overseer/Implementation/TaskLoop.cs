@@ -76,6 +76,11 @@ public sealed class TaskLoop(
             await tasks.AwaitPushAsync(intent.Id, task.Number, unpushed, cancellationToken);
             changed();
         }
+        // The token may have been replaced while the agent worked, or since the push failed.
+        if (unpushed.Count > 0 && await RefreshGitHubTokenAsync(intent, sandbox, cancellationToken) is { } notRefreshed)
+        {
+            return notRefreshed;
+        }
         foreach (var repository in unpushed)
         {
             if (await branches.PushAsync(sandbox, repository, intent.Branch, cancellationToken) is { } notPushed)
@@ -108,6 +113,11 @@ public sealed class TaskLoop(
             .LastOrDefault(attempt => attempt.TaskNumber == task.Number)?.FailedSteps ?? [];
         var message = TaskInstructions.FirstMessage(intent, approved.Spec, task, taskCount, failedLast);
         var run = await attempts.NextRunAsync(intent.Id, task.Number, cancellationToken);
+        // The agent works with GitHub too, as when it fetches the Intent branch.
+        if (await RefreshGitHubTokenAsync(intent, sandbox, cancellationToken) is { } notRefreshed)
+        {
+            return new Work.Unfinished(notRefreshed);
+        }
         IAgentSession session;
         try
         {
@@ -166,6 +176,24 @@ public sealed class TaskLoop(
                     + $"{(number == 1 ? "attempt" : "attempts")}. In the last one: {string.Join(" ", failed.Select(step => step.Failure))}");
             }
             message = TaskInstructions.VerificationFailed(task, failed, number, allowed);
+        }
+    }
+
+    /// <summary>Gives the Sandbox the GitHub token in use, which may not be the one it was created with.</summary>
+    /// <returns>Why it couldn't be given it; <c>null</c> once it has it.</returns>
+    private async Task<string?> RefreshGitHubTokenAsync(Intent intent, Sandbox sandbox, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await sandboxes.RefreshGitHubTokenAsync(sandbox, cancellationToken);
+            return null;
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogError(
+                exception, "The Sandbox {Sandbox} of the Intent {IntentId} could not be given the GitHub token.",
+                sandbox.ResourceId, intent.Id);
+            return $"The Sandbox could not be given the GitHub token: {exception.Message}";
         }
     }
 

@@ -703,6 +703,92 @@ public class VerificationTests(PostgresServer postgres)
         Assert.DoesNotContain(SquadMessages(overseer), message => message.Message.Contains(Token));
     }
 
+    private const string NewToken = "github_pat_11REPLACEMENT9876543210";
+
+    [Fact]
+    public async Task A_GitHub_token_replaced_in_Settings_reaches_the_prepared_Sandbox_before_the_push_is_retried()
+    {
+        await using var overseer = await StartAsync("acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneAtOnce());
+        Changes(overseer, "acme/web", "src/orders.ts");
+        overseer.Sandboxes.ScriptCommandsContaining(
+            "git push", new CommandResult(128, "fatal: Authentication failed"), Passes);
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        await ImplementationTests.FailedAsync(overseer, address);
+        var sandbox = Assert.Single(await overseer.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
+        await ReplaceTokenAsync(overseer);
+        var pushing = new TaskCompletionSource();
+        overseer.Sandboxes.HoldCommandsContaining("git push", pushing.Task);
+
+        using var retried = await ImplementationTests.RetryAsync(overseer, address);
+
+        await EventuallyAsync(
+            () => Task.FromResult(CommandsIn(overseer, "acme/web").Count(command => command.Contains("git push")) == 2 ? "" : null),
+            "the push to be retried");
+        Assert.Equal(NewToken, overseer.Sandboxes.GitHubTokenOf(sandbox));
+        pushing.SetResult();
+        await FinalVerificationTests.InReviewAsync(overseer, address);
+    }
+
+    [Fact]
+    public async Task A_GitHub_token_replaced_while_an_agent_works_reaches_the_Sandbox_before_the_push_and_neither_token_is_ever_shown()
+    {
+        await using var overseer = await StartAsync("acme/web");
+        await SetVerificationAttemptsAsync(overseer, 2);
+        var working = new TaskCompletionSource();
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Developer, new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = working.Task }));
+        Changes(overseer, "acme/web", "src/orders.ts");
+        // As a log in the Sandbox holds the token it had before, besides the one it has now.
+        overseer.Sandboxes.ScriptCommandsContaining("git push", new CommandResult(128, $"tried {Token} and {NewToken}"));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        var sandbox = (await SquadMessagesAsync(overseer, 1))[0].Sandbox;
+        // The session starts with the token in use.
+        Assert.Equal(Token, overseer.Sandboxes.GitHubTokenOf(sandbox));
+        await ReplaceTokenAsync(overseer);
+
+        working.SetResult();
+
+        var failed = await ImplementationTests.FailedAsync(overseer, address);
+        Assert.Equal(NewToken, overseer.Sandboxes.GitHubTokenOf(sandbox));
+        Assert.EndsWith("tried *** and ***", failed.Status);
+        var database = await overseer.DumpDatabaseAsync();
+        Assert.DoesNotContain(database, table => table.Contains(Token) || table.Contains(NewToken));
+    }
+
+    [Fact]
+    public async Task A_Retry_without_a_GitHub_token_says_to_set_one()
+    {
+        await using var overseer = await StartAsync("acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneAtOnce());
+        Changes(overseer, "acme/web", "src/orders.ts");
+        overseer.Sandboxes.ScriptCommandsContaining("git push", new CommandResult(128, "refused"));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        await ImplementationTests.FailedAsync(overseer, address);
+        using var removed = await overseer.SubmitFormAsync("/settings", "github-token-remove", new Dictionary<string, string>());
+
+        using var retried = await ImplementationTests.RetryAsync(overseer, address);
+
+        await EventuallyAsync(
+            async () => ImplementationTests.ImplementationOn(await GetAsync(overseer, address)) is
+            {
+                Phase: "Failed",
+                Status: "The Sandbox could not be given the GitHub token: No GitHub token is set: set one in Settings.",
+            }
+                ? ""
+                : null,
+            "the Retry to say there is no token");
+        Assert.Single(CommandsIn(overseer, "acme/web"), command => command.Contains("git push"));
+    }
+
+    /// <summary>Saves another GitHub token on the Settings page, which GitHub accepts.</summary>
+    private static async Task ReplaceTokenAsync(RunningOverseer overseer)
+    {
+        overseer.GitHub.AcceptToken(NewToken, "octocat");
+        using var saved = await overseer.SubmitFormAsync(
+            "/settings", "github-token", new Dictionary<string, string> { ["GitHubToken"] = NewToken });
+    }
+
     /// <summary>Saves this number of verification attempts per Task on the Settings page.</summary>
     private static Task SetVerificationAttemptsAsync(RunningOverseer overseer, int attempts) =>
         SetOperatingLimitsAsync(overseer, verificationAttemptsPerTask: attempts);

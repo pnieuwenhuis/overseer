@@ -593,6 +593,69 @@ public sealed class AzureSandboxProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task A_new_GitHub_token_replaces_the_one_a_Sandbox_holds_for_git_and_gh()
+    {
+        await GivenTokenAsync();
+        var provider = Provider();
+        var sandbox = await provider.NameAndCreateAsync(
+            new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), SandboxMachine.Default, ["acme/web"],
+            TestContext.Current.CancellationToken, mayPush: true);
+        var created = _ssh.Runs.Count;
+        var home = Directory.CreateDirectory(Path.Combine(_directory, "home")).FullName;
+        var tokenFile = Path.Combine(home, ".overseer", "github-token");
+        Directory.CreateDirectory(Path.GetDirectoryName(tokenFile)!);
+        await File.WriteAllTextAsync(tokenFile, Token, TestContext.Current.CancellationToken);
+        // The command, in a shell of this machine, with a gh that records what it is given.
+        _ssh.Answer = (_, command) => RunInShell(
+            $"export HOME='{home}'\ngh() {{ echo \"gh $*\" >> \"$HOME/gh.log\"; cat >> \"$HOME/gh.log\"; }}\n{command}");
+
+        await provider.SetGitHubTokenAsync(sandbox, "github_pat_replacement", TestContext.Current.CancellationToken);
+
+        Assert.Equal("github_pat_replacement", await File.ReadAllTextAsync(tokenFile, TestContext.Current.CancellationToken));
+        Assert.Equal(
+            "gh auth login --hostname github.com --with-token\ngithub_pat_replacement",
+            (await File.ReadAllTextAsync(Path.Combine(home, "gh.log"), TestContext.Current.CancellationToken)).Trim());
+        var (target, _) = _ssh.Runs[^1];
+        Assert.Equal(_ssh.Runs[created - 1].Target, target);
+    }
+
+    [Fact]
+    public async Task A_Sandbox_without_push_access_is_given_no_GitHub_token()
+    {
+        await GivenTokenAsync();
+        var provider = Provider();
+        var sandbox = await provider.NameAndCreateAsync(
+            new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), SandboxMachine.Default, ["acme/web"],
+            TestContext.Current.CancellationToken, mayPush: false);
+        // As such a Sandbox is: its token file was removed once it had cloned.
+        var home = Directory.CreateDirectory(Path.Combine(_directory, "home")).FullName;
+        _ssh.Answer = (_, command) => RunInShell($"export HOME='{home}'\ngh() {{ :; }}\n{command}");
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.SetGitHubTokenAsync(sandbox, "github_pat_replacement", TestContext.Current.CancellationToken));
+
+        Assert.Contains("no push access", refused.Message);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(home));
+    }
+
+    [Fact]
+    public async Task A_GitHub_token_a_Sandbox_cant_take_fails_with_what_it_said_without_the_token()
+    {
+        await GivenTokenAsync();
+        var provider = Provider();
+        var sandbox = await provider.NameAndCreateAsync(
+            new SandboxOwner(SandboxOwnerKind.Intent, Guid.NewGuid()), SandboxMachine.Default, ["acme/web"],
+            TestContext.Current.CancellationToken, mayPush: true);
+        _ssh.Answer = (_, _) => new CommandResult(1, "error validating token github_pat_replacement: HTTP 401\n");
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.SetGitHubTokenAsync(sandbox, "github_pat_replacement", TestContext.Current.CancellationToken));
+
+        Assert.Contains("HTTP 401", failure.Message);
+        Assert.DoesNotContain("github_pat_replacement", failure.Message);
+    }
+
+    [Fact]
     public async Task A_Repository_name_that_is_not_owner_slash_name_is_refused_before_it_reaches_a_shell()
     {
         await GivenTokenAsync();

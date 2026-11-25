@@ -213,6 +213,37 @@ public sealed partial class AzureSandboxProvider(
         }
     }
 
+    /// <summary>What the command that gives a Sandbox a token exits with when the Sandbox holds none to replace.</summary>
+    private const int NoPushAccess = 3;
+
+    /// <inheritdoc cref="ISandboxProvider.SetGitHubTokenAsync"/>
+    /// <exception cref="SandboxUnreachableException">The Sandbox does not accept SSH, for instance from a new public IP of the developer's.</exception>
+    public async Task SetGitHubTokenAsync(Sandbox sandbox, string token, CancellationToken cancellationToken)
+    {
+        if (!GitHubToken.IsWellFormed(token))
+        {
+            throw new InvalidOperationException(GitHubToken.NotWellFormedError);
+        }
+        // Only a Sandbox with push access kept the token it cloned with (see CloneAsync), so only that one gets another. The git
+        // credential helper reads the file each time; gh keeps a login of its own.
+        var result = await RunCommandAsync(sandbox, $"""
+            set -e
+            umask 077
+            [ -f "$HOME/.overseer/github-token" ] || exit {NoPushAccess}
+            printf '%s' {ShellText.Quoted(token)} > "$HOME/.overseer/github-token"
+            gh auth login --hostname github.com --with-token < "$HOME/.overseer/github-token"
+            """, cancellationToken);
+        if (result.ExitCode == NoPushAccess)
+        {
+            throw new InvalidOperationException($"The Sandbox {VirtualMachine(sandbox)} has no push access, so it gets no GitHub token.");
+        }
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"The Sandbox {VirtualMachine(sandbox)} did not take the GitHub token: {Redaction.Without(result.Output, token).Trim()}");
+        }
+    }
+
     /// <exception cref="InvalidOperationException">The Sandbox does not exist, or its key is gone.</exception>
     /// <exception cref="SandboxUnreachableException">The Sandbox does not accept SSH, for instance from a new public IP of the developer's.</exception>
     public async Task<CommandResult> RunCommandAsync(Sandbox sandbox, string command, CancellationToken cancellationToken) =>

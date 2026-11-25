@@ -10,6 +10,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     private readonly ConcurrentDictionary<string, SandboxMachine> _machines = new();
     private readonly ConcurrentDictionary<string, IReadOnlyList<string>> _repositoriesInScope = new();
     private readonly ConcurrentDictionary<string, bool> _mayPush = new();
+    private readonly ConcurrentDictionary<string, string> _gitHubTokens = new();
     private readonly ConcurrentDictionary<string, Sequence<CommandResult>> _commands = new();
     private readonly ConcurrentDictionary<AgentRole, Sequence<FakeAgentSession>> _agentSessions = new();
     private readonly ConcurrentQueue<string> _creationFailures = new();
@@ -119,6 +120,23 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         _mayPush.TryGetValue(sandbox.ResourceId, out var mayPush)
             ? mayPush
             : throw new InvalidOperationException($"Sandbox {sandbox.ResourceId} was never created.");
+
+    /// <summary>
+    /// The GitHub token the Sandbox was last given (<see cref="SetGitHubTokenAsync"/>), also after it has been destroyed;
+    /// <c>null</c> when it was given none, as the fake clones without one.
+    /// </summary>
+    public string? GitHubTokenOf(Sandbox sandbox) => _gitHubTokens.GetValueOrDefault(sandbox.ResourceId);
+
+    public Task SetGitHubTokenAsync(Sandbox sandbox, string token, CancellationToken cancellationToken)
+    {
+        EnsureExists(sandbox);
+        if (!_mayPush[sandbox.ResourceId])
+        {
+            throw new InvalidOperationException($"Sandbox {sandbox.ResourceId} has no push access, so it gets no GitHub token.");
+        }
+        _gitHubTokens[sandbox.ResourceId] = token;
+        return Task.CompletedTask;
+    }
 
     public Sandbox Name(SandboxOwner owner) => new($"fake-sandbox-{Guid.NewGuid():N}", owner);
 
