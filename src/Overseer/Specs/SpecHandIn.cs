@@ -17,7 +17,7 @@ namespace Overseer.Specs;
 internal sealed class SpecHandIn(IReadOnlyList<RepositoryName> repositoriesInScope, IReadOnlyList<RepositoryName> lackingManifest) : HandIn<Spec>
 {
     /// <summary>In the home of the Sandbox's user, outside the repositories, next to the Round's.</summary>
-    public const string FilePath = "/home/overseer/.overseer/spec.json";
+    public const string FilePath = $"{Sandbox.HomeDirectory}/.overseer/spec.json";
 
     public override string Path => FilePath;
 

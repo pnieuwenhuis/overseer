@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Overseer.GitHub;
 
 namespace Overseer.Sandboxes;
 
@@ -22,6 +23,8 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     private readonly ConcurrentQueue<(string Fragment, Sequence<CommandResult> Results)> _commandsContaining = new();
     private readonly ConcurrentQueue<(string Fragment, Task Until)> _heldCommands = new();
     private readonly ConcurrentDictionary<string, string> _unreadableFiles = new();
+    private readonly ConcurrentQueue<Sandbox> _destructionsBegun = new();
+    private volatile Task _destructionsHeld = Task.CompletedTask;
 
     /// <summary>Makes the next creation fail with <paramref name="error"/>. Call it again to fail the one after as well.</summary>
     public void FailNextCreation(string error) => _creationFailures.Enqueue(error);
@@ -31,6 +34,15 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     /// the one after as well.
     /// </summary>
     public void FailNextDestruction(string error) => _destructionFailures.Enqueue(error);
+
+    /// <summary>
+    /// Makes every destruction from now on finish only once <paramref name="until"/> completes, like a VM being deleted, so that a
+    /// test can act meanwhile.
+    /// </summary>
+    public void HoldDestructions(Task until) => _destructionsHeld = until;
+
+    /// <summary>Every Sandbox a destruction was begun of, in the order they were begun, whether or not it succeeded or has ended.</summary>
+    public IReadOnlyList<Sandbox> DestructionsBegun => [.. _destructionsBegun];
 
     /// <summary>
     /// Makes <paramref name="command"/> give <paramref name="results"/> in turn, across all Sandboxes, repeating the last one.
@@ -122,7 +134,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         {
             if (repositoriesInScope.Contains(repository, StringComparer.OrdinalIgnoreCase))
             {
-                _files[(sandbox.ResourceId, $"{Sandbox.CloneDirectory(repository)}/{path}")] = content;
+                _files[(sandbox.ResourceId, $"{Sandbox.CloneDirectory(RepositoryName.Parse(repository))}/{path}")] = content;
             }
         }
         _sandboxes[sandbox.ResourceId] = sandbox;
@@ -185,8 +197,10 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
             () => _agentSessionsStopped.Enqueue(start)));
     }
 
-    public Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken)
+    public async Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken)
     {
+        _destructionsBegun.Enqueue(sandbox);
+        await _destructionsHeld.WaitAsync(cancellationToken);
         if (_destructionFailures.TryDequeue(out var error))
         {
             throw new InvalidOperationException(error);
@@ -196,7 +210,6 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         {
             _files.TryRemove(file, out _);
         }
-        return Task.CompletedTask;
     }
 
     public Task<IReadOnlyList<Sandbox>> ListAsync(CancellationToken cancellationToken) =>

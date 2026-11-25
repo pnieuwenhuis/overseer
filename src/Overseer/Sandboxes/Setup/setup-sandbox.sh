@@ -21,7 +21,7 @@ echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.co
 
 apt-get update
 apt-get install -y docker.io docker-compose-v2 git gh nodejs
-# The user Overseer logs in as (AzureSandboxProvider.Username) runs Docker without sudo.
+# The user Overseer logs in as (Sandbox.Username) runs Docker without sudo.
 usermod -aG docker overseer
 
 # The browsers go where every user finds them, rather than in root's home.

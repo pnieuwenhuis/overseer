@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using Overseer.ModelProviders;
@@ -20,6 +21,9 @@ public sealed class SandboxRegistry(
     TimeProvider time,
     ILogger<SandboxRegistry> logger)
 {
+    /// <summary>One lock per Sandbox that was destroyed, or is being, since serve started, by resource ID.</summary>
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _destroying = new();
+
     /// <summary>
     /// Creates a Sandbox holding the Repositories in scope, tagged with its owner, on the machine the Settings say now.
     /// Completes once the Sandbox is ready for use.
@@ -88,9 +92,9 @@ public sealed class SandboxRegistry(
     public Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken) =>
         provider.TakeFileAsync(sandbox, path, cancellationToken);
 
-    /// <summary>The Sandboxes of an owner of <paramref name="ownerKind"/> that are recorded and not recorded destroyed.</summary>
-    public Task<IReadOnlyList<Sandbox>> ListRecordedAsync(SandboxOwnerKind ownerKind, CancellationToken cancellationToken) =>
-        ListUndestroyedAsync(record => record.OwnerKind == ownerKind, cancellationToken);
+    /// <summary>Every Sandbox that is recorded and not recorded destroyed.</summary>
+    public Task<IReadOnlyList<Sandbox>> ListRecordedAsync(CancellationToken cancellationToken) =>
+        ListUndestroyedAsync(record => true, cancellationToken);
 
     /// <summary>The Sandboxes of this owner that are recorded and not recorded destroyed.</summary>
     public Task<IReadOnlyList<Sandbox>> ListRecordedAsync(SandboxOwner owner, CancellationToken cancellationToken) =>
@@ -106,16 +110,30 @@ public sealed class SandboxRegistry(
 
     /// <summary>
     /// Destroys the Sandbox and records when; the record itself is kept. When destroying fails, the Sandbox stays recorded
-    /// undestroyed, so that the next start's sweep (<see cref="ListRecordedAsync"/>) destroys it.
+    /// undestroyed, so that the next start's sweep (<see cref="LeftOverSandboxes"/>) destroys it. A Sandbox is destroyed by one
+    /// caller at a time, as when a Retry comes while the sweep is at it: the next waits, and does nothing when the one before it
+    /// succeeded.
     /// </summary>
     public async Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken)
     {
-        await provider.DestroyAsync(sandbox, cancellationToken);
-        await using var database = await databases.CreateDbContextAsync(cancellationToken);
-        var destroyedAt = time.GetUtcNow();
-        await database.Sandboxes
-            .Where(record => record.ResourceId == sandbox.ResourceId && record.DestroyedAt == null)
-            .ExecuteUpdateAsync(record => record.SetProperty(r => r.DestroyedAt, destroyedAt), cancellationToken);
+        var oneAtATime = _destroying.GetOrAdd(sandbox.ResourceId, _ => new SemaphoreSlim(1, 1));
+        await oneAtATime.WaitAsync(cancellationToken);
+        try
+        {
+            await using var database = await databases.CreateDbContextAsync(cancellationToken);
+            var recorded = database.Sandboxes.Where(record => record.ResourceId == sandbox.ResourceId);
+            if (await recorded.AnyAsync(record => record.DestroyedAt != null, cancellationToken))
+            {
+                return;
+            }
+            await provider.DestroyAsync(sandbox, cancellationToken);
+            var destroyedAt = time.GetUtcNow();
+            await recorded.ExecuteUpdateAsync(record => record.SetProperty(r => r.DestroyedAt, destroyedAt), cancellationToken);
+        }
+        finally
+        {
+            oneAtATime.Release();
+        }
     }
 
     /// <summary>

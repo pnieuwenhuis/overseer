@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
+using Overseer.Secrets;
 
 namespace Overseer.Sandboxes;
 
@@ -353,14 +354,7 @@ public sealed class AcpAgentSession : IAgentSession
         }
     }
 
-    private string Scrub(string text)
-    {
-        foreach (var secret in _secrets)
-        {
-            text = text.Replace(secret, "***", StringComparison.Ordinal);
-        }
-        return text;
-    }
+    private string Scrub(string text) => Redaction.Without(text, _secrets);
 
     public async ValueTask DisposeAsync()
     {

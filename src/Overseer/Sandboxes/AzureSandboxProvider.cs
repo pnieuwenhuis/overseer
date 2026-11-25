@@ -36,9 +36,6 @@ public sealed partial class AzureSandboxProvider(
     Func<CancellationToken, Task<IPAddress>> developerAddress,
     TimeProvider time) : ISandboxProvider
 {
-    /// <summary>The user Overseer logs in to Sandboxes as.</summary>
-    public const string Username = "overseer";
-
     private const int SshPort = 22;
 
     /// <summary>
@@ -104,7 +101,8 @@ public sealed partial class AzureSandboxProvider(
         CancellationToken cancellationToken)
     {
         // Checked before anything is created: a Sandbox that can't clone shouldn't cost a VM.
-        var token = repositoriesInScope.Count == 0 ? null : await TokenForCloningAsync(repositoriesInScope, cancellationToken);
+        var repositories = repositoriesInScope.Select(RepositoryToClone).ToList();
+        var token = repositories.Count == 0 ? null : await TokenForCloningAsync(cancellationToken);
 
         var userKey = SshKeyPair.Generate();
         var hostKey = SshKeyPair.Generate();
@@ -126,7 +124,7 @@ public sealed partial class AzureSandboxProvider(
             {
                 ["Size"] = machine.VmSize,
                 ["Spot"] = machine.Spot ? "true" : "false",
-                ["Username"] = Username,
+                ["Username"] = Sandbox.Username,
                 ["OwnerKind"] = owner.Kind.ToString(),
                 ["OwnerId"] = owner.Id.ToString(),
                 ["HostKeyFingerprint"] = hostKey.Fingerprint,
@@ -141,27 +139,23 @@ public sealed partial class AzureSandboxProvider(
             File.Delete(customData);
         }
 
-        var target = new SshTarget(address, SshPort, Username, userKey.PrivateKey, hostKey.Fingerprint);
+        var target = new SshTarget(address, SshPort, Sandbox.Username, userKey.PrivateKey, hostKey.Fingerprint);
         await WaitForSetupAsync(target, cancellationToken);
         if (token is not null)
         {
-            await CloneAsync(target, token, repositoriesInScope, mayPush, cancellationToken);
+            await CloneAsync(target, token, repositories, mayPush, cancellationToken);
         }
         _targets[name] = target;
     }
 
-    [GeneratedRegex(@"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")]
-    private static partial Regex RepositoryNamePattern();
+    /// <summary>The repository to clone, only when written as <c>owner/name</c>, which is safe in a URL, a path and a command.</summary>
+    private static RepositoryName RepositoryToClone(string repository) =>
+        RepositoryName.TryParse(repository, out var read) && read.ToString() == repository
+            ? read
+            : throw new SandboxCreationFailedException($"{repository} is not a GitHub repository as owner/name, so it can't be cloned into the Sandbox.");
 
-    private async Task<string> TokenForCloningAsync(IReadOnlyCollection<string> repositoriesInScope, CancellationToken cancellationToken)
+    private async Task<string> TokenForCloningAsync(CancellationToken cancellationToken)
     {
-        foreach (var repository in repositoriesInScope)
-        {
-            if (!RepositoryNamePattern().IsMatch(repository) || repository.Split('/').Any(part => part is "." or ".."))
-            {
-                throw new SandboxCreationFailedException($"{repository} is not a GitHub repository as owner/name, so it can't be cloned into the Sandbox.");
-            }
-        }
         var token = await secretReader.ReadAsync(GitHubToken.SecretName, cancellationToken);
         return token is { Length: > 0 } && GitHubToken.IsWellFormed(token)
             ? token
@@ -173,7 +167,7 @@ public sealed partial class AzureSandboxProvider(
     /// <c>gh</c>'s login, never in a remote URL. Without push access, the token and both logins are removed afterwards.
     /// </summary>
     private async Task CloneAsync(
-        SshTarget target, string token, IReadOnlyCollection<string> repositoriesInScope, bool mayPush, CancellationToken cancellationToken)
+        SshTarget target, string token, IReadOnlyCollection<RepositoryName> repositoriesInScope, bool mayPush, CancellationToken cancellationToken)
     {
         // The token reaches the Sandbox in this one command over SSH, which nothing logs; it goes in a file only its user may read.
         await RunStepAsync(target, token, "Giving the Sandbox the GitHub token failed", $$"""
@@ -215,7 +209,7 @@ public sealed partial class AzureSandboxProvider(
         var result = await ssh.RunAsync(target, command, cancellationToken);
         if (result.ExitCode != 0)
         {
-            throw new SandboxCreationFailedException($"{failure}: {result.Output.Replace(token, "***").Trim()}");
+            throw new SandboxCreationFailedException($"{failure}: {Redaction.Without(result.Output, token).Trim()}");
         }
     }
 
@@ -242,7 +236,7 @@ public sealed partial class AzureSandboxProvider(
             throw new InvalidOperationException($"'{name}' is not a name an environment variable can have.");
         }
 
-        var exports = string.Concat(variables.Select(variable => $"export {variable.Key}='{variable.Value.Replace("'", "'\\''")}'\n"));
+        var exports = string.Concat(variables.Select(variable => $"export {variable.Key}={ShellText.Quoted(variable.Value)}\n"));
         var setup = Convert.ToBase64String(Encoding.UTF8.GetBytes(exports));
         var target = await TargetAsync(VirtualMachine(sandbox), cancellationToken);
         var pidFile = $"$HOME/.overseer/agent-{Guid.NewGuid():N}.pid";
@@ -251,16 +245,16 @@ public sealed partial class AzureSandboxProvider(
             IFS= read -r setup
             eval "$(printf '%s' "$setup" | base64 -d)"
             unset setup
-            mkdir -p "$HOME/.overseer" '{{AgentDirectory}}'
+            mkdir -p "$HOME/.overseer" '{{Sandbox.RepositoriesDirectory}}'
             echo $$ > "{{pidFile}}"
-            cd '{{AgentDirectory}}'
+            cd '{{Sandbox.RepositoriesDirectory}}'
             exec opencode acp
             """, cancellationToken);
         try
         {
             await process.WriteLineAsync(setup, cancellationToken);
             return await AcpAgentSession.StartAsync(
-                process, AgentDirectory, AgentHarnessConfiguration.AgentName(role),
+                process, Sandbox.RepositoriesDirectory, AgentHarnessConfiguration.AgentName(role),
                 [.. environment.Values.Where(value => value.Length > 0)], () => EndAgentAsync(target, pidFile), cancellationToken);
         }
         catch (IOException exception)
@@ -274,9 +268,6 @@ public sealed partial class AzureSandboxProvider(
             throw;
         }
     }
-
-    /// <summary>Where agents work in a Sandbox: above the Repositories in scope, which are cloned below it.</summary>
-    private static string AgentDirectory => $"/home/{Username}/repositories";
 
     /// <summary>
     /// Ends the agent process and what it started, should closing the connection not have: OpenCode's launcher starts the
@@ -305,10 +296,10 @@ public sealed partial class AzureSandboxProvider(
     {
         var quoted = ShellText.Quoted(path);
         // A symlink that leads nowhere is something at the path too, which cat then says it can't read.
-        return FileContentAsync(sandbox, path, "read", $"""
+        return FileContentAsync(sandbox, $"""
             [ -e {quoted} ] || [ -L {quoted} ] || exit {NoSuchFile}
             cat -- {quoted}
-            """, cancellationToken);
+            """, failure: $"The file {path} in the Sandbox could not be read", cancellationToken);
     }
 
     /// <inheritdoc cref="ISandboxProvider.TakeFileAsync"/>
@@ -319,25 +310,25 @@ public sealed partial class AzureSandboxProvider(
     public Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken)
     {
         var quoted = ShellText.Quoted(path);
-        return FileContentAsync(sandbox, path, "taken", $"""
+        return FileContentAsync(sandbox, $"""
             [ -f {quoted} ] || exit {NoSuchFile}
             cat -- {quoted} && rm -f -- {quoted}
-            """, cancellationToken);
+            """, failure: $"The file {path} in the Sandbox could not be taken", cancellationToken);
     }
 
     /// <summary>What a command that prints a file exits with when there is no file.</summary>
     private const int NoSuchFile = 3;
 
-    /// <summary>Runs a command that prints the file at <paramref name="path"/>, or exits with <see cref="NoSuchFile"/>.</summary>
-    /// <param name="done">What couldn't be done with the file when the command fails otherwise, as in "could not be read".</param>
-    private async Task<string?> FileContentAsync(Sandbox sandbox, string path, string done, string command, CancellationToken cancellationToken)
+    /// <summary>Runs a command that prints a file, or exits with <see cref="NoSuchFile"/> when there is none.</summary>
+    /// <param name="failure">What to say, ahead of the command's output, when it fails otherwise.</param>
+    private async Task<string?> FileContentAsync(Sandbox sandbox, string command, string failure, CancellationToken cancellationToken)
     {
         var result = await RunCommandAsync(sandbox, command, cancellationToken);
         return result.ExitCode switch
         {
             0 => result.Output,
             NoSuchFile => null,
-            _ => throw new InvalidOperationException($"The file {path} in the Sandbox could not be {done}: {result.Output}"),
+            _ => throw new InvalidOperationException($"{failure}: {result.Output}"),
         };
     }
 
@@ -379,7 +370,7 @@ public sealed partial class AzureSandboxProvider(
         var key = await secretReader.ReadAsync(KeySecret(name), cancellationToken)
             ?? throw new InvalidOperationException($"The SSH key of the Sandbox {name} is not in the secret store, so Overseer can't log in to it.");
         return found is [var address, var hostKey]
-            ? _targets.GetOrAdd(name, new SshTarget(address, SshPort, Username, key, hostKey))
+            ? _targets.GetOrAdd(name, new SshTarget(address, SshPort, Sandbox.Username, key, hostKey))
             : throw new InvalidOperationException(
                 $"The Sandbox {name} has no {(settings.PrivateNetwork ? "private" : "public")} IP address or host key tag, so Overseer can't log in to it.");
     }

@@ -225,6 +225,19 @@ public class RefinementTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task An_error_that_PostgreSQL_cant_store_as_it_is_still_turns_the_Intent_red()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        overseer.Sandboxes.FailNextCreation("Quota\0 exceeded.");
+        using var saved = await SaveAsync(overseer, "Export data", "acme/web");
+        var address = await AddressAsync(overseer, "Export data");
+
+        using var started = await StartAsync(overseer, address);
+
+        Assert.Equal("The Sandbox could not be created: Quota exceeded.", (await FailedAsync(overseer, address)).Status);
+    }
+
+    [Fact]
     public async Task Stopping_serve_destroys_the_Sandbox_and_after_a_restart_the_Refinement_continues_in_a_fresh_Sandbox_from_its_transcript()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();

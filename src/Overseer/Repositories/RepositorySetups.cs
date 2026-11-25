@@ -4,6 +4,7 @@ using Overseer.GitHub;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
 
+
 namespace Overseer.Repositories;
 
 /// <summary>
@@ -12,14 +13,15 @@ namespace Overseer.Repositories;
 /// Repository Setup is not an Intent, and takes no Active Intent slot.
 /// </summary>
 public sealed class RepositorySetups(
-    IDbContextFactory<OverseerDbContext> databases, IGitHubGateway gitHub, StarterFiles starterFiles, SandboxRegistry sandboxes,
-    TimeProvider time, ILogger<RepositorySetups> logger) : IHostedService
+    IDbContextFactory<OverseerDbContext> databases, IGitHubGateway gitHub, StarterFiles starterFiles, TimeProvider time,
+    ILogger<RepositorySetups> logger) : IHostedService
 {
-    private readonly SandboxedWork _work = new(sandboxes, logger);
+    private readonly SandboxedWork _work = new(logger);
 
     /// <summary>
-    /// Marks the Repository Setups that a stop of serve interrupted as failed, so they can be retried, and destroys the
-    /// Sandboxes they left behind. Runs as serve starts, before the Portal takes requests, so no Retry comes first.
+    /// Marks the Repository Setups that a stop of serve interrupted as failed, so they can be retried (the Sandboxes they left
+    /// behind are destroyed by <see cref="LeftOverSandboxes"/>). Runs as serve starts, before the Portal takes requests, so no
+    /// Retry comes first.
     /// </summary>
     async Task IHostedService.StartAsync(CancellationToken cancellationToken)
     {
@@ -37,9 +39,6 @@ public sealed class RepositorySetups(
             }
             await database.SaveChangesAsync(cancellationToken);
         }
-
-        // No Repository Setup runs yet, so every Sandbox one owns is left over.
-        await _work.DestroyLeftOverAsync(SandboxOwnerKind.RepositorySetup, cancellationToken);
     }
 
     Task IHostedService.StopAsync(CancellationToken cancellationToken) => _work.StopAsync(cancellationToken);
@@ -152,11 +151,12 @@ public sealed class RepositorySetups(
 
     private async Task EnterPhaseAsync(Guid id, RepositorySetupPhase phase, string? error, CancellationToken cancellationToken)
     {
+        var stored = StorableText.Of(error);
         await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
             await database.RepositorySetups
                 .Where(setup => setup.Id == id)
-                .ExecuteUpdateAsync(setup => setup.SetProperty(s => s.Phase, phase).SetProperty(s => s.Error, error), cancellationToken);
+                .ExecuteUpdateAsync(setup => setup.SetProperty(s => s.Phase, phase).SetProperty(s => s.Error, stored), cancellationToken);
         }
         Changed?.Invoke();
     }

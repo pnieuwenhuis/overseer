@@ -147,6 +147,18 @@ public class RepositorySetupAgentTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task An_error_that_PostgreSQL_cant_store_as_it_is_still_fails_the_Repository_Setup()
+    {
+        await using var overseer = await StartWithTokenAsync(postgres);
+        overseer.Sandboxes.FailNextCreation("Quota\0 exceeded.");
+
+        using var response = await StartSetupAsync(overseer, "acme", "web");
+
+        var setup = await FinishedAsync(overseer, "acme/web");
+        Assert.Equal(("Failed", "The Sandbox could not be created: Quota exceeded."), (setup.Phase, setup.Status));
+    }
+
+    [Fact]
     public async Task When_the_agent_session_fails_the_Repository_Setup_fails_with_its_error_and_its_Sandbox_is_destroyed()
     {
         await using var overseer = await StartWithTokenAsync(postgres);

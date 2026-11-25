@@ -38,6 +38,10 @@ _Avoid_: Scaffolding intent, repo bootstrap
 A Configured Repository selected on an Intent as one the Intent may change; by default every configured repository.
 _Avoid_: Target repo, workspace repo
 
+**Intent branch**:
+The branch an Intent's work goes on: one per Intent, with the same name in every Repository in scope, for the Intent's life.
+_Avoid_: Feature branch, Task branch
+
 **Active Intent**:
 An Intent on which agents are currently working (Refining, Implementing or In Review), occupying one of the limited concurrency slots; the maximum is a setting (default 2).
 _Avoid_: Running intent, in-progress intent

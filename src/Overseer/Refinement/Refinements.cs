@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 using Overseer.GitHub;
 using Overseer.Intents;
 using Overseer.Persistence;
@@ -39,7 +38,7 @@ public sealed class Refinements(
     /// </summary>
     public const int HandInAttempts = 3;
 
-    private readonly SandboxedWork _work = new(sandboxes, logger);
+    private readonly SandboxedWork _work = new(logger);
 
     /// <summary>The Refinements waiting for the human's answers to their open Round, each completed once they are recorded.</summary>
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource> _awaitingAnswers = new();
@@ -52,7 +51,7 @@ public sealed class Refinements(
 
     /// <summary>
     /// Continues each Refinement a stop of serve interrupted in a fresh Sandbox from its transcript (the Sandbox it left behind is
-    /// destroyed by <see cref="LeftOverIntentSandboxes"/>); from then on launches the Analyst for each Intent that moves to
+    /// destroyed by <see cref="LeftOverSandboxes"/>); from then on launches the Analyst for each Intent that moves to
     /// Refining. Runs as serve starts, before the Portal takes requests, and sets them to provision their Sandbox before it does,
     /// so that no answers come for a Round whose Analyst session is gone.
     /// </summary>
@@ -554,30 +553,15 @@ public sealed class Refinements(
         Changed?.Invoke();
     }
 
-    /// <summary>
-    /// Records where the Intent's Refinement stands, whether or not it had one before: updated when it has, and inserted when
-    /// it hasn't. Should another insert come first meanwhile, this one is applied after it, as an update.
-    /// </summary>
-    private static async Task EnterPhaseAsync(OverseerDbContext database, Guid intentId, RefinementPhase phase, string? error, CancellationToken cancellationToken)
+    /// <summary>Records where the Intent's Refinement stands, whether or not it had a record before.</summary>
+    private static Task EnterPhaseAsync(OverseerDbContext database, Guid intentId, RefinementPhase phase, string? error, CancellationToken cancellationToken)
     {
-        if (await UpdateAsync() > 0)
-        {
-            return;
-        }
-        database.Refinements.Add(new RefinementRecord { IntentId = intentId, Phase = phase, Error = error });
-        try
-        {
-            await database.SaveChangesAsync(cancellationToken);
-        }
-        catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
-        {
-            database.ChangeTracker.Clear();
-            await UpdateAsync();
-        }
-
-        Task<int> UpdateAsync() => database.Refinements
-            .Where(refinement => refinement.IntentId == intentId)
-            .ExecuteUpdateAsync(refinement => refinement.SetProperty(record => record.Phase, phase).SetProperty(record => record.Error, error), cancellationToken);
+        var stored = StorableText.Of(error);
+        return database.UpsertAsync(
+            new RefinementRecord { IntentId = intentId, Phase = phase, Error = stored },
+            refinement => refinement.IntentId == intentId,
+            refinement => refinement.SetProperty(record => record.Phase, phase).SetProperty(record => record.Error, stored),
+            cancellationToken);
     }
 }
 

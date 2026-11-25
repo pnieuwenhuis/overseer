@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 using Overseer.GitHub;
 using Overseer.Intents;
 using Overseer.Persistence;
@@ -20,7 +19,7 @@ public sealed class TaskRunner(
 {
     private const string Interrupted = "Overseer restarted, which interrupted the implementation. Retry to prepare a fresh Sandbox.";
 
-    private readonly SandboxedWork _work = new(sandboxes, logger);
+    private readonly SandboxedWork _work = new(logger);
 
     /// <summary>
     /// Raised whenever an implementation changes phase, on the thread that changed it, once the change is committed. Handlers must
@@ -127,14 +126,9 @@ public sealed class TaskRunner(
         {
             return null;
         }
-        if (retrying)
+        if (retrying && await DestroyFailedSandboxAsync(intentId, cancellationToken) is { } notDestroyed)
         {
-            // The failed Sandbox went as the implementation failed, unless destroying it failed too. It goes first, as it may be
-            // what takes the quota the fresh one needs.
-            foreach (var leftOver in await sandboxes.ListRecordedAsync(new SandboxOwner(SandboxOwnerKind.Intent, intentId), cancellationToken))
-            {
-                await sandboxes.DestroyOrLeaveAsync(leftOver);
-            }
+            return notDestroyed;
         }
         Task EnterAsync(ImplementationPhase phase, RepositoryName? repository) =>
             EnterPhaseAsync(intentId, phase, repository, error: null, cancellationToken);
@@ -147,37 +141,46 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Records where the Intent's implementation stands, whether or not it had a record before: updated when it has, and inserted
-    /// when it hasn't. Should another insert come first meanwhile, this one is applied after it, as an update.
+    /// Destroys what is left of the failed implementation's Sandbox, ahead of a fresh one: it went as the implementation failed,
+    /// unless destroying it failed too, or the restart that interrupted the implementation is still destroying it, which this
+    /// then waits for. No other is created while it is there, costing money and perhaps taking the quota the fresh one needs.
     /// </summary>
+    /// <returns>Why it couldn't be destroyed; <c>null</c> once nothing is left of it.</returns>
+    private async Task<string?> DestroyFailedSandboxAsync(Guid intentId, CancellationToken cancellationToken)
+    {
+        foreach (var sandbox in await sandboxes.ListRecordedAsync(new SandboxOwner(SandboxOwnerKind.Intent, intentId), cancellationToken))
+        {
+            try
+            {
+                await sandboxes.DestroyAsync(sandbox, cancellationToken);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogError(exception, "The failed Sandbox {Sandbox} of the Intent {IntentId} could not be destroyed.", sandbox.ResourceId, intentId);
+                return $"The failed Sandbox could not be destroyed, so no new one was created: {exception.Message}";
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Records where the Intent's implementation stands, whether or not it had a record before.</summary>
     private async Task EnterPhaseAsync(
         Guid intentId, ImplementationPhase phase, RepositoryName? repository, string? error, CancellationToken cancellationToken)
     {
         var name = repository?.ToString();
+        var stored = StorableText.Of(error);
         await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
-            if (await UpdateAsync(database) == 0)
-            {
-                database.Implementations.Add(new ImplementationRecord { IntentId = intentId, Phase = phase, Repository = name, Error = error });
-                try
-                {
-                    await database.SaveChangesAsync(cancellationToken);
-                }
-                catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
-                {
-                    database.ChangeTracker.Clear();
-                    await UpdateAsync(database);
-                }
-            }
+            await database.UpsertAsync(
+                new ImplementationRecord { IntentId = intentId, Phase = phase, Repository = name, Error = stored },
+                implementation => implementation.IntentId == intentId,
+                implementation => implementation
+                    .SetProperty(record => record.Phase, phase)
+                    .SetProperty(record => record.Repository, name)
+                    .SetProperty(record => record.Error, stored),
+                cancellationToken);
         }
         Changed?.Invoke();
-
-        Task<int> UpdateAsync(OverseerDbContext database) => database.Implementations
-            .Where(implementation => implementation.IntentId == intentId)
-            .ExecuteUpdateAsync(implementation => implementation
-                .SetProperty(record => record.Phase, phase)
-                .SetProperty(record => record.Repository, name)
-                .SetProperty(record => record.Error, error), cancellationToken);
     }
 }
 

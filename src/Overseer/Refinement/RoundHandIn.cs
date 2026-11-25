@@ -12,7 +12,7 @@ internal sealed class RoundHandIn : HandIn<IReadOnlyList<HandedInQuestion>>
     public static RoundHandIn Instance { get; } = new();
 
     /// <summary>In the home of the Sandbox's user, outside the repositories.</summary>
-    public const string FilePath = "/home/overseer/.overseer/round.json";
+    public const string FilePath = $"{Sandbox.HomeDirectory}/.overseer/round.json";
 
     public override string Path => FilePath;
 

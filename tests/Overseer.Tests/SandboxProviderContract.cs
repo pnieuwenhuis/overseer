@@ -282,7 +282,7 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
     public async Task A_Sandbox_holds_each_Repository_in_scope_cloned_on_its_default_branch_without_the_token_in_its_remote()
     {
         var sandbox = await CreateWithPushAsync(mayPush: true);
-        var directory = Sandbox.CloneDirectory(Repository);
+        var directory = Sandbox.CloneDirectory(RepositoryName.Parse(Repository));
 
         var branch = await _azure.RunCommandAsync(sandbox, $"git -C '{directory}' symbolic-ref --short HEAD", TestContext.Current.CancellationToken);
         var remote = await _azure.RunCommandAsync(sandbox, $"git -C '{directory}' remote get-url origin", TestContext.Current.CancellationToken);
@@ -296,7 +296,7 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
     public async Task In_a_Sandbox_without_push_access_git_push_and_gh_fail_for_lack_of_credentials()
     {
         var sandbox = await CreateWithPushAsync(mayPush: false);
-        var directory = Sandbox.CloneDirectory(Repository);
+        var directory = Sandbox.CloneDirectory(RepositoryName.Parse(Repository));
 
         var push = await _azure.RunCommandAsync(sandbox, $"cd '{directory}' && GIT_TERMINAL_PROMPT=0 git push origin HEAD", TestContext.Current.CancellationToken);
         var gh = await _azure.RunCommandAsync(sandbox, "gh auth status", TestContext.Current.CancellationToken);

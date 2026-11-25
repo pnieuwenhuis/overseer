@@ -1,25 +1,12 @@
 @* Where a Refining Intent's Refinement stands: its steps, what is happening now, and Retry once it has failed. *@
 @using Overseer.Refinement
 
-<section class="refinement" data-phase="@Refinement.Phase" aria-label="Refinement">
-    <ol class="steps">
-        <li class="@StepClass(RefinementPhase.ProvisioningSandbox)">Provision a Sandbox holding the Repositories in scope</li>
-        <li class="@StepClass(RefinementPhase.AnalystWorking)">The Analyst refines the Intent with you, in Rounds of questions</li>
-    </ol>
-    @if (Refinement.Phase == RefinementPhase.Failed)
-    {
-        <p class="refinement-status" role="alert">@Refinement.Error</p>
-        @* A plain form, posted by the browser, so Retry works the same with or without the live connection. *@
-        <form method="post" action="intents/@IntentId/retry">
-            <AntiforgeryToken />
-            <button type="submit" class="btn-primary">Retry</button>
-        </form>
-    }
-    else
-    {
-        <p class="refinement-status" role="status">@Status</p>
-    }
-</section>
+<WorkSteps Name="refinement" Label="Refinement" Phase="@Refinement.Phase.ToString()" Status="@Status"
+           Failed="@(Refinement.Phase == RefinementPhase.Failed)" Error="@Refinement.Error"
+           RetryAction="@($"intents/{IntentId}/retry")">
+    <li class="@StepClass(RefinementPhase.ProvisioningSandbox)">Provision a Sandbox holding the Repositories in scope</li>
+    <li class="@StepClass(RefinementPhase.AnalystWorking)">The Analyst refines the Intent with you, in Rounds of questions</li>
+</WorkSteps>
 
 @code {
     [Parameter, EditorRequired]

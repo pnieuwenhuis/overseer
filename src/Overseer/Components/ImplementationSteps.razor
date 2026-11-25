@@ -2,29 +2,16 @@
 @using Overseer.Implementation
 @using Overseer.Intents
 
-<section class="implementation" data-phase="@Implementation.Phase" aria-label="Implementation">
-    <ol class="steps">
-        <li class="@StepClass(ImplementationPhase.ProvisioningSandbox)">Provision a Sandbox holding the Repositories in scope</li>
-        <li class="@StepClass(ImplementationPhase.CheckingOutIntentBranch)">
-            <span>Put each repository on the Intent branch <span class="intent-branch">@Intent.Branch</span></span>
-        </li>
-        <li class="@StepClass(ImplementationPhase.RunningSetup)">Run each repository's setup command</li>
-        <li class="@StepClass(ImplementationPhase.StartingDependencies)">Start the services of each repository's Compose file</li>
-    </ol>
-    @if (Implementation.Phase == ImplementationPhase.Failed)
-    {
-        <p class="implementation-status" role="alert">@Implementation.Error</p>
-        @* A plain form, posted by the browser, so Retry works the same with or without the live connection. *@
-        <form method="post" action="intents/@Intent.Id/implementation/retry">
-            <AntiforgeryToken />
-            <button type="submit" class="btn-primary">Retry</button>
-        </form>
-    }
-    else
-    {
-        <p class="implementation-status" role="status">@Status</p>
-    }
-</section>
+<WorkSteps Name="implementation" Label="Implementation" Phase="@Implementation.Phase.ToString()" Status="@Status"
+           Failed="@(Implementation.Phase == ImplementationPhase.Failed)" Error="@Implementation.Error"
+           RetryAction="@($"intents/{Intent.Id}/implementation/retry")">
+    <li class="@StepClass(ImplementationPhase.ProvisioningSandbox)">Provision a Sandbox holding the Repositories in scope</li>
+    <li class="@StepClass(ImplementationPhase.CheckingOutIntentBranch)">
+        <span>Put each repository on the Intent branch <span class="intent-branch">@Intent.Branch</span></span>
+    </li>
+    <li class="@StepClass(ImplementationPhase.RunningSetup)">Run each repository's setup command</li>
+    <li class="@StepClass(ImplementationPhase.StartingDependencies)">Start the services of each repository's Compose file</li>
+</WorkSteps>
 
 @code {
     [Parameter, EditorRequired]

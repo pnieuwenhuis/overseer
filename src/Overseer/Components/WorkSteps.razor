@@ -1,0 +1,53 @@
+@* Where a piece of an Intent's work stands: its steps, then what is happening now, or, once it has failed, why, with Retry. *@
+
+<section class="@Name" data-phase="@Phase" aria-label="@Label">
+    <ol class="steps">
+        @ChildContent
+    </ol>
+    @if (Failed)
+    {
+        <p class="@($"{Name}-status")" role="alert">@Error</p>
+        @* A plain form, posted by the browser, so Retry works the same with or without the live connection. *@
+        <form method="post" action="@RetryAction">
+            <AntiforgeryToken />
+            <button type="submit" class="btn-primary">Retry</button>
+        </form>
+    }
+    else
+    {
+        <p class="@($"{Name}-status")" role="status">@Status</p>
+    }
+</section>
+
+@code {
+    /// <summary>The class of the section, and what the class of its status line starts with, which app.css styles.</summary>
+    [Parameter, EditorRequired]
+    public required string Name { get; set; }
+
+    /// <summary>What the section is called to those who can't see it.</summary>
+    [Parameter, EditorRequired]
+    public required string Label { get; set; }
+
+    /// <summary>The name of the phase the work is in.</summary>
+    [Parameter, EditorRequired]
+    public required string Phase { get; set; }
+
+    /// <summary>The steps, each a list item with its class from <see cref="Steps"/>.</summary>
+    [Parameter, EditorRequired]
+    public required RenderFragment ChildContent { get; set; }
+
+    [Parameter, EditorRequired]
+    public required bool Failed { get; set; }
+
+    /// <summary>Why it failed, when it has.</summary>
+    [Parameter, EditorRequired]
+    public required string? Error { get; set; }
+
+    /// <summary>What is happening now, while it hasn't failed.</summary>
+    [Parameter, EditorRequired]
+    public required string Status { get; set; }
+
+    /// <summary>Where the Retry button posts to.</summary>
+    [Parameter, EditorRequired]
+    public required string RetryAction { get; set; }
+}

@@ -58,6 +58,8 @@ public static class OverseerServer
         builder.Services.AddSingleton<GitHubTokenStore>();
         builder.Services.AddSingleton<ConfiguredRepositories>();
         builder.Services.AddSingleton<StarterFiles>();
+        // Hosted services start in the order they are registered: this one ahead of every module that creates Sandboxes.
+        builder.Services.AddHostedService<LeftOverSandboxes>();
         builder.Services.AddSingleton<RepositorySetups>();
         builder.Services.AddHostedService(services => services.GetRequiredService<RepositorySetups>());
         builder.Services.AddSingleton<ModelProviderTokens>();
@@ -70,8 +72,6 @@ public static class OverseerServer
         builder.Services.AddSingleton<SpecEdits>();
         builder.Services.AddSingleton<SpecSendBack>();
         builder.Services.AddSingleton<SpecApproval>();
-        // Ahead of Refinements and the Task Runner, which create Sandboxes for Intents: hosted services start in this order.
-        builder.Services.AddHostedService<LeftOverIntentSandboxes>();
         builder.Services.AddSingleton<Refinements>();
         builder.Services.AddHostedService(services => services.GetRequiredService<Refinements>());
         builder.Services.AddSingleton<SandboxPreparation>();
@@ -120,39 +120,14 @@ public static class OverseerServer
             await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
             return Results.LocalRedirect("/login");
         });
-        // The Retry button of a failed Repository Setup, on the Settings page.
-        app.MapPost("/repository-setups/{id:guid}/retry", async (Guid id, HttpContext context, IAntiforgery antiforgery, RepositorySetups setups) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-            {
-                return Results.BadRequest();
-            }
-            // Not retried when it isn't failed, as after a second press: the Settings page shows where it is.
-            await setups.RetryAsync(id, context.RequestAborted);
-            return Results.LocalRedirect("/settings");
-        }).RequireAuthorization();
-        // The Retry button of an Intent whose Refinement failed, on its detail page.
-        app.MapPost("/intents/{id:guid}/retry", async (Guid id, HttpContext context, IAntiforgery antiforgery, Refinements refinements) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-            {
-                return Results.BadRequest();
-            }
-            // Not retried when it hasn't failed, as after a second press: the detail page shows where it is.
-            await refinements.RetryAsync(id, context.RequestAborted);
-            return Results.LocalRedirect($"/intents/{id}");
-        }).RequireAuthorization();
-        // The Retry button of an Intent whose implementation failed, on its detail page.
-        app.MapPost("/intents/{id:guid}/implementation/retry", async (Guid id, HttpContext context, IAntiforgery antiforgery, TaskRunner taskRunner) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-            {
-                return Results.BadRequest();
-            }
-            // Not retried when it hasn't failed, as after a second press: the detail page shows where it is.
-            await taskRunner.RetryAsync(id, context.RequestAborted);
-            return Results.LocalRedirect($"/intents/{id}");
-        }).RequireAuthorization();
+        // The Retry buttons: of a failed Repository Setup, on the Settings page, and of an Intent whose Refinement or
+        // implementation failed, on its detail page.
+        MapRetry(app, "/repository-setups/{id:guid}/retry",
+            (services, id, stopping) => services.GetRequiredService<RepositorySetups>().RetryAsync(id, stopping), _ => "/settings");
+        MapRetry(app, "/intents/{id:guid}/retry",
+            (services, id, stopping) => services.GetRequiredService<Refinements>().RetryAsync(id, stopping), id => $"/intents/{id}");
+        MapRetry(app, "/intents/{id:guid}/implementation/retry",
+            (services, id, stopping) => services.GetRequiredService<TaskRunner>().RetryAsync(id, stopping), id => $"/intents/{id}");
         // Every page requires the logged-in user; only the login page opts out with [AllowAnonymous].
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode()
@@ -160,6 +135,24 @@ public static class OverseerServer
 
         return app;
     }
+
+    /// <summary>Maps where a Retry button of the Portal's posts to: a plain form, which the user ends up back on the page of.</summary>
+    /// <param name="address">With the id of what is retried as <c>{id}</c>.</param>
+    /// <param name="retry">
+    /// Retries it, doing nothing when it hasn't failed, as after a second press: the page the user goes back to shows where it is.
+    /// </param>
+    /// <param name="page">The page the button is on.</param>
+    private static void MapRetry(
+        WebApplication app, string address, Func<IServiceProvider, Guid, CancellationToken, Task> retry, Func<Guid, string> page) =>
+        app.MapPost(address, async (Guid id, HttpContext context, IAntiforgery antiforgery) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+            {
+                return Results.BadRequest();
+            }
+            await retry(context.RequestServices, id, context.RequestAborted);
+            return Results.LocalRedirect(page(id));
+        }).RequireAuthorization();
 
     /// <summary>Builds the server, brings the database schema up to date, and starts listening.</summary>
     /// <inheritdoc cref="Build"/>

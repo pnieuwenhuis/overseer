@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using Overseer.GitHub;
 
 namespace Overseer.Sandboxes;
 
@@ -65,12 +66,20 @@ public interface ISandboxProvider
 /// <param name="ResourceId">The provider's identifier for the machine, such as an Azure resource ID.</param>
 public sealed record Sandbox(string ResourceId, SandboxOwner Owner)
 {
-    /// <summary>
-    /// Where every Sandbox has each Repository in scope cloned, whatever its provider:
-    /// <c>/home/overseer/repositories/owner/name</c>.
-    /// </summary>
-    /// <param name="repository">The repository as <c>owner/name</c>, as the Sandbox was created with it.</param>
-    public static string CloneDirectory(string repository) => $"/home/overseer/repositories/{repository}";
+    // What every Sandbox is like inside, whatever its provider.
+
+    /// <summary>The user Overseer works in a Sandbox as.</summary>
+    public const string Username = "overseer";
+
+    /// <summary>That user's home, under which Overseer and its agents keep what they put in a Sandbox.</summary>
+    public const string HomeDirectory = $"/home/{Username}";
+
+    /// <summary>Where the Repositories in scope are cloned, and where agents work.</summary>
+    public const string RepositoriesDirectory = $"{HomeDirectory}/repositories";
+
+    /// <summary>Where a Repository in scope is cloned: <c>/home/overseer/repositories/owner/name</c>.</summary>
+    /// <param name="repository">The repository as the Sandbox was created with it.</param>
+    public static string CloneDirectory(RepositoryName repository) => $"{RepositoriesDirectory}/{repository}";
 }
 
 /// <summary>The machine a Sandbox runs on, as chosen on the Settings page when it is created.</summary>
