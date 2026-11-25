@@ -58,6 +58,26 @@ public sealed class SessionLogs(SandboxRegistry sandboxes, IDbContextFactory<Ove
     }
 
     /// <summary>
+    /// The Intent's Tasks with messages of the human's that were never delivered, each with how many: those still waiting as the
+    /// session they were sent to ended.
+    /// </summary>
+    public async Task<IReadOnlyList<NeverDelivered>> NeverDeliveredOfAsync(Guid intentId, CancellationToken cancellationToken)
+    {
+        // Looked at before and after the read, as in OfAsync.
+        var takingBefore = TakingMessagesIn(intentId);
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        var undelivered = await database.UndeliveredMessages
+            .Where(message => message.IntentId == intentId)
+            .Select(message => new { message.TaskNumber, message.SessionNumber })
+            .ToListAsync(cancellationToken);
+        var taking = takingBefore.Union(TakingMessagesIn(intentId)).ToHashSet();
+        return [.. undelivered
+            .Where(message => !taking.Contains((message.TaskNumber, message.SessionNumber)))
+            .GroupBy(message => message.TaskNumber)
+            .Select(task => new NeverDelivered(task.Key, task.Count()))];
+    }
+
+    /// <summary>
     /// Sends a message to the agent of a session on the Intent's Task. An agent takes one message per turn, and its turn isn't
     /// interrupted: the message waits, and is delivered as a turn of its own once the current one ends, after any sent before it,
     /// and before the Task's work is verified. A session takes messages until it ends, or its work has passed verification with
@@ -107,6 +127,11 @@ public sealed class SessionLogs(SandboxRegistry sandboxes, IDbContextFactory<Ove
     /// <summary>The number of the session on the Intent's Task that takes messages now; <c>null</c> when none does.</summary>
     private int? TakingMessages(Guid intentId, int taskNumber) =>
         _open.TryGetValue((intentId, taskNumber), out var log) && log.TakesMessages ? log.Number : null;
+
+    /// <summary>The sessions on the Intent's Tasks that take messages now, each by its Task and its number among the Task's.</summary>
+    private List<(int TaskNumber, int Session)> TakingMessagesIn(Guid intentId) =>
+        [.. _open.Where(open => open.Key.IntentId == intentId && open.Value.TakesMessages)
+            .Select(open => (open.Key.TaskNumber, open.Value.Number))];
 
     private void Report(Guid intentId, int taskNumber, SessionActivity? activity)
     {
@@ -519,6 +544,9 @@ public sealed class SessionLog : IAsyncDisposable
 /// <summary>A message the human sent a session's agent: the <paramref name="Number"/>th the session took on, from 1.</summary>
 /// <param name="Text">What they wrote, without any secret.</param>
 public sealed record SentMessage(int Number, string Text);
+
+/// <summary>How many messages of the human's to the agents of a Task were never delivered.</summary>
+public sealed record NeverDelivered(int TaskNumber, int Messages);
 
 /// <summary>What the agent of a session is doing, in one line.</summary>
 /// <param name="Kind">Whether the line is of what the agent says, or of a tool it calls.</param>

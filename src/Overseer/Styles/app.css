@@ -1550,6 +1550,22 @@
         font-family: var(--font-mono);
     }
 
+    /* A message to a Task's agent that was never delivered, said where the Intent's Tasks are listed. */
+    .intent-task-undelivered {
+        background: var(--color-warning-soft);
+        border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
+        border-radius: 0.5rem;
+        color: var(--color-warning);
+        font-size: 0.8125rem;
+        padding: 0.5rem 0.75rem;
+    }
+
+    .intent-task-undelivered a {
+        font-weight: 600;
+        text-decoration: underline;
+        text-underline-offset: 0.2em;
+    }
+
     /* A Task's agent sessions, each with its log: what the agent said, and the tools it called between that. */
     .agent-sessions {
         display: flex;

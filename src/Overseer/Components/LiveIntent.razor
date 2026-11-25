@@ -8,6 +8,7 @@
 @inject IntentTasks Tasks
 @inject VerificationAttempts Attempts
 @inject TaskQuestions Questions
+@inject SessionLogs SessionLogs
 @inject PullRequests PullRequests
 
 @if (Shown is { WhyNot: { } why })
@@ -106,6 +107,7 @@
         {
             <div class="border-b border-line px-5 py-4 sm:px-6">
                 <IntentTaskList IntentId="Id" Tasks="Shown.Tasks" Attempts="Shown.Attempts" Questions="Shown.Questions"
+                                NeverDelivered="Shown.NeverDelivered"
                                 ImplementationFailed="@(Shown.Implementation is { Phase: ImplementationPhase.Failed })" />
             </div>
         }
@@ -234,7 +236,8 @@
             intent is null ? [] : await Tasks.OfAsync(intent.Id, cancellationToken),
             intent is null ? [] : await Attempts.OfAsync(intent.Id, cancellationToken),
             intent is null ? [] : await PullRequests.OfAsync(intent.Id, cancellationToken),
-            intent is null ? [] : await Questions.OfAsync(intent.Id, cancellationToken));
+            intent is null ? [] : await Questions.OfAsync(intent.Id, cancellationToken),
+            intent is null ? [] : await SessionLogs.NeverDeliveredOfAsync(intent.Id, cancellationToken));
     }
 
     /// <param name="Intent">The Intent; <c>null</c> when there is none, as after it was deleted.</param>
@@ -256,11 +259,12 @@
     /// <param name="Attempts">The verification attempts on its Tasks, by Task, in the order they were made.</param>
     /// <param name="PullRequests">Its pull requests, ordered by repository; empty when none is opened.</param>
     /// <param name="Questions">The questions its Tasks' agents asked, in the order they were asked.</param>
+    /// <param name="NeverDelivered">Its Tasks with messages of the user's that were never delivered.</param>
     public sealed record Detail(
         Intent? Intent, string? WhyNot, RefinementProgress? Refinement, ImplementationProgress? Implementation, IReadOnlyList<Round> Transcript,
         SpecVersion? Spec, IReadOnlyList<SpecVersionHeading> SpecVersions, IReadOnlyList<SpecComment> Comments, string? WhyNotApprovedAndStarted,
         IReadOnlyList<IntentTask> Tasks, IReadOnlyList<VerificationAttempt> Attempts, IReadOnlyList<PullRequest> PullRequests,
-        IReadOnlyList<TaskQuestion> Questions);
+        IReadOnlyList<TaskQuestion> Questions, IReadOnlyList<NeverDelivered> NeverDelivered);
 
     /// <summary>A change of an Intent's state that the page offers with a button, disabled while it can't be made.</summary>
     public enum StateChange

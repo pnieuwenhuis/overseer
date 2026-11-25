@@ -253,6 +253,8 @@ public class AgentMessageTests(PostgresServer postgres)
         await BoxAsync(overseer, task);
         using var first = await SendAsync(overseer, task, session: 1, "Rename it.");
         using var second = await SendAsync(overseer, task, session: 1, "Move it up.");
+        // Waiting messages aren't reported there.
+        Assert.Empty(UndeliveredOn(await GetAsync(overseer, address)));
 
         working.SetResult();
 
@@ -261,6 +263,9 @@ public class AgentMessageTests(PostgresServer postgres)
         Assert.Equal([Delivered("Rename it."), NotDelivered("Move it up.")], StreamOn(page));
         Assert.Contains("Not delivered: the agent session ended first", page);
         Assert.False(OffersBox(page));
+        // Noticed on the Intent's page too.
+        const string notice = "A message you sent was not delivered. Read it on the Task's page.";
+        Assert.Equal([(1, notice)], UndeliveredOn(await GetAsync(overseer, address)));
 
         using var retried = await ImplementationTests.RetryAsync(overseer, address);
 
@@ -268,6 +273,9 @@ public class AgentMessageTests(PostgresServer postgres)
         page = await BoxAsync(overseer, task);
         Assert.Equal([Delivered("Rename it."), NotDelivered("Move it up.")], StreamOn(page));
         Assert.DoesNotContain("Move it up.", SquadMessages(overseer)[2].Message);
+        // Also while another session works on the Task, which takes messages of its own.
+        using var third = await SendAsync(overseer, task, session: 2, "Keep it.");
+        Assert.Equal([(1, notice)], UndeliveredOn(await GetAsync(overseer, address)));
     }
 
     [Fact]
@@ -327,13 +335,17 @@ public class AgentMessageTests(PostgresServer postgres)
             task = await ImplementationTests.ImplementingAsync(first, "Export data", "acme/web") + "/tasks/1";
             await BoxAsync(first, task);
             using var sent = await SendAsync(first, task, session: 1, "Rename it.");
+            using var another = await SendAsync(first, task, session: 1, "Move it up.");
         }
         await using var second = await StartWithRepositoriesAsync(connectionString, []);
 
         var page = await GetAsync(second, task);
 
-        Assert.Equal([NotDelivered("Rename it.")], StreamOn(page));
+        Assert.Equal([NotDelivered("Rename it."), NotDelivered("Move it up.")], StreamOn(page));
         Assert.False(OffersBox(page));
+        Assert.Equal(
+            [(1, "2 messages you sent were not delivered. Read them on the Task's page.")],
+            UndeliveredOn(await GetAsync(second, task[..task.IndexOf("/tasks/", StringComparison.Ordinal)])));
     }
 
     [Fact]
@@ -602,6 +614,18 @@ public class AgentMessageTests(PostgresServer postgres)
     private static Shown Delivered(string text) => new("Delivered", text);
 
     private static Shown NotDelivered(string text) => new("NotDelivered", text);
+
+    /// <summary>What the Intent's page says about messages that were never delivered, under the Tasks it says it of.</summary>
+    private static IReadOnlyList<(int Task, string Notice)> UndeliveredOn(string page) =>
+        [.. Regex.Matches(page, "<li class=\"intent-task\" data-task=\"(\\d+)\"[^>]*>(.*?)</li>", RegexOptions.Singleline)
+            .Where(task => task.Groups[2].Value.Contains("class=\"intent-task-undelivered\""))
+            .Select(task => (
+                int.Parse(task.Groups[1].Value, CultureInfo.InvariantCulture),
+                Regex.Replace(
+                    WebUtility.HtmlDecode(Regex.Replace(
+                        Regex.Match(task.Groups[2].Value, "<p class=\"intent-task-undelivered\">(.*?)</p>", RegexOptions.Singleline).Groups[1].Value,
+                        "<[^>]*>", "")),
+                    "\\s+", " ").Trim()))];
 
     /// <summary>What the page's message box holds.</summary>
     private static string MessageBox(string page) =>

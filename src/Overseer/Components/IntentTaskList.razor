@@ -1,6 +1,6 @@
 @* An Intent's Tasks in the order they are carried out, each with its role, the repositories it touches, its state, the verification
-   attempts on it, the questions its agents asked and a link to its page, which shows its agent sessions; a Failed Task also with what
-   recovers it. *@
+   attempts on it, the questions its agents asked, whether a message to one was never delivered and a link to its page, which shows
+   its agent sessions; a Failed Task also with what recovers it. *@
 @using System.Globalization
 @using Overseer.Implementation
 
@@ -27,6 +27,13 @@
                 @if (task.State == IntentTaskState.Running)
                 {
                     <TaskActivity IntentId="IntentId" TaskNumber="task.Number" />
+                }
+                @if (NeverDelivered.SingleOrDefault(never => never.TaskNumber == task.Number) is { } never)
+                {
+                    var (said, them) = never.Messages == 1
+                        ? ("A message you sent was not delivered.", "it")
+                        : ($"{never.Messages} messages you sent were not delivered.", "them");
+                    <p class="intent-task-undelivered">@said <a href="intents/@IntentId/tasks/@task.Number">Read @them on the Task's page</a>.</p>
                 }
                 @{
                     var attempts = Attempts.Where(attempt => attempt.TaskNumber == task.Number).ToList();
@@ -77,4 +84,8 @@
     /// <summary>The questions the Tasks' agents asked, in the order they were asked.</summary>
     [Parameter, EditorRequired]
     public required IReadOnlyList<TaskQuestion> Questions { get; set; }
+
+    /// <summary>The Tasks with messages of the user's to their agents that were never delivered.</summary>
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<NeverDelivered> NeverDelivered { get; set; }
 }
