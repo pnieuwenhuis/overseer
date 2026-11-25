@@ -22,9 +22,7 @@ public sealed class FinalVerification(
     {
         try
         {
-            // Everything is verified and pushed, so no repository holds changes that call for its setup again.
-            var steps = await verification.VerifyAllAsync(
-                sandbox, intent.RepositoriesInScope, new Dictionary<RepositoryName, IReadOnlyList<string>>(), cancellationToken);
+            var steps = (await verification.VerifyAllAsync(sandbox, intent, cancellationToken)).Steps;
             if (steps.Where(step => !step.Passed).ToList() is { Count: > 0 } failed)
             {
                 var added = await tasks.AddFixUpAsync(

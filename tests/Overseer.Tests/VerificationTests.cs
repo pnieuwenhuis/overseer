@@ -534,6 +534,32 @@ public class VerificationTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task A_clone_in_scope_that_isnt_on_the_Intent_branch_is_a_failed_verification_which_tells_the_agent_and_nothing_is_built()
+    {
+        await using var overseer = await StartAsync("acme/api", "acme/web");
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneAtOnce());
+        Changes(overseer, "acme/web", "src/orders.ts");
+        // acme/api, which the Task neither lists nor changed, is left on main, until the agent puts it back.
+        overseer.Sandboxes.ScriptCommandsContaining(BranchAskedIn("acme/api"), new CommandResult(0, "main\n"), Passes);
+
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/api", "acme/web");
+
+        await StatesAsync(overseer, address, "Done");
+        var branch = $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}";
+        var failure = $"acme/api isn't on the Intent branch {branch}, but on main.";
+        var attempts = AttemptsOn(await GetAsync(overseer, address), 1);
+        Assert.Equal([$"Attempt 1: failed. {failure}", "Attempt 2: passed."], attempts.Select(attempt => attempt.Heading));
+        // Nothing is built or tested on the wrong branch.
+        Assert.Equal(["The Intent branch of acme/api"], attempts[0].Steps.Select(step => step.Name));
+        Assert.Contains(failure, SquadMessages(overseer)[1].Message);
+        Assert.Contains("Check out the Intent branch again", SquadMessages(overseer)[1].Message);
+    }
+
+    /// <summary>What the command that asks which branch the repository's clone is on holds.</summary>
+    private static string BranchAskedIn(string repository) =>
+        $"{repository}' || exit\nerrors=$(mktemp) || exit\n{{\nhead=$(git symbolic-ref";
+
+    [Fact]
     public async Task Work_that_cant_be_committed_fails_the_implementation_with_what_git_said_and_nothing_is_pushed()
     {
         await using var overseer = await StartAsync("acme/web");

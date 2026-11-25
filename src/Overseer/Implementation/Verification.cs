@@ -1,4 +1,5 @@
 using Overseer.GitHub;
+using Overseer.Intents;
 using Overseer.Repositories;
 using Overseer.Sandboxes;
 
@@ -11,25 +12,27 @@ namespace Overseer.Implementation;
 public sealed class Verification(RepositoryCommands commands, ComposeDependencies dependencies, IntentBranches branches)
 {
     /// <summary>
-    /// Verifies <paramref name="repositories"/>: first, where a repository's changes touch its manifest or its Compose file, its
-    /// <c>setup</c> command is run and its Compose services are started again; then each one's <c>build</c> and <c>test</c> are run,
-    /// in their order. It stops at the first thing that fails. A repository without a manifest is skipped; an invalid manifest
-    /// fails.
+    /// Verifies the work on a Task: every repository the Task lists, plus any other Repository in scope that holds changes since
+    /// its last verified work. First, where a repository's changes touch its manifest or its Compose file, its <c>setup</c> command
+    /// is run and its Compose services are started again; then each one's <c>build</c> and <c>test</c> are run, in their order. It
+    /// stops at the first thing that fails. A repository without a manifest is skipped; an invalid manifest fails. So does a clone
+    /// in scope that isn't on the Intent branch, before anything is run.
     /// </summary>
-    /// <param name="scope">The Repositories in scope, all cloned in the Sandbox, whose Compose services share the machine.</param>
-    /// <param name="repositories">The ones to verify.</param>
-    /// <param name="changes">The files each repository's changes touch, by their paths from its root; none where it holds none.</param>
+    /// <param name="intent">
+    /// Whose Repositories in scope are all cloned in the Sandbox, where their Compose services share the machine.
+    /// </param>
+    /// <param name="listed">The repositories the Task lists.</param>
     /// <returns>
-    /// What was run to verify them, in order, which passed when every step did. A step that failed is the last. Nothing when there
-    /// was nothing to verify, which passes too.
+    /// What was run to verify them, in order, which passed when every step did, and which repositories hold changes. A step that
+    /// failed is the last, but for clones off the Intent branch, which are all named. No step when there was nothing to verify,
+    /// which passes too.
     /// </returns>
     /// <exception cref="InvalidOperationException">
     /// They couldn't be verified, as when the Sandbox no longer answers, which says nothing about the work; the message says why.
     /// </exception>
-    public Task<IReadOnlyList<VerificationStep>> VerifyAsync(
-        Sandbox sandbox, IReadOnlyList<RepositoryName> scope, IReadOnlyCollection<RepositoryName> repositories,
-        IReadOnlyDictionary<RepositoryName, IReadOnlyList<string>> changes, CancellationToken cancellationToken) =>
-        VerifyAsync(sandbox, scope, repositories, changes, full: false, cancellationToken);
+    public Task<WorkVerification> VerifyAsync(
+        Sandbox sandbox, Intent intent, IReadOnlyList<RepositoryName> listed, CancellationToken cancellationToken) =>
+        VerifyAsync(sandbox, intent, listed, full: false, cancellationToken);
 
     /// <summary>
     /// The full verification, which the work on the Intent branch passes as a whole: it verifies every Repository in scope as
@@ -37,16 +40,54 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
     /// that fails doesn't keep the others from being built and tested, so that all that fail are found. A <c>setup</c> command or a
     /// Compose start that fails still stops it, as what is built and tested after it relies on them.
     /// </summary>
-    /// <param name="scope">The Repositories in scope.</param>
-    /// <param name="changes">As for <c>VerifyAsync</c>.</param>
-    /// <returns>What was run to verify them, in order, which passed when every step did.</returns>
+    /// <returns>As for <c>VerifyAsync</c>.</returns>
     /// <exception cref="InvalidOperationException">They couldn't be verified, as for <c>VerifyAsync</c>.</exception>
-    public Task<IReadOnlyList<VerificationStep>> VerifyAllAsync(
-        Sandbox sandbox, IReadOnlyList<RepositoryName> scope, IReadOnlyDictionary<RepositoryName, IReadOnlyList<string>> changes,
-        CancellationToken cancellationToken) =>
-        VerifyAsync(sandbox, scope, scope, changes, full: true, cancellationToken);
+    public Task<WorkVerification> VerifyAllAsync(Sandbox sandbox, Intent intent, CancellationToken cancellationToken) =>
+        VerifyAsync(sandbox, intent, intent.RepositoriesInScope, full: true, cancellationToken);
 
-    private async Task<IReadOnlyList<VerificationStep>> VerifyAsync(
+    private async Task<WorkVerification> VerifyAsync(
+        Sandbox sandbox, Intent intent, IReadOnlyList<RepositoryName> listed, bool full, CancellationToken cancellationToken)
+    {
+        var offBranch = await OffIntentBranchAsync(sandbox, intent, cancellationToken);
+        if (offBranch.Count > 0)
+        {
+            return new WorkVerification(offBranch, []);
+        }
+        // All are asked, as an agent may have changed any.
+        var changes = new Dictionary<RepositoryName, IReadOnlyList<string>>();
+        foreach (var repository in intent.RepositoriesInScope)
+        {
+            var files = await branches.ChangedFilesAsync(sandbox, repository, cancellationToken);
+            if (files.Count > 0)
+            {
+                changes.Add(repository, files);
+            }
+        }
+        IReadOnlyList<RepositoryName> repositories = full ? intent.RepositoriesInScope : [.. listed.Union(changes.Keys)];
+        var steps = await RunAsync(sandbox, intent.RepositoriesInScope, repositories, changes, full, cancellationToken);
+        return new WorkVerification(steps, [.. intent.RepositoriesInScope.Where(changes.ContainsKey)]);
+    }
+
+    /// <summary>A failed step for each clone in scope that isn't on the Intent branch: what it holds isn't what gets pushed.</summary>
+    private async Task<IReadOnlyList<VerificationStep>> OffIntentBranchAsync(
+        Sandbox sandbox, Intent intent, CancellationToken cancellationToken)
+    {
+        var steps = new List<VerificationStep>();
+        foreach (var repository in intent.RepositoriesInScope)
+        {
+            if (await branches.OffIntentBranchAsync(sandbox, repository, intent.Branch, cancellationToken) is { } head)
+            {
+                var failure = $"{repository} isn't on the Intent branch {intent.Branch}, but on {head}.";
+                steps.Add(new VerificationStep(
+                    repository, $"The Intent branch of {repository}", Command: null,
+                    await commands.RedactedAsync(failure, cancellationToken),
+                    "Check out the Intent branch again, bringing along what belongs on it, without forcing it to another commit."));
+            }
+        }
+        return steps;
+    }
+
+    private async Task<IReadOnlyList<VerificationStep>> RunAsync(
         Sandbox sandbox, IReadOnlyList<RepositoryName> scope, IReadOnlyCollection<RepositoryName> repositories,
         IReadOnlyDictionary<RepositoryName, IReadOnlyList<string>> changes, bool full, CancellationToken cancellationToken)
     {
@@ -166,6 +207,14 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
     private static string PathFromRoot(string path) =>
         string.Join('/', path.Split('/', StringSplitOptions.RemoveEmptyEntries).Where(segment => segment != "."));
 }
+
+/// <summary>What verifying the work in a Sandbox came to.</summary>
+/// <param name="Steps">What was run, or checked, in order; the work passed when every step did.</param>
+/// <param name="Changed">
+/// The repositories that hold changes since their last verified work, in the Intent's order; none known when a clone was off the
+/// Intent branch.
+/// </param>
+public sealed record WorkVerification(IReadOnlyList<VerificationStep> Steps, IReadOnlyList<RepositoryName> Changed);
 
 /// <summary>One thing run, or checked, to verify a repository.</summary>
 /// <param name="What">What it is, such as "The test command of acme/web".</param>

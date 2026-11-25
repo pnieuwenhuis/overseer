@@ -57,6 +57,23 @@ public sealed class IntentBranches(RepositoryCommands commands)
         return run.ErrorOf($"Putting {repository} on the Intent branch {branch}");
     }
 
+    /// <summary>Where the repository's clone is when it isn't on the Intent branch, such as <c>main</c>; <c>null</c> when it is.</summary>
+    /// <exception cref="InvalidOperationException">git couldn't say; the message says why.</exception>
+    public async Task<string?> OffIntentBranchAsync(
+        Sandbox sandbox, RepositoryName repository, string branch, CancellationToken cancellationToken)
+    {
+        // git symbolic-ref exits with 1 for a detached HEAD, and otherwise fails only when it can't tell.
+        var script =
+            $$"""
+            head=$(git symbolic-ref --quiet HEAD) || [ $? -eq 1 ] && {
+              [ "$head" = {{ShellText.Quoted($"refs/heads/{branch}")}} ] || { name=${head#refs/heads/}; echo "${name:-a detached HEAD}"; }
+            }
+            """;
+        var head = (await OutputOfAsync(
+            sandbox, repository, script, $"Looking for the branch checked out in {repository}", cancellationToken)).Trim();
+        return head.Length == 0 ? null : head;
+    }
+
     /// <summary>
     /// The files of the repository that differ from its last verified work, by their paths from its root: committed since,
     /// uncommitted or untracked, but not ignored.
@@ -118,20 +135,26 @@ public sealed class IntentBranches(RepositoryCommands commands)
     }
 
     /// <summary>The paths a git script prints, each ending in a NUL, so that none needs quoting.</summary>
-    /// <exception cref="InvalidOperationException">The script failed; the message says that <paramref name="what"/> did, and why.</exception>
+    /// <exception cref="InvalidOperationException">As for <see cref="OutputOfAsync"/>.</exception>
     private async Task<IReadOnlyList<string>> FilesAsync(
+        Sandbox sandbox, RepositoryName repository, string script, string what, CancellationToken cancellationToken) =>
+        [.. (await OutputOfAsync(sandbox, repository, script, what, cancellationToken))
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries).Distinct()];
+
+    /// <summary>What a git script prints to standard output.</summary>
+    /// <exception cref="InvalidOperationException">The script failed; the message says that <paramref name="what"/> did, and why.</exception>
+    private async Task<string> OutputOfAsync(
         Sandbox sandbox, RepositoryName repository, string script, string what, CancellationToken cancellationToken)
     {
         var run = await commands.RunAsync(
             sandbox, repository, ShellText.OutputAlone(script), RepositoryCommands.GitLimit, cancellationToken);
-        return run is CommandRun.Succeeded succeeded
-            ? [.. succeeded.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries).Distinct()]
-            : throw new InvalidOperationException(run.ErrorOf(what));
+        return run is CommandRun.Succeeded succeeded ? succeeded.Output : throw new InvalidOperationException(run.ErrorOf(what));
     }
 
     /// <summary>
-    /// Commits what is uncommitted in the repository, untracked files too, with <paramref name="message"/>, and makes the Intent
-    /// branch end there, wherever the clone was. The repository's commit hooks don't run: its build and test have verified the work.
+    /// Commits what is uncommitted in the repository, untracked files too, with <paramref name="message"/>, on the Intent branch,
+    /// which the clone has to be on: the branch is never moved to where the clone is instead, as that could drop commits it holds.
+    /// The repository's commit hooks don't run: its build and test have verified the work.
     /// </summary>
     /// <returns>Why it couldn't be committed; <c>null</c> once nothing is left uncommitted.</returns>
     public async Task<string?> CommitAsync(
@@ -140,7 +163,10 @@ public sealed class IntentBranches(RepositoryCommands commands)
         var script =
             $"""
             set -e
-            git switch --quiet --force-create {ShellText.Quoted(branch)}
+            if [ "$(git symbolic-ref --quiet HEAD)" != {ShellText.Quoted($"refs/heads/{branch}")} ]; then
+              echo {ShellText.Quoted($"The clone isn't on the Intent branch {branch}.")}
+              exit 1
+            fi
             git add --all
             if ! git diff --cached --quiet; then
               git commit --quiet --no-verify --message {ShellText.Quoted(message)}

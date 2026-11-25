@@ -130,13 +130,11 @@ public sealed class TaskLoop(
             IReadOnlyList<RepositoryName> changedRepositories;
             try
             {
-                var changes = await ChangesAsync(intent, sandbox, cancellationToken);
-                var steps = task.IsFixUp
-                    ? await verification.VerifyAllAsync(sandbox, intent.RepositoriesInScope, changes, cancellationToken)
-                    : await verification.VerifyAsync(
-                        sandbox, intent.RepositoriesInScope, [.. task.Repositories.Union(changes.Keys)], changes, cancellationToken);
-                attempt = new VerificationAttempt(task.Number, run, number, steps);
-                changedRepositories = [.. intent.RepositoriesInScope.Where(changes.ContainsKey)];
+                var verified = task.IsFixUp
+                    ? await verification.VerifyAllAsync(sandbox, intent, cancellationToken)
+                    : await verification.VerifyAsync(sandbox, intent, task.Repositories, cancellationToken);
+                attempt = new VerificationAttempt(task.Number, run, number, verified.Steps);
+                changedRepositories = verified.Changed;
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
             {
@@ -162,25 +160,6 @@ public sealed class TaskLoop(
             }
             message = TaskInstructions.VerificationFailed(task, failed, number, allowed);
         }
-    }
-
-    /// <summary>
-    /// The files changed since the last verified work, in each Repository in scope that has any: all are asked, as an agent may have
-    /// changed any.
-    /// </summary>
-    private async Task<IReadOnlyDictionary<RepositoryName, IReadOnlyList<string>>> ChangesAsync(
-        Intent intent, Sandbox sandbox, CancellationToken cancellationToken)
-    {
-        var changes = new Dictionary<RepositoryName, IReadOnlyList<string>>();
-        foreach (var repository in intent.RepositoriesInScope)
-        {
-            var files = await branches.ChangedFilesAsync(sandbox, repository, cancellationToken);
-            if (files.Count > 0)
-            {
-                changes.Add(repository, files);
-            }
-        }
-        return changes;
     }
 
     private Work.Unfinished SessionFailed(Intent intent, IntentTask task, Exception exception)

@@ -30,7 +30,7 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         Git(clone, "add committed.txt");
         Git(clone, "commit --quiet -m 'By the agent'");
         // Pushed too, though an agent is told not to: it still isn't verified.
-        Git(clone, $"push --quiet origin {commands.Branch}");
+        Git(clone, $"push --quiet origin {commands.IntentBranch}");
         Write(clone, "tracked.txt", "edited\n");
         File.Delete(Path.Combine(clone, "deleted.txt"));
         Write(clone, ".overseer.yml", "build: make\n");
@@ -50,11 +50,10 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         var commands = await CommandsOverseerRunsAsync();
         var clone = Clone();
         Run(clone, commands.CheckOut);
-        // The agent commits some of its work, as itself, and leaves the Intent branch.
+        // The agent commits some of its work, as itself.
         Write(clone, "committed.txt", "by the agent");
         Git(clone, "add committed.txt");
         Run(clone, "git commit --quiet -m 'By the agent'");
-        Git(clone, "checkout --quiet --detach");
         Write(clone, "tracked.txt", "edited\n");
         File.Delete(Path.Combine(clone, "deleted.txt"));
         Write(clone, "untracked.txt", "new");
@@ -65,7 +64,7 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
 
         Run(clone, commands.Commit);
 
-        Assert.Equal(commands.Branch, Git(clone, "symbolic-ref --short HEAD"));
+        Assert.Equal(commands.IntentBranch, Git(clone, "symbolic-ref --short HEAD"));
         Assert.Empty(Git(clone, "status --porcelain"));
         Assert.Equal($"{Title}\nBy the agent\nOn the default branch", Git(clone, "log --format=%s"));
         Assert.Equal(
@@ -79,14 +78,44 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         Run(clone, commands.Push);
 
         var origin = Path.Combine(_directory, "origin.git");
-        Assert.Equal(Git(clone, "rev-parse HEAD"), Git(origin, $"rev-parse refs/heads/{commands.Branch}"));
-        Assert.Equal($"origin/{commands.Branch}", Git(clone, "rev-parse --abbrev-ref HEAD@{upstream}"));
+        Assert.Equal(Git(clone, "rev-parse HEAD"), Git(origin, $"rev-parse refs/heads/{commands.IntentBranch}"));
+        Assert.Equal($"origin/{commands.IntentBranch}", Git(clone, "rev-parse --abbrev-ref HEAD@{upstream}"));
         Assert.Empty(ChangedFiles(clone, commands));
         // Pushing and committing again, as a Retry may, changes nothing.
         var head = Git(clone, "rev-parse HEAD");
         Run(clone, commands.Commit);
         Run(clone, commands.Push);
         Assert.Equal(head, Git(clone, "rev-parse HEAD"));
+    }
+
+    [Fact]
+    public async Task A_clone_off_the_Intent_branch_is_found_and_nothing_is_committed_there_nor_is_the_branch_moved()
+    {
+        var commands = await CommandsOverseerRunsAsync();
+        var clone = Clone();
+        Run(clone, commands.CheckOut);
+        // Work verified before, on the Intent branch.
+        Write(clone, "earlier.txt", "by an earlier Task");
+        Git(clone, "add earlier.txt");
+        Git(clone, "commit --quiet -m 'By an earlier Task'");
+        var onTheBranch = Git(clone, "rev-parse HEAD");
+        Assert.Empty(Run(clone, commands.Branch));
+
+        Git(clone, "checkout --quiet trunk");
+        Assert.Equal("trunk", Run(clone, commands.Branch));
+        Write(clone, "untracked.txt", "new");
+        var (exitCode, output) = Execute(clone, commands.Commit);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains($"The clone isn't on the Intent branch {commands.IntentBranch}.", output);
+        // The earlier work is still where it was.
+        Assert.Equal(onTheBranch, Git(clone, $"rev-parse refs/heads/{commands.IntentBranch}"));
+        Assert.Equal("On the default branch", Git(clone, "log -1 --format=%s trunk"));
+
+        Git(clone, "checkout --quiet --detach");
+        Assert.Equal("a detached HEAD", Run(clone, commands.Branch));
+        Assert.NotEqual(0, Execute(clone, commands.Commit).ExitCode);
+        Assert.Equal(onTheBranch, Git(clone, $"rev-parse refs/heads/{commands.IntentBranch}"));
     }
 
     [Fact]
@@ -199,12 +228,14 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         await FinalVerificationTests.InReviewAsync(overseer, address);
 
         var clone = Path.Combine(_directory, "clone");
+        // Some run more than once, as in the Task's verification and the final one, always as the same command.
         string Command(string holding) =>
-            Assert.Single(overseer.Sandboxes.CommandsRun, run => run.Command.Contains(holding)).Command
+            Assert.Single(overseer.Sandboxes.CommandsRun.Select(run => run.Command).Distinct(), command => command.Contains(holding))
                 .Replace(Sandbox.CloneDirectory(new RepositoryName("acme", "web")), clone);
         return new Commands(
             $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}",
-            Command("git config user.name"), Command(changedFilesAsked), Command("git commit"), Command("git push"),
+            Command("git config user.name"), Command("head=$(git symbolic-ref"), Command(changedFilesAsked), Command("git commit"),
+            Command("git push"),
             Command("base=$(git merge-base refs/remotes/origin/HEAD HEAD"), Command("if git rev-parse --verify --quiet refs/overseer/verified"));
     }
 
@@ -258,9 +289,10 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
         return (shell.ExitCode, output);
     }
 
-    /// <param name="Branch">The Intent branch.</param>
+    /// <param name="IntentBranch">The name of the Intent branch.</param>
+    /// <param name="Branch">Asks where the clone is, when it isn't on the Intent branch.</param>
     /// <param name="Differs">Asks what the clone holds differently from the default branch.</param>
     /// <param name="IntentBranchChanges">Asks what the Intent branch changes of the default branch.</param>
     private sealed record Commands(
-        string Branch, string CheckOut, string ChangedFiles, string Commit, string Push, string Differs, string IntentBranchChanges);
+        string IntentBranch, string CheckOut, string Branch, string ChangedFiles, string Commit, string Push, string Differs, string IntentBranchChanges);
 }
