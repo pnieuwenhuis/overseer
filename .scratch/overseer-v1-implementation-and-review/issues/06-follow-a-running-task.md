@@ -6,10 +6,10 @@ An Agent Session's updates are plain text today, mixing fragments of the agent's
 
 **Blocked by:** 02 (Tasks run in order)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The Task list shows a one-line summary of what the running Task's agent is doing, updating live
-- [ ] Opening a Task shows its agent session stream live, from the session's start, with messages readable as whole text and tool calls distinguishable from them
-- [ ] Session logs are kept in PostgreSQL per Task, including every session of a retried Task, and can be read after the Task has ended and after a restart
-- [ ] Model provider tokens and the GitHub token never appear in a stored or shown log
-- [ ] Covered by tests through the application, and the fake and ACP Agent Sessions report updates the same way
+- [x] The Task list shows a one-line summary of what the running Task's agent is doing, updating live
+- [x] Opening a Task shows its agent session stream live, from the session's start, with messages readable as whole text and tool calls distinguishable from them
+- [x] Session logs are kept in PostgreSQL per Task, including every session of a retried Task, and can be read after the Task has ended and after a restart
+- [x] Model provider tokens and the GitHub token never appear in a stored or shown log
+- [x] Covered by tests through the application, and the fake and ACP Agent Sessions report updates the same way
