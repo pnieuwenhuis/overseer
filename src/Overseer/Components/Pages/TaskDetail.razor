@@ -1,0 +1,35 @@
+@page "/intents/{Id:guid}/tasks/{Number:int}"
+@attribute [ExcludeFromInteractiveRouting]
+@using Overseer.Implementation
+@inject IntentTasks Tasks
+@inject NavigationManager Navigation
+
+<PageTitle>Task @Number · Overseer</PageTitle>
+
+@if (_found)
+{
+    <IntentBackLink IntentId="Id" />
+    <LiveTask IntentId="Id" Number="Number" @rendermode="InteractiveServer" />
+}
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [Parameter]
+    public Guid Id { get; set; }
+
+    [Parameter]
+    public int Number { get; set; }
+
+    private bool _found;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _found = (await Tasks.OfAsync(Id, HttpContext.RequestAborted)).Any(task => task.Number == Number);
+        if (!_found)
+        {
+            Navigation.NotFound();
+        }
+    }
+}

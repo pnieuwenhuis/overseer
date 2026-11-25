@@ -109,6 +109,10 @@ _Avoid_: Ticket, job, step, subtask
 A Task whose work still does not pass verification after the allowed number of attempts; it stops the Intent until the human intervenes, who may change it in the Intent's Task list before it is retried. The Approved Spec stays as approved.
 _Avoid_: Broken task, errored task
 
+**Session log**:
+What an agent said and which tools it called in one of its sessions on a Task, kept with the Task; a retried Task has one for each of its sessions.
+_Avoid_: Transcript (that is Refinement's), console output
+
 **Final verification**:
 The build and tests of every Repository in scope on the Intent branch, once every Task is finished, which have to pass before any pull request is opened.
 _Avoid_: Integration run, final check, CI

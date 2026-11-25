@@ -24,6 +24,53 @@ namespace Overseer.Persistence.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Overseer.Implementation.AgentSessionEntryRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TaskNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SessionNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("IntentId", "TaskNumber", "SessionNumber", "Number");
+
+                    b.ToTable("AgentSessionEntries", (string)null);
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.AgentSessionRecord", b =>
+                {
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TaskNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("IntentId", "TaskNumber", "Number");
+
+                    b.ToTable("AgentSessions", (string)null);
+                });
+
             modelBuilder.Entity("Overseer.Implementation.ImplementationRecord", b =>
                 {
                     b.Property<Guid>("IntentId")
@@ -519,6 +566,24 @@ namespace Overseer.Persistence.Migrations
                     b.ToTable("SpecVersions", (string)null);
                 });
 
+            modelBuilder.Entity("Overseer.Implementation.AgentSessionEntryRecord", b =>
+                {
+                    b.HasOne("Overseer.Implementation.AgentSessionRecord", null)
+                        .WithMany("Entries")
+                        .HasForeignKey("IntentId", "TaskNumber", "SessionNumber")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.AgentSessionRecord", b =>
+                {
+                    b.HasOne("Overseer.Implementation.IntentTaskRecord", null)
+                        .WithMany()
+                        .HasForeignKey("IntentId", "TaskNumber")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Overseer.Implementation.ImplementationRecord", b =>
                 {
                     b.HasOne("Overseer.Intents.IntentRecord", null)
@@ -643,6 +708,11 @@ namespace Overseer.Persistence.Migrations
                         .HasForeignKey("IntentId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Overseer.Implementation.AgentSessionRecord", b =>
+                {
+                    b.Navigation("Entries");
                 });
 
             modelBuilder.Entity("Overseer.Implementation.VerificationAttemptRecord", b =>

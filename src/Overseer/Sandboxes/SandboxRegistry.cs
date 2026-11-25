@@ -31,6 +31,15 @@ public sealed class SandboxRegistry(
     /// </summary>
     private readonly ConcurrentDictionary<string, bool> _gitHubTokens = new();
 
+    /// <summary>Every model provider token an agent session was started with since serve started, also once it is replaced.</summary>
+    private readonly ConcurrentDictionary<string, bool> _providerTokens = new();
+
+    /// <summary>
+    /// The secrets that what comes out of a Sandbox or its agents can hold: every GitHub token a Sandbox may have been given and every
+    /// model provider token an agent session was started with since serve started, also those replaced or removed since.
+    /// </summary>
+    public IReadOnlyCollection<string> SecretsGiven => [.. _gitHubTokens.Keys, .. _providerTokens.Keys];
+
     /// <summary>One lock per Sandbox that was destroyed, or is being, since serve started, by resource ID.</summary>
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _destroying = new();
 
@@ -87,6 +96,7 @@ public sealed class SandboxRegistry(
             if (await secrets.ReadAsync(token.SecretName, cancellationToken) is { } value)
             {
                 environment[token.EnvironmentVariable] = value;
+                _providerTokens.TryAdd(value, true);
             }
         }
         return await provider.StartAgentSessionAsync(sandbox, role, harness, environment, cancellationToken);

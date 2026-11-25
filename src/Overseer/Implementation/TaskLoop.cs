@@ -13,11 +13,12 @@ namespace Overseer.Implementation;
 /// new agent session for the Task's role. Once the agent says it is done, Overseer verifies the work (<see cref="Verification"/>,
 /// the full one for the fix-up Task) and tells the agent what failed, for it to fix, until the work passes or the allowed attempts
 /// are used up, which makes the Task a Failed Task. Work that passes is committed and pushed to the Intent branch
-/// (<see cref="IntentBranches"/>); only then is the Task Done and the next one started.
+/// (<see cref="IntentBranches"/>); only then is the Task Done and the next one started. What each session reports is kept in its log
+/// (<see cref="SessionLogs"/>).
 /// </summary>
 public sealed class TaskLoop(
     IntentTasks tasks, VerificationAttempts attempts, Verification verification, IntentBranches branches, SpecStore specs,
-    SandboxRegistry sandboxes, SettingsStore settings, RepositoryCommands commands, ILogger<TaskLoop> logger)
+    SandboxRegistry sandboxes, SessionLogs logs, SettingsStore settings, RepositoryCommands commands, ILogger<TaskLoop> logger)
 {
     /// <summary>
     /// Carries out the Intent's Tasks that aren't Done until none is left, or one can't be finished. A Task whose verified work
@@ -152,11 +153,12 @@ public sealed class TaskLoop(
             return SessionFailed(intent, task, exception);
         }
         await using var stopping = session;
+        using var log = await logs.OpenAsync(intent.Id, task.Number, task.Role, cancellationToken);
         for (var number = 1; ; number++)
         {
             try
             {
-                if (await session.TakeTurnAsync(message, cancellationToken) is AgentOutcome.AskedQuestion asked)
+                if (await log.TakeTurnAsync(session, message, cancellationToken) is AgentOutcome.AskedQuestion asked)
                 {
                     return new Work.Unfinished(
                         $"The {task.Role} asked a question during Task {task.Number}, which can't be answered yet: {asked.Question}");

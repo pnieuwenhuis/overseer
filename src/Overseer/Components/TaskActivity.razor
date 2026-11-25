@@ -1,0 +1,36 @@
+@* What the agent working on a Task is doing, in one line, updated live as it works. *@
+@using Overseer.Implementation
+@implements IDisposable
+@inject SessionLogs SessionLogs
+
+@if (SessionLogs.ActivityOn(IntentId, TaskNumber) is { } activity)
+{
+    <p class="intent-task-activity" data-kind="@activity.Kind" title="@activity.Line">@activity.Line</p>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public required Guid IntentId { get; set; }
+
+    [Parameter, EditorRequired]
+    public required int TaskNumber { get; set; }
+
+    protected override void OnInitialized()
+    {
+        // The server's rendering of the page ends here and has no one to update.
+        if (RendererInfo.IsInteractive)
+        {
+            SessionLogs.Changed += OnLogged;
+        }
+    }
+
+    private void OnLogged(Guid intentId, int taskNumber)
+    {
+        if (intentId == IntentId && taskNumber == TaskNumber)
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose() => SessionLogs.Changed -= OnLogged;
+}

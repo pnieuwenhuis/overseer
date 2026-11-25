@@ -23,6 +23,8 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<IntentTaskRecord> IntentTasks => Set<IntentTaskRecord>();
     public DbSet<VerificationAttemptRecord> VerificationAttempts => Set<VerificationAttemptRecord>();
     public DbSet<PullRequestRecord> PullRequests => Set<PullRequestRecord>();
+    public DbSet<AgentSessionRecord> AgentSessions => Set<AgentSessionRecord>();
+    public DbSet<AgentSessionEntryRecord> AgentSessionEntries => Set<AgentSessionEntryRecord>();
     public DbSet<SpecVersionRecord> SpecVersions => Set<SpecVersionRecord>();
     public DbSet<SpecCommentRecord> SpecComments => Set<SpecCommentRecord>();
 
@@ -89,6 +91,21 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
         {
             step.ToTable("VerificationSteps");
             step.HasKey(record => new { record.IntentId, record.TaskNumber, record.Run, record.AttemptNumber, record.Number });
+        });
+        modelBuilder.Entity<AgentSessionRecord>(session =>
+        {
+            session.ToTable("AgentSessions");
+            session.HasKey(record => new { record.IntentId, record.TaskNumber, record.Number });
+            session.Property(record => record.Role).HasConversion<string>();
+            session.HasOne<IntentTaskRecord>().WithMany().HasForeignKey(record => new { record.IntentId, record.TaskNumber });
+            session.HasMany(record => record.Entries).WithOne()
+                .HasForeignKey(entry => new { entry.IntentId, entry.TaskNumber, entry.SessionNumber });
+        });
+        modelBuilder.Entity<AgentSessionEntryRecord>(entry =>
+        {
+            entry.ToTable("AgentSessionEntries");
+            entry.HasKey(record => new { record.IntentId, record.TaskNumber, record.SessionNumber, record.Number });
+            entry.Property(record => record.Kind).HasConversion<string>();
         });
         modelBuilder.Entity<PullRequestRecord>(pullRequest =>
         {

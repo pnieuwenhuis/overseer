@@ -84,6 +84,7 @@ public static class OverseerServer
         builder.Services.AddSingleton<Verification>();
         builder.Services.AddSingleton<IntentTasks>();
         builder.Services.AddSingleton<VerificationAttempts>();
+        builder.Services.AddSingleton<SessionLogs>();
         builder.Services.AddSingleton<TaskLoop>();
         builder.Services.AddSingleton<FinalVerification>();
         builder.Services.AddSingleton<PullRequests>();

@@ -1,0 +1,144 @@
+@* One of an Intent's Tasks with the logs of the agent sessions on it, updated live as the agent works. *@
+@using Overseer.Implementation
+@using Overseer.Sandboxes
+@implements IDisposable
+@inject IntentTasks Tasks
+@inject TaskRunner TaskRunner
+@inject SessionLogs SessionLogs
+
+@if (Shown is { } task)
+{
+    <h1 class="mb-3">Task @Number: @task.Title</h1>
+    <p class="intent-task-facts mb-6" data-state="@task.State">
+        <span class="intent-task-state">@task.State</span>
+        <span class="intent-task-role">@task.Role</span>
+        <span class="intent-task-repositories">@task.Repositories</span>
+    </p>
+}
+@if (_sessions is { } sessions)
+{
+    <section class="agent-sessions" aria-label="Agent sessions">
+        @if (sessions.Count == 0)
+        {
+            <p class="agent-sessions-none">No agent has worked on this Task yet.</p>
+        }
+        @foreach (var session in sessions)
+        {
+            <section @key="session.Number" class="agent-session" data-session="@session.Number">
+                <h2 class="agent-session-heading">Session @session.Number: @session.Role</h2>
+                @if (session.Entries.Count == 0)
+                {
+                    <p class="agent-session-silent">Nothing from the agent in this session.</p>
+                }
+                <ol class="agent-session-log">
+                    @foreach (var entry in session.Entries)
+                    {
+                        @if (entry.Kind == SessionEntryKind.Message)
+                        {
+                            <li class="session-message">@entry.Text</li>
+                        }
+                        else
+                        {
+                            <li class="session-tool-call"><span class="session-tool-label">Tool call</span> <code class="session-tool-title">@entry.Text</code></li>
+                        }
+                    }
+                </ol>
+            </section>
+        }
+    </section>
+}
+
+@code {
+    private readonly CancellationTokenSource _disposed = new();
+    private IReadOnlyList<LoggedSession>? _sessions;
+    private bool _reading;
+    private bool _stale;
+
+    [Parameter, EditorRequired]
+    public required Guid IntentId { get; set; }
+
+    [Parameter, EditorRequired]
+    public required int Number { get; set; }
+
+    /// <summary>
+    /// The Task as last read; <c>null</c> until the first read is done. Persisted from the server's rendering of the page into the live
+    /// connection, whose first render would otherwise blank the heading until its own read is done. The logs aren't: they can be
+    /// larger than the connection takes back.
+    /// </summary>
+    [PersistentState]
+    public Heading? Shown { get; set; }
+
+    protected override void OnInitialized()
+    {
+        // Ahead of the first read, so that no change falls between them. The server's rendering of the page ends here and has no one to update.
+        if (RendererInfo.IsInteractive)
+        {
+            TaskRunner.Changed += OnChanged;
+            SessionLogs.Changed += OnLogged;
+        }
+    }
+
+    protected override Task OnParametersSetAsync() => RefreshAsync();
+
+    private void OnLogged(Guid intentId, int taskNumber)
+    {
+        if (intentId == IntentId && taskNumber == Number)
+        {
+            OnChanged();
+        }
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        try
+        {
+            await RefreshAsync();
+        }
+        catch (Exception exception) when (exception is OperationCanceledException or ObjectDisposedException)
+        {
+            // The page was closed meanwhile.
+        }
+    });
+
+    /// <summary>
+    /// Reads what the page shows, one read at a time: changes that come while one goes on, as they do in quick succession while an
+    /// agent talks, are read together once it ends.
+    /// </summary>
+    private async Task RefreshAsync()
+    {
+        _stale = true;
+        if (_reading)
+        {
+            return;
+        }
+        _reading = true;
+        try
+        {
+            while (_stale)
+            {
+                _stale = false;
+                var task = (await Tasks.OfAsync(IntentId, _disposed.Token)).SingleOrDefault(task => task.Number == Number);
+                _sessions = await SessionLogs.OfAsync(IntentId, Number, _disposed.Token);
+                Shown = task is null
+                    ? null
+                    : new Heading(task.Title, task.State, task.Role, string.Join(", ", task.Repositories));
+                StateHasChanged();
+            }
+        }
+        finally
+        {
+            _reading = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        TaskRunner.Changed -= OnChanged;
+        SessionLogs.Changed -= OnLogged;
+        _disposed.Cancel();
+        _disposed.Dispose();
+    }
+
+    /// <summary>What the page shows of the Task itself.</summary>
+    public sealed record Heading(string Title, IntentTaskState State, AgentRole Role, string Repositories);
+}

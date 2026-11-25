@@ -1507,11 +1507,13 @@
         padding: 0 0.5rem;
     }
 
-    .intent-task[data-state="Running"] .intent-task-state {
+    .intent-task[data-state="Running"] .intent-task-state,
+    .intent-task-facts[data-state="Running"] .intent-task-state {
         color: var(--color-accent);
     }
 
-    .intent-task[data-state="Done"] .intent-task-state {
+    .intent-task[data-state="Done"] .intent-task-state,
+    .intent-task-facts[data-state="Done"] .intent-task-state {
         color: var(--color-success);
     }
 
@@ -1519,12 +1521,93 @@
         border-color: var(--color-danger);
     }
 
-    .intent-task[data-state="Failed"] .intent-task-state {
+    .intent-task[data-state="Failed"] .intent-task-state,
+    .intent-task-facts[data-state="Failed"] .intent-task-state {
         color: var(--color-danger);
     }
 
     .intent-task-push {
         color: var(--color-muted);
+    }
+
+    /* A Task's title in the Intent's Task list leads to its page. */
+    a.intent-task-title:hover {
+        color: var(--color-accent);
+        text-decoration: underline;
+        text-underline-offset: 0.2em;
+    }
+
+    /* What the running Task's agent is doing, in one line. */
+    .intent-task-activity {
+        color: var(--color-muted);
+        font-size: 0.8125rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .intent-task-activity[data-kind="ToolCall"] {
+        font-family: var(--font-mono);
+    }
+
+    /* A Task's agent sessions, each with its log: what the agent said, and the tools it called between that. */
+    .agent-sessions {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .agent-sessions-none,
+    .agent-session-silent {
+        color: var(--color-muted);
+        font-size: 0.875rem;
+    }
+
+    .agent-session {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        background: var(--color-surface);
+        border-radius: 0.75rem;
+        box-shadow: var(--shadow-panel);
+        padding: 1.25rem;
+    }
+
+    .agent-session-log {
+        display: flex;
+        flex-direction: column;
+        gap: 0.625rem;
+    }
+
+    .session-message {
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+    }
+
+    .session-tool-call {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5rem;
+        border-left: 2px solid var(--color-accent);
+        font-size: 0.8125rem;
+        padding-left: 0.75rem;
+    }
+
+    .session-tool-label {
+        color: var(--color-accent);
+        flex-shrink: 0;
+        font-size: 0.6875rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+
+    .session-tool-title {
+        min-width: 0;
+        max-height: 12rem;
+        overflow: auto;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
     }
 
     /* The verification attempts on a Task, each opening to the commands run and what they printed. */
