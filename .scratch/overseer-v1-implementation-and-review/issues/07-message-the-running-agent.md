@@ -6,12 +6,12 @@ Decided: an agent session takes one message per turn, so the message is delivere
 
 **Blocked by:** 03 (Verify, then push), 06 (Follow a running Task)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The stream of a running Task offers a message box; no other Task does
-- [ ] A message is delivered to the same session when its turn ends, and verification waits for the turn it starts
-- [ ] Several messages sent during one turn are all delivered, in order
-- [ ] A message sent during verification is delivered before the Task is Done, and the work is verified again
-- [ ] A turn started by a message uses no verification attempt
-- [ ] The message shows in the stream, as waiting and then as delivered; one that can no longer be delivered is reported to the user, not silently dropped
-- [ ] Covered by tests through the application
+- [x] The stream of a running Task offers a message box; no other Task does
+- [x] A message is delivered to the same session when its turn ends, and verification waits for the turn it starts
+- [x] Several messages sent during one turn are all delivered, in order
+- [x] A message sent during verification is delivered before the Task is Done, and the work is verified again
+- [x] A turn started by a message uses no verification attempt
+- [x] The message shows in the stream, as waiting and then as delivered; one that can no longer be delivered is reported to the user, not silently dropped
+- [x] Covered by tests through the application
