@@ -315,6 +315,10 @@ public sealed class SessionLog : IAsyncDisposable
             await SaveAsync();
             // The next turn starts a message of its own.
             _message = null;
+            // Until then, the agent is doing nothing: what it did last isn't what is going on, as while its work is verified.
+            _latest = null;
+            _activity = null;
+            _report(null);
         }
     }
 

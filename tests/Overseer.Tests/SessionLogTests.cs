@@ -207,6 +207,42 @@ public class SessionLogTests(PostgresServer postgres)
         Assert.Empty(ActivitiesOn(await GetAsync(overseer, address)));
     }
 
+    [Fact]
+    public async Task The_Task_list_says_nothing_the_agent_did_last_while_its_work_is_verified_or_its_question_awaits_an_answer()
+    {
+        await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/web");
+        overseer.Sandboxes.AddRepositoryFile("acme/web", ".overseer.yml", "setup: npm ci\nbuild: npm run build\ntest: npm test\n");
+        var testing = new TaskCompletionSource();
+        overseer.Sandboxes.HoldCommandsContaining("npm test", testing.Task);
+        overseer.Sandboxes.ScriptCommandsContaining("npm test", new CommandResult(1, "1 test failed"), new CommandResult(0, ""));
+        var fixing = Channel.CreateUnbounded<AgentUpdate>();
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(
+            new FakeAgentTurn([Says("Added it.")], new AgentOutcome.Done()),
+            new FakeAgentTurn([], new AgentOutcome.AskedQuestion("Which port?")) { Live = fixing.Reader },
+            FakeAgentTurn.Endless()));
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+
+        await EventuallyAsync(
+            () => Task.FromResult(overseer.Sandboxes.CommandsRun.Any(command => command.Command.Contains("npm test")) ? "" : null),
+            "the tests to run");
+
+        Assert.Empty(ActivitiesOn(await GetAsync(overseer, address)));
+        testing.SetResult();
+
+        // The agent's next turn says what it is doing again.
+        fixing.Writer.TryWrite(Says("Fixing the test."));
+        await ActivityAsync(overseer, address, (1, "Fixing the test."));
+        fixing.Writer.Complete();
+
+        var asked = await TaskQuestionTests.AskedAsync(overseer, address);
+        Assert.Empty(ActivitiesOn(asked));
+
+        // Nor once it is answered, until the agent says something.
+        using var answered = await TaskQuestionTests.AnswerAsync(overseer, address, 1, "8080.");
+        await TaskTests.SquadMessagesAsync(overseer, 3);
+        Assert.Empty(ActivitiesOn(await GetAsync(overseer, address)));
+    }
+
     /// <summary>Waits for the Intent's page to say this, and nothing else, about what its Tasks' agents are doing.</summary>
     private static Task ActivityAsync(RunningOverseer overseer, string address, params (int Task, string Line)[] expected) =>
         EventuallyAsync(
