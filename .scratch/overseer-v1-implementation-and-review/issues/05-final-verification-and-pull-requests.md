@@ -12,13 +12,13 @@ Decided: an Intent In Review is orange whenever no agent is working on it, since
 
 **Blocked by:** 03 (Verify, then push)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] After the last Task, `build` and `test` run for every Repository in scope; a changed repository without a manifest fails this
-- [ ] A failing final verification appends one fix-up Developer Task with the output, which runs like any Task and is verified by the full verification
-- [ ] A fix-up Task that doesn't pass within the allowed attempts is a Failed Task, recoverable as in ticket 04, and no further fix-up Task is added
-- [ ] A passing final verification opens a pull request from the Intent branch to the default branch for each changed repository, and none for the others
-- [ ] The Intent moves to In Review through the Intent Lifecycle, keeps its slot, Sandbox and Working Time, and shows an orange light
-- [ ] The detail page links to each pull request
-- [ ] A pull request that can't be opened turns the Intent red with GitHub's error; Retry opens only the missing ones
-- [ ] Covered by tests through the application with the fake GitHub Gateway, and the GitHub Gateway contract tests cover opening a pull request
+- [x] After the last Task, `build` and `test` run for every Repository in scope; a changed repository without a manifest fails this
+- [x] A failing final verification appends one fix-up Developer Task with the output, which runs like any Task and is verified by the full verification
+- [x] A fix-up Task that doesn't pass within the allowed attempts is a Failed Task, recoverable as in ticket 04, and no further fix-up Task is added
+- [x] A passing final verification opens a pull request from the Intent branch to the default branch for each changed repository, and none for the others
+- [x] The Intent moves to In Review through the Intent Lifecycle, keeps its slot, Sandbox and Working Time, and shows an orange light
+- [x] The detail page links to each pull request
+- [x] A pull request that can't be opened turns the Intent red with GitHub's error; Retry opens only the missing ones
+- [x] Covered by tests through the application with the fake GitHub Gateway, and the GitHub Gateway contract tests cover opening a pull request
