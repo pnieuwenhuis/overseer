@@ -8,10 +8,10 @@ The work the failed attempts left in the Sandbox stays there for the new agent t
 
 **Blocked by:** 03 (Verify, then push)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A Failed Task offers Retry and Edit & retry, and no other Task does
-- [ ] Retry sets the Task back to Pending with its attempts counted afresh, clears the red light and runs it in a new session that is told the last verification output
-- [ ] Edit & retry saves a changed title, description, role and repositories (only Repositories in scope, at least one) and then retries
-- [ ] The Approved Spec is unchanged by an edit, and the earlier attempts remain visible
-- [ ] Covered by tests through the application
+- [x] A Failed Task offers Retry and Edit & retry, and no other Task does
+- [x] Retry sets the Task back to Pending with its attempts counted afresh, clears the red light and runs it in a new session that is told the last verification output
+- [x] Edit & retry saves a changed title, description, role and repositories (only Repositories in scope, at least one) and then retries
+- [x] The Approved Spec is unchanged by an edit, and the earlier attempts remain visible
+- [x] Covered by tests through the application
