@@ -495,7 +495,8 @@ public class AgentMessageTests(PostgresServer postgres)
         // The Portal's form takes no NUL, so the application is given the message directly.
         var logs = overseer.Services.GetRequiredService<SessionLogs>();
         Task<string?> Send(string message) =>
-            logs.SendMessageAsync(Guid.Parse(address.Split('/')[^1]), 1, session: 1, message, TestContext.Current.CancellationToken);
+            logs.SendMessageAsync(
+                new TaskKey(Guid.Parse(address.Split('/')[^1]), 1), session: 1, message, TestContext.Current.CancellationToken);
 
         Assert.Equal("A message needs text: write what the agent should know.", await Send("\0 \r\n\0"));
         // A NUL splits the token, and without it the token is whole again.

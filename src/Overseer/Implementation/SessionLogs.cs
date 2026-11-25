@@ -1,10 +1,7 @@
 using System.Collections.Concurrent;
-using System.Text;
-using System.Threading.Channels;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
-using Overseer.Secrets;
 
 namespace Overseer.Implementation;
 
@@ -18,38 +15,38 @@ namespace Overseer.Implementation;
 /// </summary>
 public sealed class SessionLogs(SandboxRegistry sandboxes, IDbContextFactory<OverseerDbContext> databases)
 {
-    /// <summary>What the agent of each open session did last, by its Intent and Task. In memory: no session outlives serve.</summary>
-    private readonly ConcurrentDictionary<(Guid IntentId, int TaskNumber), SessionActivity> _activities = new();
+    /// <summary>What the agent of each open session is doing, by its Task. In memory: no session outlives serve.</summary>
+    private readonly ConcurrentDictionary<TaskKey, SessionActivity> _activities = new();
 
-    /// <summary>The log of each open session, by its Intent and Task. In memory: no session outlives serve.</summary>
-    private readonly ConcurrentDictionary<(Guid IntentId, int TaskNumber), SessionLog> _open = new();
-
-    /// <summary>
-    /// Raised, with the Intent and the number of its Task, whenever a session on the Task starts or ends or stops taking messages,
-    /// or its log or its messages change, on the thread that changed it, once the change is committed. Handlers must not throw; read
-    /// again with <see cref="OfAsync"/> and <see cref="ActivityOn"/>.
-    /// </summary>
-    public event Action<Guid, int>? Changed;
+    /// <summary>The log of each open session, by its Task. In memory: no session outlives serve.</summary>
+    private readonly ConcurrentDictionary<TaskKey, SessionLog> _open = new();
 
     /// <summary>
-    /// What the agent of the session now working on the Intent's Task is doing: the last it reported, in one line. <c>null</c> when
-    /// no session is, or it has reported nothing yet.
+    /// Raised, with the Task, whenever a session on it starts or ends or stops taking messages, or its log or its messages change,
+    /// on the thread that changed it, once the change is committed. Handlers must not throw; read again with <see cref="OfAsync"/>
+    /// and <see cref="ActivityOn"/>.
     /// </summary>
-    public SessionActivity? ActivityOn(Guid intentId, int taskNumber) => _activities.GetValueOrDefault((intentId, taskNumber));
+    public event Action<TaskKey>? Changed;
 
-    /// <summary>The logs of the sessions on the Intent's Task, in the order the sessions started; empty when it had none.</summary>
-    public async Task<IReadOnlyList<LoggedSession>> OfAsync(Guid intentId, int taskNumber, CancellationToken cancellationToken)
+    /// <summary>
+    /// What the agent of the session now working on the Task is doing: the last it reported in the turn going on, in one line.
+    /// <c>null</c> when no turn is, or it has reported nothing in it yet.
+    /// </summary>
+    public SessionActivity? ActivityOn(TaskKey task) => _activities.GetValueOrDefault(task);
+
+    /// <summary>The logs of the sessions on the Task, in the order the sessions started; empty when it had none.</summary>
+    public async Task<IReadOnlyList<LoggedSession>> OfAsync(TaskKey task, CancellationToken cancellationToken)
     {
         // Looked at before and after the read, so that no message is taken for one never delivered while its session opens or ends.
-        var takingBefore = TakingMessages(intentId, taskNumber);
+        var takingBefore = TakingMessages(task);
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         var stored = await database.AgentSessions.AsNoTracking()
-            .Where(session => session.IntentId == intentId && session.TaskNumber == taskNumber)
+            .Where(session => session.IntentId == task.IntentId && session.TaskNumber == task.Number)
             .Include(session => session.Entries)
             .Include(session => session.Undelivered)
             .OrderBy(session => session.Number)
             .ToListAsync(cancellationToken);
-        var takingAfter = TakingMessages(intentId, taskNumber);
+        var takingAfter = TakingMessages(task);
         return [.. stored.Select(session => new LoggedSession(
             session.Number, session.Role,
             [.. session.Entries.OrderBy(entry => entry.Number).Select(entry => new LoggedEntry(entry.Kind, entry.Text))],
@@ -72,478 +69,83 @@ public sealed class SessionLogs(SandboxRegistry sandboxes, IDbContextFactory<Ove
             .ToListAsync(cancellationToken);
         var taking = takingBefore.Union(TakingMessagesIn(intentId)).ToHashSet();
         return [.. undelivered
-            .Where(message => !taking.Contains((message.TaskNumber, message.SessionNumber)))
+            .Where(message => !taking.Contains(new SessionKey(new TaskKey(intentId, message.TaskNumber), message.SessionNumber)))
             .GroupBy(message => message.TaskNumber)
             .Select(task => new NeverDelivered(task.Key, task.Count()))];
     }
 
     /// <summary>
-    /// Sends a message to the agent of a session on the Intent's Task. An agent takes one message per turn, and its turn isn't
+    /// Sends a message to the agent of a session on the Task. An agent takes one message per turn, and its turn isn't
     /// interrupted: the message waits, and is delivered as a turn of its own once the current one ends, after any sent before it,
     /// and before the Task's work is verified. A session takes messages until it ends, or its work has passed verification with
     /// none waiting.
     /// </summary>
     /// <param name="session">The number of the session the message is for, among the Task's.</param>
     /// <returns>Why the message was refused; <c>null</c> once it waits to be delivered.</returns>
-    public async Task<string?> SendMessageAsync(
-        Guid intentId, int taskNumber, int session, string message, CancellationToken cancellationToken)
+    public async Task<string?> SendMessageAsync(TaskKey task, int session, string message, CancellationToken cancellationToken)
     {
         var written = StorableText.OfWritten(message);
         if (written.Length == 0)
         {
             return "A message needs text: write what the agent should know.";
         }
-        return _open.TryGetValue((intentId, taskNumber), out var log) && log.Number == session
-            && await log.TryTakeOnAsync(await sandboxes.WithoutSecretsAsync(written, cancellationToken), cancellationToken)
+        return _open.TryGetValue(task, out var log) && log.Key.Number == session
+            && await log.Inbox.TryTakeOnAsync(await sandboxes.WithoutSecretsAsync(written, cancellationToken), cancellationToken)
                 ? null
                 : "The agent session it was written to takes no more messages: it has ended, or its work has passed verification.";
     }
 
     /// <summary>
-    /// Starts the log of a new agent session on the Intent's Task, which every turn of that session is then to be taken through
+    /// Starts the log of a new agent session on the Task, which every turn of that session is then to be taken through
     /// (<see cref="SessionLog.TakeTurnAsync"/>), and which takes messages for it from now on. Dispose it as the session ends.
     /// </summary>
-    public async Task<SessionLog> OpenAsync(Guid intentId, int taskNumber, AgentRole role, CancellationToken cancellationToken)
+    public async Task<SessionLog> OpenAsync(TaskKey task, AgentRole role, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         var last = await database.AgentSessions
-            .Where(session => session.IntentId == intentId && session.TaskNumber == taskNumber)
+            .Where(session => session.IntentId == task.IntentId && session.TaskNumber == task.Number)
             .MaxAsync(session => (int?)session.Number, cancellationToken);
         var number = (last ?? 0) + 1;
         database.AgentSessions.Add(new AgentSessionRecord
         {
-            IntentId = intentId, TaskNumber = taskNumber, Number = number, Role = role, Entries = [], Undelivered = [],
+            IntentId = task.IntentId, TaskNumber = task.Number, Number = number, Role = role, Entries = [], Undelivered = [],
         });
         await database.SaveChangesAsync(cancellationToken);
         var log = new SessionLog(
-            sandboxes, databases, intentId, taskNumber, number, activity => Report(intentId, taskNumber, activity),
-            () => Changed?.Invoke(intentId, taskNumber),
-            closed => _open.TryRemove(KeyValuePair.Create((intentId, taskNumber), closed)));
-        _open[(intentId, taskNumber)] = log;
-        Changed?.Invoke(intentId, taskNumber);
+            sandboxes, databases, new SessionKey(task, number), activity => Report(task, activity), () => Changed?.Invoke(task),
+            closed => _open.TryRemove(KeyValuePair.Create(task, closed)));
+        _open[task] = log;
+        Changed?.Invoke(task);
         return log;
     }
 
-    /// <summary>The number of the session on the Intent's Task that takes messages now; <c>null</c> when none does.</summary>
-    private int? TakingMessages(Guid intentId, int taskNumber) =>
-        _open.TryGetValue((intentId, taskNumber), out var log) && log.TakesMessages ? log.Number : null;
+    /// <summary>The number of the session on the Task that takes messages now; <c>null</c> when none does.</summary>
+    private int? TakingMessages(TaskKey task) =>
+        _open.TryGetValue(task, out var log) && log.Inbox.TakesMessages ? log.Key.Number : null;
 
-    /// <summary>The sessions on the Intent's Tasks that take messages now, each by its Task and its number among the Task's.</summary>
-    private List<(int TaskNumber, int Session)> TakingMessagesIn(Guid intentId) =>
-        [.. _open.Where(open => open.Key.IntentId == intentId && open.Value.TakesMessages)
-            .Select(open => (open.Key.TaskNumber, open.Value.Number))];
+    /// <summary>The sessions on the Intent's Tasks that take messages now.</summary>
+    private List<SessionKey> TakingMessagesIn(Guid intentId) =>
+        [.. _open.Values.Where(log => log.Key.Task.IntentId == intentId && log.Inbox.TakesMessages).Select(log => log.Key)];
 
-    private void Report(Guid intentId, int taskNumber, SessionActivity? activity)
+    private void Report(TaskKey task, SessionActivity? activity)
     {
         if (activity is null)
         {
-            _activities.TryRemove((intentId, taskNumber), out _);
+            _activities.TryRemove(task, out _);
         }
         else
         {
-            _activities[(intentId, taskNumber)] = activity;
+            _activities[task] = activity;
         }
-        Changed?.Invoke(intentId, taskNumber);
+        Changed?.Invoke(task);
     }
 }
 
-/// <summary>
-/// The log of one agent session on a Task, as it is written, with the messages the human sends its agent. Disposing it says that the
-/// session has ended: a message still waiting then is never delivered.
-/// </summary>
-public sealed class SessionLog : IAsyncDisposable
-{
-    /// <summary>The least time between two writes while a turn goes on, so that a message streamed word by word isn't written as often.</summary>
-    private static readonly TimeSpan Pause = TimeSpan.FromMilliseconds(100);
+/// <summary>A Task of an Intent: the <paramref name="Number"/>th of its Task list, from 1.</summary>
+public readonly record struct TaskKey(Guid IntentId, int Number);
 
-    private readonly SandboxRegistry _sandboxes;
-    private readonly IDbContextFactory<OverseerDbContext> _databases;
-    private readonly Guid _intentId;
-    private readonly int _taskNumber;
-
-    /// <summary>Told what the session's agent is doing whenever the log grows, and <c>null</c> once the session has ended.</summary>
-    private readonly Action<SessionActivity?> _report;
-
-    /// <summary>
-    /// Told whenever the session's messages change, or it stops taking them, and as its agent's question and the answer to it are
-    /// written to the log.
-    /// </summary>
-    private readonly Action _changed;
-
-    private readonly Action<SessionLog> _closed;
-
-    /// <summary>
-    /// Held while a message is taken on, and while the log stops taking them, so that each one taken on is seen by whoever asks for
-    /// the next one afterwards.
-    /// </summary>
-    private readonly SemaphoreSlim _inbox = new(1, 1);
-
-    /// <summary>The messages waiting to be delivered, in the order they were sent.</summary>
-    private readonly ConcurrentQueue<SentMessage> _waiting = new();
-
-    /// <summary>How many messages have been taken on.</summary>
-    private int _messages;
-
-    private volatile bool _takesMessages = true;
-
-    /// <summary>The entries that may differ from how they are stored.</summary>
-    private readonly HashSet<Entry> _unsaved = [];
-
-    /// <summary>The turn's tool calls, by ID.</summary>
-    private readonly Dictionary<string, Entry> _calls = [];
-
-    /// <summary>The message the agent is saying; <c>null</c> when it isn't saying one.</summary>
-    private Entry? _message;
-
-    /// <summary>The entry the agent reported last.</summary>
-    private Entry? _latest;
-
-    /// <summary>The entry the agent began last in the turn; <c>null</c> when it has begun none.</summary>
-    private Entry? _lastBegun;
-
-    private SessionActivity? _activity;
-
-    private int _entries;
-
-    internal SessionLog(
-        SandboxRegistry sandboxes, IDbContextFactory<OverseerDbContext> databases, Guid intentId, int taskNumber, int number,
-        Action<SessionActivity?> report, Action changed, Action<SessionLog> closed)
-    {
-        _sandboxes = sandboxes;
-        _databases = databases;
-        _intentId = intentId;
-        _taskNumber = taskNumber;
-        Number = number;
-        _report = report;
-        _changed = changed;
-        _closed = closed;
-    }
-
-    /// <summary>Which of the Task's sessions this is the log of, from 1.</summary>
-    internal int Number { get; }
-
-    /// <summary>Whether a message sent now would be taken on.</summary>
-    internal bool TakesMessages => _takesMessages;
-
-    public async ValueTask DisposeAsync()
-    {
-        await _inbox.WaitAsync();
-        _takesMessages = false;
-        _inbox.Release();
-        _closed(this);
-        _report(null);
-    }
-
-    /// <summary>Takes on a message for the session's agent, unless the log takes no more.</summary>
-    /// <param name="text">The message, as <see cref="SandboxRegistry.WithoutSecretsAsync"/> gives it.</param>
-    internal async Task<bool> TryTakeOnAsync(string text, CancellationToken cancellationToken)
-    {
-        await _inbox.WaitAsync(cancellationToken);
-        try
-        {
-            if (!_takesMessages)
-            {
-                return false;
-            }
-            var message = new SentMessage(_messages + 1, text);
-            await using var database = await _databases.CreateDbContextAsync(cancellationToken);
-            database.UndeliveredMessages.Add(new UndeliveredMessageRecord
-            {
-                IntentId = _intentId, TaskNumber = _taskNumber, SessionNumber = Number, Number = message.Number, Text = message.Text,
-            });
-            // Not cancelled: a write broken off could leave a message stored that is never delivered.
-            await database.SaveChangesAsync(CancellationToken.None);
-            _messages = message.Number;
-            _waiting.Enqueue(message);
-        }
-        finally
-        {
-            _inbox.Release();
-        }
-        _changed();
-        return true;
-    }
-
-    /// <summary>
-    /// The message to deliver next, which a turn taken with it (<see cref="TakeTurnAsync"/>) does; <c>null</c> when none waits.
-    /// </summary>
-    public async Task<SentMessage?> NextMessageAsync(CancellationToken cancellationToken)
-    {
-        // Once any being taken on just now has been.
-        await _inbox.WaitAsync(cancellationToken);
-        _inbox.Release();
-        return _waiting.TryPeek(out var next) ? next : null;
-    }
-
-    /// <summary>
-    /// As <see cref="NextMessageAsync"/>, for work that is finished unless a message waits: when none does, none is taken on from
-    /// now, so that none is left behind.
-    /// </summary>
-    public async Task<SentMessage?> NextMessageOrTakeNoMoreAsync(CancellationToken cancellationToken)
-    {
-        await _inbox.WaitAsync(cancellationToken);
-        try
-        {
-            if (_waiting.TryPeek(out var next))
-            {
-                return next;
-            }
-            _takesMessages = false;
-        }
-        finally
-        {
-            _inbox.Release();
-        }
-        _changed();
-        return null;
-    }
-
-    /// <summary>
-    /// Sends the session's agent a message and writes what it reports to the log, as it happens, until the turn it starts ends.
-    /// </summary>
-    /// <param name="session">The session this is the log of.</param>
-    /// <param name="delivering">
-    /// The human's message that <paramref name="message"/> passes on, as <see cref="NextMessageAsync"/> gave it: once sent, it is
-    /// delivered, and goes into the log where the turn begins.
-    /// </param>
-    /// <exception cref="AgentSessionFailedException">
-    /// The message couldn't be sent, so the one it passes on stays undelivered; or the turn broke off, with what it reported until
-    /// then in the log.
-    /// </exception>
-    public async Task<AgentOutcome> TakeTurnAsync(
-        IAgentSession session, string message, CancellationToken cancellationToken, SentMessage? delivering = null)
-    {
-        var turn = await session.SendAsync(message, cancellationToken);
-        if (delivering is not null)
-        {
-            await DeliveredAsync(delivering);
-        }
-        // Read apart from the writing, so that what arrives during a write is written together with the next one.
-        var arrived = Channel.CreateUnbounded<AgentUpdate>();
-        var reading = ReadAsync(turn.Updates, arrived.Writer, cancellationToken);
-        _calls.Clear();
-        _lastBegun = null;
-        var ended = false;
-        try
-        {
-            while (await arrived.Reader.WaitToReadAsync(cancellationToken))
-            {
-                Take(arrived.Reader);
-                await SaveAsync();
-                await Task.WhenAny(reading, Task.Delay(Pause, cancellationToken));
-            }
-            var outcome = await turn.Outcome.WaitAsync(cancellationToken);
-            ended = true;
-            return outcome;
-        }
-        finally
-        {
-            // Also what a turn reported before it broke off, or serve stopped.
-            Take(arrived.Reader);
-            if (ended)
-            {
-                EndMessage();
-            }
-            await SaveAsync();
-            // The next turn starts a message of its own.
-            _message = null;
-            // Until then, the agent is doing nothing: what it did last isn't what is going on, as while its work is verified.
-            _latest = null;
-            _activity = null;
-            _report(null);
-        }
-    }
-
-    /// <summary>Records that the message that waited longest is delivered: it is an entry of the log from now on.</summary>
-    // Not cancelled with the turn: the agent has the message by now, and a write broken off could leave what is stored unknown.
-    private async Task DeliveredAsync(SentMessage message)
-    {
-        await using (var database = await _databases.CreateDbContextAsync(CancellationToken.None))
-        {
-            await using var transaction = await database.Database.BeginTransactionAsync(CancellationToken.None);
-            await database.UndeliveredMessages
-                .Where(stored => stored.IntentId == _intentId && stored.TaskNumber == _taskNumber
-                    && stored.SessionNumber == Number && stored.Number == message.Number)
-                .ExecuteDeleteAsync(CancellationToken.None);
-            database.AgentSessionEntries.Add(Record(++_entries, SessionEntryKind.UserMessage, message.Text));
-            await database.SaveChangesAsync(CancellationToken.None);
-            await transaction.CommitAsync(CancellationToken.None);
-        }
-        _waiting.TryDequeue(out _);
-        _changed();
-    }
-
-    /// <summary>
-    /// Writes the question the turn just taken ended with to the log. Where the agent asked it in the last thing it said, that
-    /// message is the question's entry from now on, so that the log doesn't hold it twice.
-    /// </summary>
-    /// <param name="question">As <see cref="SandboxRegistry.WithoutSecretsAsync"/> gives it.</param>
-    // Not cancelled, like every write of the log.
-    public async Task AskedAsync(string question)
-    {
-        if (_lastBegun is { Kind: SessionEntryKind.Message } said && said.Stored == question.Trim())
-        {
-            await using var database = await _databases.CreateDbContextAsync(CancellationToken.None);
-            await Stored(database, said.Number).ExecuteUpdateAsync(
-                stored => stored.SetProperty(record => record.Kind, SessionEntryKind.Question), CancellationToken.None);
-        }
-        else
-        {
-            await AddAsync(SessionEntryKind.Question, question);
-        }
-        _changed();
-    }
-
-    /// <summary>Writes the human's answer to the question asked last to the log.</summary>
-    /// <param name="answer">As <see cref="TaskQuestions.AskAsync"/> gave it.</param>
-    public async Task AnsweredAsync(string answer)
-    {
-        await AddAsync(SessionEntryKind.Answer, answer);
-        _changed();
-    }
-
-    private async Task AddAsync(SessionEntryKind kind, string text)
-    {
-        await using var database = await _databases.CreateDbContextAsync(CancellationToken.None);
-        database.AgentSessionEntries.Add(Record(++_entries, kind, text));
-        await database.SaveChangesAsync(CancellationToken.None);
-    }
-
-    private AgentSessionEntryRecord Record(int number, SessionEntryKind kind, string text) => new()
-    {
-        IntentId = _intentId, TaskNumber = _taskNumber, SessionNumber = Number, Number = number, Kind = kind, Text = text,
-    };
-
-    /// <summary>The session's entry with this number, as stored.</summary>
-    private IQueryable<AgentSessionEntryRecord> Stored(OverseerDbContext database, int number) =>
-        database.AgentSessionEntries.Where(stored => stored.IntentId == _intentId && stored.TaskNumber == _taskNumber
-            && stored.SessionNumber == Number && stored.Number == number);
-
-    private static async Task ReadAsync(
-        IAsyncEnumerable<AgentUpdate> updates, ChannelWriter<AgentUpdate> arrived, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await foreach (var update in updates.WithCancellation(cancellationToken))
-            {
-                arrived.TryWrite(update);
-            }
-            arrived.Complete();
-        }
-        catch (Exception exception)
-        {
-            // The reader of the channel gets it.
-            arrived.Complete(exception);
-        }
-    }
-
-    /// <summary>Adds what has arrived to the log's entries.</summary>
-    private void Take(ChannelReader<AgentUpdate> arrived)
-    {
-        while (arrived.TryRead(out var update))
-        {
-            switch (update)
-            {
-                case AgentUpdate.Message said:
-                    _message ??= _lastBegun = new Entry(++_entries, SessionEntryKind.Message);
-                    _message.Reported.Append(said.Text);
-                    _unsaved.Add(_message);
-                    _latest = _message;
-                    break;
-                case AgentUpdate.ToolCall call:
-                    if (!_calls.TryGetValue(call.Id, out var entry))
-                    {
-                        EndMessage();
-                        _calls[call.Id] = entry = _lastBegun = new Entry(++_entries, SessionEntryKind.ToolCall) { Whole = true };
-                    }
-                    entry.Reported.Clear().Append(call.Title);
-                    _unsaved.Add(entry);
-                    _latest = entry;
-                    break;
-            }
-        }
-    }
-
-    /// <summary>Ends the message the agent is saying, if it is saying one: nothing more is added to it.</summary>
-    private void EndMessage()
-    {
-        if (_message is not null)
-        {
-            _message.Whole = true;
-            _unsaved.Add(_message);
-            _message = null;
-        }
-    }
-
-    // Not cancelled with the turn: a write broken off could leave what is stored unknown.
-    private async Task SaveAsync()
-    {
-        var secrets = _sandboxes.SecretsGiven;
-        var changed = _unsaved
-            .Select(entry => (Entry: entry, Text: TextToStore(entry, secrets)))
-            .Where(change => change.Text.Length > 0 && change.Text != change.Entry.Stored)
-            .ToList();
-        if (changed.Count > 0)
-        {
-            await using var database = await _databases.CreateDbContextAsync(CancellationToken.None);
-            await using var transaction = await database.Database.BeginTransactionAsync(CancellationToken.None);
-            foreach (var (entry, text) in changed)
-            {
-                if (entry.Stored is null)
-                {
-                    database.AgentSessionEntries.Add(Record(entry.Number, entry.Kind, text));
-                }
-                else
-                {
-                    await Stored(database, entry.Number)
-                        .ExecuteUpdateAsync(stored => stored.SetProperty(record => record.Text, text), CancellationToken.None);
-                }
-            }
-            await database.SaveChangesAsync(CancellationToken.None);
-            await transaction.CommitAsync(CancellationToken.None);
-            foreach (var (entry, text) in changed)
-            {
-                entry.Stored = text;
-            }
-            // From what is stored, which holds no secret. Until the latest entry says something, the activity before it stands.
-            if (_latest?.Stored is { } latest && SessionActivity.Of(_latest.Kind, latest) is { } activity)
-            {
-                _activity = activity;
-            }
-            _report(_activity);
-        }
-        _unsaved.Clear();
-    }
-
-    /// <summary>The entry's text as it may be stored now: without secrets, and for a message still arriving, without one begun.</summary>
-    private static string TextToStore(Entry entry, IReadOnlyCollection<string> secrets)
-    {
-        // Made storable first, as taking characters out afterwards could put a secret together.
-        var reported = StorableText.Of(entry.Reported.ToString());
-        return (entry.Whole ? Redaction.Without(reported, secrets) : Redaction.WithoutSoFar(reported, secrets)).Trim();
-    }
-
-    private sealed class Entry(int number, SessionEntryKind kind)
-    {
-        /// <summary>Which of the session's entries it is, in the order they began, from 1.</summary>
-        public int Number { get; } = number;
-
-        public SessionEntryKind Kind { get; } = kind;
-
-        /// <summary>A message's fragments so far, or a tool call's title.</summary>
-        public StringBuilder Reported { get; } = new();
-
-        /// <summary>Whether nothing more of its text is still to come: a message that has ended, or a tool call's title.</summary>
-        public bool Whole { get; set; }
-
-        /// <summary>Its text as PostgreSQL holds it; <c>null</c> until it is stored.</summary>
-        public string? Stored { get; set; }
-    }
-}
-
-/// <summary>A message the human sent a session's agent: the <paramref name="Number"/>th the session took on, from 1.</summary>
-/// <param name="Text">What they wrote, without any secret.</param>
-public sealed record SentMessage(int Number, string Text);
+/// <summary>An agent session on a Task: the <paramref name="Number"/>th on it, from 1.</summary>
+internal readonly record struct SessionKey(TaskKey Task, int Number);
 
 /// <summary>How many messages of the human's to the agents of a Task were never delivered.</summary>
 public sealed record NeverDelivered(int TaskNumber, int Messages);

@@ -157,7 +157,7 @@ public sealed class TaskLoop(
             return SessionFailed(intent, task, exception);
         }
         await using var stopping = session;
-        await using var log = await logs.OpenAsync(intent.Id, task.Number, task.Role, cancellationToken);
+        await using var log = await logs.OpenAsync(new TaskKey(intent.Id, task.Number), task.Role, cancellationToken);
         // The number of the last verification attempt this session made, and how many of them failed. A turn that ends in a
         // question, or with a message of the human's waiting, leads to none.
         var attemptNumber = 0;
@@ -194,7 +194,7 @@ public sealed class TaskLoop(
                 continue;
             }
             // Before verification, which then sees what the turn it starts did.
-            if (await log.NextMessageAsync(cancellationToken) is { } waiting)
+            if (await log.Inbox.NextAsync(cancellationToken) is { } waiting)
             {
                 Deliver(waiting);
                 continue;
@@ -221,7 +221,7 @@ public sealed class TaskLoop(
             var failed = attempt.FailedSteps;
             if (failed.Count == 0)
             {
-                if (await log.NextMessageOrTakeNoMoreAsync(cancellationToken) is not { } sentMeanwhile)
+                if (await log.Inbox.NextOrTakeNoMoreAsync(cancellationToken) is not { } sentMeanwhile)
                 {
                     return new Work.Verified(changedRepositories);
                 }

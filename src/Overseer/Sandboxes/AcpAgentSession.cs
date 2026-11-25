@@ -257,8 +257,9 @@ public sealed class AcpAgentSession : IAgentSession
                 break;
             // OpenCode first titles a tool call with the tool's name, and a later title says what it works on, such as the command.
             case "tool_call_update"
-                when TextOf(update, "toolCallId") is { } id && turn.ToolCalls.TryGetValue(id, out var call) && TextOf(update, "title") is { } on:
-                var title = on == call.Tool ? on : $"{call.Tool}: {on}";
+                when TextOf(update, "toolCallId") is { } id && turn.ToolCalls.TryGetValue(id, out var call)
+                    && TextOf(update, "title") is { } worksOn:
+                var title = worksOn == call.Tool ? worksOn : $"{call.Tool}: {worksOn}";
                 if (title != call.Title)
                 {
                     turn.ToolCalls[id] = (call.Tool, title);

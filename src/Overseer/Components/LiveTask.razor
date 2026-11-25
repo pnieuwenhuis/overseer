@@ -2,7 +2,7 @@
    send its agent a message. *@
 @using Overseer.Implementation
 @using Overseer.Sandboxes
-@implements IDisposable
+@inherits LiveView<LiveTask.Heading?>
 @inject IntentTasks Tasks
 @inject TaskRunner TaskRunner
 @inject SessionLogs SessionLogs
@@ -11,7 +11,7 @@
 @if (MessageRefused is { } refused)
 {
     <p role="alert" class="callout-warning mb-4">Your message was not sent: @refused</p>
-    @if (_sessions is not null && _messagesTo is null && !string.IsNullOrWhiteSpace(MessageDraft))
+    @if (_sessions is not null && _boxSession is null && !string.IsNullOrWhiteSpace(MessageDraft))
     {
         <p class="agent-message-unsent-label">What you wrote</p>
         <p class="agent-message-unsent">@MessageDraft</p>
@@ -72,10 +72,16 @@
                                 break;
                         }
                     }
+                    @{
+                        // Of the session's messages that aren't delivered.
+                        var (delivery, label) = session.TakesMessages
+                            ? ("Waiting", "You: waiting to be delivered")
+                            : ("NotDelivered", "Not delivered: the agent session ended first");
+                    }
                     @foreach (var message in session.Undelivered)
                     {
-                        <li class="session-user-message" data-delivery="@(session.TakesMessages ? "Waiting" : "NotDelivered")">
-                            <span class="session-user-label">@(session.TakesMessages ? "You: waiting to be delivered" : "Not delivered: the agent session ended first")</span>
+                        <li class="session-user-message" data-delivery="@delivery">
+                            <span class="session-user-label">@label</span>
                             <span class="session-user-text">@message</span>
                         </li>
                     }
@@ -84,12 +90,12 @@
         }
     </section>
 }
-@if (_messagesTo is not null)
+@if (_boxSession is not null)
 {
     @* A plain form, posted by the browser, so a message goes the same with or without the live connection. The static page handles it, under this name. *@
     <form method="post" action="intents/@IntentId/tasks/@Number" class="agent-message-form form">
         <input type="hidden" name="_handler" value="@Pages.TaskDetail.MessageFormName" />
-        <input type="hidden" name="@Pages.TaskDetail.SessionField" value="@_messagesTo" />
+        <input type="hidden" name="@Pages.TaskDetail.SessionField" value="@_boxSession" />
         <AntiforgeryToken />
         @if (_awaitsAnswer)
         {
@@ -105,16 +111,13 @@
 }
 
 @code {
-    private readonly CancellationTokenSource _disposed = new();
     private IReadOnlyList<LoggedSession>? _sessions;
 
     /// <summary>The number of the session the page's message box writes to; <c>null</c> when it offers none.</summary>
-    private int? _messagesTo;
+    private int? _boxSession;
 
     /// <summary>Whether the Task's agent waits for the answer to a question.</summary>
     private bool _awaitsAnswer;
-    private bool _reading;
-    private bool _stale;
 
     [Parameter, EditorRequired]
     public required Guid IntentId { get; set; }
@@ -130,88 +133,40 @@
     [Parameter]
     public string? MessageDraft { get; set; }
 
-    /// <summary>
-    /// The Task as last read; <c>null</c> until the first read is done. Persisted from the server's rendering of the page into the live
-    /// connection, whose first render would otherwise blank the heading until its own read is done. The logs aren't: they can be
-    /// larger than the connection takes back.
-    /// </summary>
-    [PersistentState]
-    public Heading? Shown { get; set; }
-
-    protected override void OnInitialized()
+    protected override void Subscribe()
     {
-        // Ahead of the first read, so that no change falls between them. The server's rendering of the page ends here and has no one to update.
-        if (RendererInfo.IsInteractive)
-        {
-            TaskRunner.Changed += OnChanged;
-            SessionLogs.Changed += OnLogged;
-        }
+        TaskRunner.Changed += OnChanged;
+        SessionLogs.Changed += OnLogged;
     }
 
-    protected override Task OnParametersSetAsync() => RefreshAsync();
-
-    private void OnLogged(Guid intentId, int taskNumber)
+    protected override void Unsubscribe()
     {
-        if (intentId == IntentId && taskNumber == Number)
+        TaskRunner.Changed -= OnChanged;
+        SessionLogs.Changed -= OnLogged;
+    }
+
+    private void OnLogged(TaskKey task)
+    {
+        if (task == new TaskKey(IntentId, Number))
         {
             OnChanged();
         }
     }
 
-    private void OnChanged() => _ = InvokeAsync(async () =>
-    {
-        try
-        {
-            await RefreshAsync();
-        }
-        catch (Exception exception) when (exception is OperationCanceledException or ObjectDisposedException)
-        {
-            // The page was closed meanwhile.
-        }
-    });
-
     /// <summary>
-    /// Reads what the page shows, one read at a time: changes that come while one goes on, as they do in quick succession while an
-    /// agent talks, are read together once it ends.
+    /// Reads the Task, which is what stays from the server's rendering of the page into the live connection: the logs, which are read
+    /// along with it, can be larger than the connection takes back.
     /// </summary>
-    private async Task RefreshAsync()
+    protected override async Task<Heading?> ReadAsync(CancellationToken cancellationToken)
     {
-        _stale = true;
-        if (_reading)
-        {
-            return;
-        }
-        _reading = true;
-        try
-        {
-            while (_stale)
-            {
-                _stale = false;
-                var task = (await Tasks.OfAsync(IntentId, _disposed.Token)).SingleOrDefault(task => task.Number == Number);
-                _sessions = await SessionLogs.OfAsync(IntentId, Number, _disposed.Token);
-                _messagesTo = task is { State: IntentTaskState.Running } && _sessions is [.., { TakesMessages: true } open]
-                    ? open.Number
-                    : null;
-                _awaitsAnswer = (await Questions.OfAsync(IntentId, _disposed.Token))
-                    .Any(question => question.TaskNumber == Number && question.AwaitsAnswer);
-                Shown = task is null
-                    ? null
-                    : new Heading(task.Title, task.State, task.Role, string.Join(", ", task.Repositories));
-                StateHasChanged();
-            }
-        }
-        finally
-        {
-            _reading = false;
-        }
-    }
-
-    public void Dispose()
-    {
-        TaskRunner.Changed -= OnChanged;
-        SessionLogs.Changed -= OnLogged;
-        _disposed.Cancel();
-        _disposed.Dispose();
+        var task = (await Tasks.OfAsync(IntentId, cancellationToken)).SingleOrDefault(task => task.Number == Number);
+        _sessions = await SessionLogs.OfAsync(new TaskKey(IntentId, Number), cancellationToken);
+        _boxSession = task is { State: IntentTaskState.Running } && _sessions is [.., { TakesMessages: true } open]
+            ? open.Number
+            : null;
+        _awaitsAnswer = (await Questions.OfAsync(IntentId, cancellationToken))
+            .Any(question => question.TaskNumber == Number && question.AwaitsAnswer);
+        return task is null ? null : new Heading(task.Title, task.State, task.Role, string.Join(", ", task.Repositories));
     }
 
     /// <summary>What the page shows of the Task itself.</summary>

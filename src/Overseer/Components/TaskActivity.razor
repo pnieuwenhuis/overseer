@@ -3,7 +3,7 @@
 @implements IDisposable
 @inject SessionLogs SessionLogs
 
-@if (SessionLogs.ActivityOn(IntentId, TaskNumber) is { } activity)
+@if (SessionLogs.ActivityOn(new TaskKey(IntentId, TaskNumber)) is { } activity)
 {
     <p class="intent-task-activity" data-kind="@activity.Kind" title="@activity.Line">@activity.Line</p>
 }
@@ -24,9 +24,9 @@
         }
     }
 
-    private void OnLogged(Guid intentId, int taskNumber)
+    private void OnLogged(TaskKey task)
     {
-        if (intentId == IntentId && taskNumber == TaskNumber)
+        if (task == new TaskKey(IntentId, TaskNumber))
         {
             _ = InvokeAsync(StateHasChanged);
         }

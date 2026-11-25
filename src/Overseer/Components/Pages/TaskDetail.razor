@@ -56,7 +56,7 @@
         var form = HttpContext.Request.Form;
         var message = form[MessageField].ToString();
         _refused = int.TryParse(form[SessionField], NumberStyles.None, CultureInfo.InvariantCulture, out var session)
-            ? await SessionLogs.SendMessageAsync(Id, Number, session, message, HttpContext.RequestAborted)
+            ? await SessionLogs.SendMessageAsync(new TaskKey(Id, Number), session, message, HttpContext.RequestAborted)
             : "It didn't say which agent session it is for.";
         if (_refused is null)
         {
