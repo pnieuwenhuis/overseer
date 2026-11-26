@@ -184,6 +184,12 @@ public sealed class IntentTasks(IDbContextFactory<OverseerDbContext> databases, 
         await database.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>Records in <paramref name="database"/>'s transaction that the Intent's Task with this number is a Failed Task.</summary>
+    internal static Task FailAsync(OverseerDbContext database, Guid intentId, int number, CancellationToken cancellationToken) =>
+        database.IntentTasks
+            .Where(task => task.IntentId == intentId && task.Number == number)
+            .ExecuteUpdateAsync(task => task.SetProperty(record => record.State, IntentTaskState.Failed), cancellationToken);
+
     /// <summary>
     /// Puts the Intent's Task that is Running, if one is, back to Pending in <paramref name="database"/>'s transaction: what ran it
     /// has ended without finishing it.

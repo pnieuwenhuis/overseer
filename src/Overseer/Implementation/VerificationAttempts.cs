@@ -36,9 +36,13 @@ public sealed class VerificationAttempts(IDbContextFactory<OverseerDbContext> da
         return (last ?? 0) + 1;
     }
 
-    public async Task RecordAsync(Guid intentId, VerificationAttempt attempt, CancellationToken cancellationToken)
+    /// <param name="alongside">What else the attempt records, in the same transaction; <c>null</c> for nothing.</param>
+    public async Task RecordAsync(
+        Guid intentId, VerificationAttempt attempt, Func<OverseerDbContext, CancellationToken, Task>? alongside,
+        CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         database.VerificationAttempts.Add(new VerificationAttemptRecord
         {
             IntentId = intentId,
@@ -56,6 +60,11 @@ public sealed class VerificationAttempts(IDbContextFactory<OverseerDbContext> da
             })],
         });
         await database.SaveChangesAsync(cancellationToken);
+        if (alongside is not null)
+        {
+            await alongside(database, cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
     }
 }
 

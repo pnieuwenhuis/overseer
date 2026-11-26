@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.RegularExpressions;
+using Microsoft.EntityFrameworkCore;
 using Overseer.Sandboxes;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
@@ -16,6 +17,44 @@ public class FailedTaskTests(PostgresServer postgres)
     private const string Manifest = "setup: npm ci\nbuild: npm run build\ntest: npm test\n";
 
     private static readonly CommandResult Passes = new(0, "");
+
+    [Fact]
+    public async Task The_last_failed_attempt_is_recorded_only_together_with_the_Task_becoming_a_Failed_Task_so_that_no_crash_parts_them()
+    {
+        await using var overseer = await StartAsync("acme/web");
+        await SetOperatingLimitsAsync(overseer, verificationAttemptsPerTask: 1);
+        var testing = new TaskCompletionSource();
+        overseer.Sandboxes.HoldCommandsContaining("npm test", testing.Task);
+        overseer.Sandboxes.ScriptCommandsContaining("npm test", new CommandResult(1, "exports nothing"));
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneAtOnce());
+        var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
+        await EventuallyAsync(
+            () => Task.FromResult(overseer.Sandboxes.CommandsRun.Any(run => run.Command.Contains("npm test")) ? "" : null),
+            "the Task's tests to run");
+        await using (var holder = overseer.OpenDatabase())
+        {
+            await using var transaction = await holder.Database.BeginTransactionAsync(TestContext.Current.CancellationToken);
+            // Holds up changes to the Task, but not the recording of an attempt on it.
+            await holder.Database.ExecuteSqlAsync(
+                $"""SELECT 1 FROM "IntentTasks" FOR NO KEY UPDATE""", TestContext.Current.CancellationToken);
+            testing.SetResult();
+            using var waiting = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            waiting.CancelAfter(TimeSpan.FromSeconds(30));
+            await DatabaseRaces.UntilWaitingOnLocksAsync(overseer, 1, waiting.Token);
+
+            // What serve would find after stopping here.
+            var page = await GetAsync(overseer, address);
+            Assert.Equal(["Running"], TasksOn(page).Select(task => task.State));
+            Assert.Empty(VerificationTests.AttemptsOn(page, 1));
+
+            await transaction.RollbackAsync(TestContext.Current.CancellationToken);
+        }
+
+        await ImplementationTests.FailedAsync(overseer, address);
+        var failed = await GetAsync(overseer, address);
+        Assert.Equal(["Failed"], TasksOn(failed).Select(task => task.State));
+        Assert.Single(VerificationTests.AttemptsOn(failed, 1));
+    }
 
     [Fact]
     public async Task Retry_runs_a_Failed_Task_again_in_a_new_session_in_the_same_Sandbox_told_what_failed_last_and_turns_the_light_green()

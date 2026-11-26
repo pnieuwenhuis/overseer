@@ -245,9 +245,22 @@ public sealed class TaskLoop(
                 logger.LogError(exception, "Task {Task} of the Intent {IntentId} could not be verified.", task.Number, intent.Id);
                 return new Work.Unfinished($"Task {task.Number} could not be verified: {exception.Message}");
             }
-            await attempts.RecordAsync(intent.Id, attempt, cancellationToken);
-            changed();
             var failed = attempt.FailedSteps;
+            // An attempt that passed isn't counted against the allowed ones, though a message had the work verified again after it.
+            if (failed.Count > 0)
+            {
+                failures++;
+            }
+            // As the Settings say now, so that raising the limit also helps a Task being worked on.
+            var allowed = (await settings.GetOperatingLimitsAsync(cancellationToken)).VerificationAttemptsPerTask;
+            var failsTask = failed.Count > 0 && failures >= allowed;
+            // The last allowed attempt together with the Failed Task it makes: a stop of serve between the two would leave the Task
+            // Running, to be run again with all its attempts.
+            await attempts.RecordAsync(
+                intent.Id, attempt,
+                failsTask ? (database, stopping) => IntentTasks.FailAsync(database, intent.Id, task.Number, stopping) : null,
+                cancellationToken);
+            changed();
             if (failed.Count == 0)
             {
                 if (await log.Inbox.NextOrTakeNoMoreAsync(cancellationToken) is not { } sentMeanwhile)
@@ -258,14 +271,8 @@ public sealed class TaskLoop(
                 Deliver(sentMeanwhile);
                 continue;
             }
-            // An attempt that passed isn't counted against the allowed ones, though a message had the work verified again after it.
-            failures++;
-            // As the Settings say now, so that raising the limit also helps a Task being worked on.
-            var allowed = (await settings.GetOperatingLimitsAsync(cancellationToken)).VerificationAttemptsPerTask;
-            if (failures >= allowed)
+            if (failsTask)
             {
-                await tasks.EnterStateAsync(intent.Id, task.Number, IntentTaskState.Failed, cancellationToken);
-                changed();
                 return new Work.Unfinished(
                     $"Task {task.Number} is a Failed Task: its work didn't pass verification in {failures} "
                     + $"{(failures == 1 ? "attempt" : "attempts")}. In the last one, attempt {attemptNumber}: "
