@@ -135,7 +135,8 @@ public sealed class TaskLoop(
     /// failed, and stops the session once the work passes or the Task can't go on. A turn that ends in a question instead waits
     /// for the human's answer (<see cref="TaskQuestions"/>), which goes to the same session. The messages the human sends meanwhile
     /// (<see cref="SessionLogs.SendMessageAsync"/>) each become a turn of their own, in order, after a turn that ends as done and
-    /// before its work is verified; work that passes with one waiting is verified again after the turns they start.
+    /// before its work is verified; work that passes with one waiting is verified again after the turns they start. A Designer's
+    /// screenshots are taken at the end of every turn, and checked with the work.
     /// </summary>
     private async Task<Work> CarryOutAsync(
         Intent intent, Sandbox sandbox, IntentTask task, Action changed, CancellationToken cancellationToken)
