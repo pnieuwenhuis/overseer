@@ -414,18 +414,65 @@ public sealed class AzureSandboxProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task Taking_a_file_that_is_there_but_cant_be_read_or_removed_fails_with_what_the_Sandbox_said()
+    public async Task Taking_a_file_whose_command_fails_otherwise_fails_with_what_the_Sandbox_said()
     {
         var provider = Provider();
         var sandbox = await CreateAsync(provider);
-        _ssh.Answer = (_, _) => new CommandResult(1, "rm: cannot remove '/home/overseer/.overseer/round.json': Permission denied\n");
+        _ssh.Answer = (_, _) => new CommandResult(127, "sh: cat: not found\n");
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(
             () => provider.TakeFileAsync(sandbox, "/home/overseer/.overseer/round.json", TestContext.Current.CancellationToken));
 
         Assert.Equal(
-            "The file /home/overseer/.overseer/round.json in the Sandbox could not be taken: rm: cannot remove '/home/overseer/.overseer/round.json': Permission denied\n",
-            failure.Message);
+            "The file /home/overseer/.overseer/round.json in the Sandbox could not be taken: sh: cat: not found\n", failure.Message);
+    }
+
+    [Fact]
+    public async Task Taking_a_file_that_is_there_but_cant_be_read_says_so_with_what_the_Sandbox_said()
+    {
+        var provider = Provider();
+        var sandbox = await CreateAsync(provider);
+        _ssh.Answer = (_, command) => RunInShell(command);
+        var path = Path.Combine(_directory, "orders.png");
+        await File.WriteAllTextAsync(path, "orders", TestContext.Current.CancellationToken);
+        RunInShell($"chmod 000 '{path}'");
+
+        var asText = await Assert.ThrowsAsync<SandboxFileUnreadableException>(
+            () => provider.TakeFileAsync(sandbox, path, TestContext.Current.CancellationToken));
+        var asBytes = await Assert.ThrowsAsync<SandboxFileUnreadableException>(
+            () => provider.TakeBinaryFileAsync(sandbox, path, 100, TestContext.Current.CancellationToken));
+
+        foreach (var failure in new[] { asText, asBytes })
+        {
+            Assert.StartsWith($"The file {path} in the Sandbox could not be read: ", failure.Message);
+            Assert.Contains("Permission denied", failure.Message);
+        }
+        Assert.True(File.Exists(path));
+    }
+
+    [Fact]
+    public async Task Taking_a_file_that_cant_be_removed_gives_its_content_all_the_same_and_nothing_else()
+    {
+        var provider = Provider();
+        var sandbox = await CreateAsync(provider);
+        _ssh.Answer = (_, command) => RunInShell(command);
+        // As in a directory that is root's: its files can be read, but not removed.
+        var directory = Directory.CreateDirectory(Path.Combine(_directory, "not-ours")).FullName;
+        var path = Path.Combine(directory, "orders.png");
+        await File.WriteAllTextAsync(path, "orders", TestContext.Current.CancellationToken);
+        RunInShell($"chmod 555 '{directory}'");
+        try
+        {
+            Assert.Equal("orders", await provider.TakeFileAsync(sandbox, path, TestContext.Current.CancellationToken));
+            Assert.Equal(
+                "orders"u8.ToArray(), await provider.TakeBinaryFileAsync(sandbox, path, 100, TestContext.Current.CancellationToken));
+            Assert.True(File.Exists(path));
+        }
+        finally
+        {
+            // So that it can be cleared away.
+            RunInShell($"chmod 755 '{directory}'");
+        }
     }
 
     [Fact]
@@ -486,18 +533,17 @@ public sealed class AzureSandboxProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task Taking_a_binary_file_that_is_there_but_cant_be_taken_fails_with_what_the_Sandbox_said()
+    public async Task Taking_a_binary_file_whose_command_fails_otherwise_fails_with_what_the_Sandbox_said()
     {
         var provider = Provider();
         var sandbox = await CreateAsync(provider);
-        _ssh.Answer = (_, _) => new CommandResult(1, "base64: orders.png: Permission denied\n");
+        _ssh.Answer = (_, _) => new CommandResult(127, "sh: base64: not found\n");
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(
             () => provider.TakeBinaryFileAsync(sandbox, "/home/overseer/orders.png", 100, TestContext.Current.CancellationToken));
 
         Assert.Equal(
-            "The file /home/overseer/orders.png in the Sandbox could not be taken: base64: orders.png: Permission denied\n",
-            failure.Message);
+            "The file /home/overseer/orders.png in the Sandbox could not be taken: sh: base64: not found\n", failure.Message);
     }
 
     /// <summary>Runs a command in a local shell as SSH runs it in a Sandbox, with standard error merged into standard output.</summary>

@@ -233,6 +233,49 @@ public class DesignerScreenshotTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task A_screenshot_that_cant_be_read_uses_an_attempt_and_the_agent_is_told_for_it_to_hand_in_one_that_can()
+    {
+        await using var overseer = await StartAsync();
+        overseer.Sandboxes.FailReading($"{ScreenshotDirectory}/orders.png", "cat: orders.png: Permission denied");
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Designer,
+            new FakeAgentSession(
+                HandsIn(("orders.png", "The orders page", Png)), HandsIn(("again.png", "The orders page, again", Png))));
+
+        var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
+
+        await StatesAsync(overseer, address, "Done", "Running", "Pending");
+        Assert.Contains("Screenshot 1, orders.png, is there, but can't be read.", SquadMessages(overseer)[1].Message);
+        Assert.Equal("The orders page, again", Assert.Single(ScreenshotsOn(await GetAsync(overseer, address))).Caption);
+    }
+
+    [Fact]
+    public async Task A_list_of_screenshots_that_cant_be_read_fails_the_Task_rather_than_the_implementation_also_when_a_session_left_it()
+    {
+        await using var overseer = await StartAsync();
+        await SetOperatingLimitsAsync(overseer, verificationAttemptsPerTask: 1);
+        overseer.Sandboxes.FailReading(ListPath, "cat: screenshots.json: Permission denied");
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Designer, new FakeAgentSession(HandsIn(("orders.png", "The orders page", Png))));
+
+        var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
+
+        var failed = await FailedAsync(overseer, address);
+        Assert.StartsWith("Task 1 is a Failed Task", failed.Status);
+        var attempt = Assert.Single(VerificationTests.AttemptsOn(await GetAsync(overseer, address), 1));
+        Assert.Equal("Attempt 1: failed. The screenshots handed in aren't valid.", attempt.Heading);
+        Assert.Contains($"{ListPath} is there, but can't be read.", Assert.Single(attempt.Steps).Output);
+
+        // The new session finds the list the first one left.
+        using var retried = await FailedTaskTests.RetryTaskAsync(overseer, address, 1);
+
+        await EventuallyAsync(
+            async () => VerificationTests.AttemptsOn(await GetAsync(overseer, address), 1).Count == 2 ? "" : null,
+            "the new session's attempt");
+        Assert.StartsWith("Task 1 is a Failed Task", (await FailedAsync(overseer, address)).Status);
+    }
+
+    [Fact]
     public async Task Screenshots_handed_in_with_work_that_failed_verification_still_count_once_it_passes_without_new_ones()
     {
         await using var overseer = await StartWithFailingTestsAsync();

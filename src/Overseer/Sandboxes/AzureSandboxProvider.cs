@@ -335,7 +335,7 @@ public sealed partial class AzureSandboxProvider(
 
     /// <inheritdoc cref="ISandboxProvider.TakeFileAsync"/>
     /// <exception cref="InvalidOperationException">
-    /// The Sandbox does not exist, or its key is gone; or the file is there, but couldn't be read or removed.
+    /// The Sandbox does not exist, or its key is gone; or the file couldn't be taken for another reason than that it can't be read.
     /// </exception>
     /// <exception cref="SandboxUnreachableException">The Sandbox does not accept SSH, for instance from a new public IP of the developer's.</exception>
     public Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken)
@@ -343,13 +343,14 @@ public sealed partial class AzureSandboxProvider(
         var quoted = ShellText.Quoted(path);
         return FileContentAsync(sandbox, $"""
             [ -f {quoted} ] || exit {NoSuchFile}
-            cat -- {quoted} && rm -f -- {quoted}
-            """, failure: NotTaken(path), cancellationToken);
+            cat -- {quoted} || exit {CantRead}
+            {RemoveIfItCan(quoted)}
+            """, failure: NotTaken(path), cancellationToken, unreadable: why => new SandboxFileUnreadableException(path, why));
     }
 
     /// <inheritdoc cref="ISandboxProvider.TakeBinaryFileAsync"/>
     /// <exception cref="InvalidOperationException">
-    /// The Sandbox does not exist, or its key is gone; or the file is there, but couldn't be read or removed.
+    /// The Sandbox does not exist, or its key is gone; or the file couldn't be taken for another reason than that it can't be read.
     /// </exception>
     /// <exception cref="SandboxUnreachableException">The Sandbox does not accept SSH, for instance from a new public IP of the developer's.</exception>
     public async Task<byte[]?> TakeBinaryFileAsync(Sandbox sandbox, string path, int maxBytes, CancellationToken cancellationToken)
@@ -358,9 +359,12 @@ public sealed partial class AzureSandboxProvider(
         // A command's output comes as text, so the bytes travel in base64. The arithmetic takes the blanks some wc pads with.
         var encoded = await FileContentAsync(sandbox, $"""
             [ -f {quoted} ] || exit {NoSuchFile}
+            head -c 1 -- {quoted} > /dev/null || exit {CantRead}
             [ "$(($(wc -c < {quoted})))" -le {maxBytes} ] || exit {FileTooLarge}
-            base64 < {quoted} && rm -f -- {quoted}
-            """, failure: NotTaken(path), cancellationToken, tooLarge: () => new SandboxFileTooLargeException(path, maxBytes));
+            base64 < {quoted} || exit {CantRead}
+            {RemoveIfItCan(quoted)}
+            """, failure: NotTaken(path), cancellationToken, tooLarge: () => new SandboxFileTooLargeException(path, maxBytes),
+            unreadable: why => new SandboxFileUnreadableException(path, why));
         // Decoding passes over the line breaks base64 puts in.
         return encoded is null ? null : Convert.FromBase64String(encoded);
     }
@@ -371,13 +375,26 @@ public sealed partial class AzureSandboxProvider(
     /// <summary>What a command that prints a file exits with when the file is larger than asked for.</summary>
     private const int FileTooLarge = 4;
 
+    /// <summary>What a command that takes a file exits with when it can't read it.</summary>
+    private const int CantRead = 5;
+
     private static string NotTaken(string path) => $"The file {path} in the Sandbox could not be taken";
+
+    /// <summary>
+    /// A command that removes a file that has been printed, and succeeds also when it can't, as in a directory of root's. It says
+    /// nothing, as that would end up in what was printed.
+    /// </summary>
+    private static string RemoveIfItCan(string quoted) => $"rm -f -- {quoted} > /dev/null 2>&1 || true";
 
     /// <summary>Runs a command that prints a file, or exits with <see cref="NoSuchFile"/> when there is none.</summary>
     /// <param name="failure">What to say, ahead of the command's output, when it fails otherwise.</param>
     /// <param name="tooLarge">What to throw when it exits with <see cref="FileTooLarge"/>, for a command that may.</param>
+    /// <param name="unreadable">
+    /// What to throw, given what it said, when it exits with <see cref="CantRead"/>, for a command that may.
+    /// </param>
     private async Task<string?> FileContentAsync(
-        Sandbox sandbox, string command, string failure, CancellationToken cancellationToken, Func<Exception>? tooLarge = null)
+        Sandbox sandbox, string command, string failure, CancellationToken cancellationToken, Func<Exception>? tooLarge = null,
+        Func<string, Exception>? unreadable = null)
     {
         var result = await RunCommandAsync(sandbox, command, cancellationToken);
         return result.ExitCode switch
@@ -385,6 +402,7 @@ public sealed partial class AzureSandboxProvider(
             0 => result.Output,
             NoSuchFile => null,
             FileTooLarge when tooLarge is not null => throw tooLarge(),
+            CantRead when unreadable is not null => throw unreadable(result.Output),
             _ => throw new InvalidOperationException($"{failure}: {result.Output}"),
         };
     }

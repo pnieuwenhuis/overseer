@@ -31,7 +31,7 @@ public sealed class TaskScreenshots(SandboxRegistry sandboxes, IDbContextFactory
 
         /// <summary>
         /// Takes away a list of screenshots left in the Sandbox, as by a session that broke off, so that this one's Task doesn't
-        /// count what it didn't hand in.
+        /// count what it didn't hand in. One that can't be read stays, for the first turn's check to say so.
         /// </summary>
         public Task DiscardLeftOverAsync(CancellationToken cancellationToken) =>
             screenshots.DiscardListAsync(sandbox, cancellationToken);
@@ -79,8 +79,17 @@ public sealed class TaskScreenshots(SandboxRegistry sandboxes, IDbContextFactory
         }
     }
 
-    private Task DiscardListAsync(Sandbox sandbox, CancellationToken cancellationToken) =>
-        sandboxes.TakeFileAsync(sandbox, ScreenshotHandIn.FilePath, cancellationToken);
+    private async Task DiscardListAsync(Sandbox sandbox, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await sandboxes.TakeFileAsync(sandbox, ScreenshotHandIn.FilePath, cancellationToken);
+        }
+        catch (SandboxFileUnreadableException)
+        {
+            // Nothing of it can count: the hand-in that takes it next finds it unreadable too, unless the agent writes it anew.
+        }
+    }
 
     /// <summary>The screenshots of the Intent's Tasks, by Task, in the order they were listed.</summary>
     public async Task<IReadOnlyList<TaskScreenshot>> OfAsync(Guid intentId, CancellationToken cancellationToken)
@@ -111,7 +120,17 @@ public sealed class TaskScreenshots(SandboxRegistry sandboxes, IDbContextFactory
     private async Task<HandedIn<IReadOnlyList<TaskScreenshotRecord>>> HandedInAsync(
         TaskKey task, Sandbox sandbox, CancellationToken cancellationToken)
     {
-        switch (await ScreenshotHandIn.Instance.TakeAsync(sandboxes, sandbox, cancellationToken))
+        HandedIn<IReadOnlyList<ListedScreenshot>> handedIn;
+        try
+        {
+            handedIn = await ScreenshotHandIn.Instance.TakeAsync(sandboxes, sandbox, cancellationToken);
+        }
+        catch (SandboxFileUnreadableException)
+        {
+            return new HandedIn<IReadOnlyList<TaskScreenshotRecord>>.Invalid(
+                [$"{ScreenshotHandIn.FilePath} is there, but can't be read."]);
+        }
+        switch (handedIn)
         {
             case HandedIn<IReadOnlyList<ListedScreenshot>>.Valid(var listed):
                 var images = new List<TaskScreenshotRecord>();
@@ -158,6 +177,10 @@ public sealed class TaskScreenshots(SandboxRegistry sandboxes, IDbContextFactory
         catch (SandboxFileTooLargeException)
         {
             return (null, $"{named} is larger than {ScreenshotHandIn.LargestImageMegabytes} MB.");
+        }
+        catch (SandboxFileUnreadableException)
+        {
+            return (null, $"{named} is there, but can't be read.");
         }
         if (content is null)
         {

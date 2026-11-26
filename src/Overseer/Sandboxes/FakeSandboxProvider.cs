@@ -29,6 +29,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     private readonly ConcurrentQueue<(string Fragment, Sequence<CommandResult> Results)> _commandsContaining = new();
     private readonly ConcurrentQueue<(string Fragment, Task Until)> _heldCommands = new();
     private readonly ConcurrentDictionary<string, string> _unreadableFiles = new();
+    private readonly ConcurrentDictionary<string, bool> _unremovableFiles = new();
     private readonly ConcurrentQueue<Sandbox> _destructionsBegun = new();
     private volatile Task _destructionsHeld = Task.CompletedTask;
 
@@ -79,9 +80,16 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     /// </summary>
     public void AddRepositoryFile(string repository, string path, string content) => _repositoryFiles[(repository, path)] = content;
 
-    /// <summary>Makes reading the file at <paramref name="path"/> in a repository's clone fail with <paramref name="error"/>.</summary>
+    /// <summary>
+    /// Makes reading the file at <paramref name="path"/>, such as one in a repository's clone, fail with <paramref name="error"/>,
+    /// also when it is to be taken.
+    /// </summary>
     /// <param name="path">An absolute path in a Sandbox.</param>
     public void FailReading(string path, string error) => _unreadableFiles[path] = error;
+
+    /// <summary>Makes the file at <paramref name="path"/> stay when it is taken, as one that can't be removed does.</summary>
+    /// <param name="path">An absolute path in a Sandbox.</param>
+    public void FailRemoving(string path) => _unremovableFiles[path] = true;
 
     /// <summary>Every command run in a Sandbox, in the order they were run.</summary>
     public IReadOnlyList<SandboxCommand> CommandsRun => [.. _commandsRun];
@@ -221,7 +229,22 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         return Task.FromResult(Take(sandbox, path));
     }
 
-    private byte[]? Take(Sandbox sandbox, string path) => _files.TryRemove((sandbox.ResourceId, path), out var content) ? content : null;
+    private byte[]? Take(Sandbox sandbox, string path)
+    {
+        if (!_files.TryGetValue((sandbox.ResourceId, path), out var content))
+        {
+            return null;
+        }
+        if (_unreadableFiles.TryGetValue(path, out var error))
+        {
+            throw new SandboxFileUnreadableException(path, error);
+        }
+        if (!_unremovableFiles.ContainsKey(path))
+        {
+            _files.TryRemove((sandbox.ResourceId, path), out _);
+        }
+        return content;
+    }
 
     private static string? TextOf(byte[]? content) => content is null ? null : Encoding.UTF8.GetString(content);
 

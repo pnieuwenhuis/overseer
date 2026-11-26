@@ -139,6 +139,34 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_file_that_is_there_but_cant_be_read_isnt_taken_and_says_so()
+    {
+        var sandbox = await CreateAsync(NewIntent());
+        const string path = "/home/overseer/.overseer/screenshots/orders.png";
+        await GivenFileAsync(sandbox, path, "orders");
+        await GivenUnreadableAsync(sandbox, path);
+
+        await Assert.ThrowsAsync<SandboxFileUnreadableException>(
+            () => Provider.TakeFileAsync(sandbox, path, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<SandboxFileUnreadableException>(
+            () => Provider.TakeBinaryFileAsync(sandbox, path, 100, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task A_file_that_cant_be_removed_is_taken_all_the_same_and_stays_in_the_Sandbox()
+    {
+        var sandbox = await CreateAsync(NewIntent());
+        const string path = "/home/overseer/.overseer/screenshots/orders.png";
+        await GivenFileAsync(sandbox, path, "orders");
+        await GivenUnremovableAsync(sandbox, path);
+
+        Assert.Equal("orders", await Provider.TakeFileAsync(sandbox, path, TestContext.Current.CancellationToken));
+        Assert.Equal(
+            "orders"u8.ToArray(), await Provider.TakeBinaryFileAsync(sandbox, path, 100, TestContext.Current.CancellationToken));
+        Assert.Equal("orders", await Provider.ReadFileAsync(sandbox, path, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Reading_a_file_in_a_Sandbox_gives_its_content_and_leaves_it_there()
     {
         var sandbox = await CreateAsync(NewIntent());
@@ -263,6 +291,12 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     /// <inheritdoc cref="GivenFileAsync(Sandbox, string, string)"/>
     protected abstract Task GivenFileAsync(Sandbox sandbox, string path, byte[] content);
 
+    /// <summary>Makes the file at the path one that can't be read, as an agent might leave it.</summary>
+    protected abstract Task GivenUnreadableAsync(Sandbox sandbox, string path);
+
+    /// <summary>Makes the file at the path one that can't be removed, though it can be read, as one in a directory of root's.</summary>
+    protected abstract Task GivenUnremovableAsync(Sandbox sandbox, string path);
+
     private static SandboxOwner NewIntent() => new(SandboxOwnerKind.Intent, Guid.NewGuid());
 
     private async Task DestroyAsync(Sandbox sandbox)
@@ -309,6 +343,18 @@ public sealed class FakeSandboxProviderContract : SandboxProviderContract
     protected override Task GivenFileAsync(Sandbox sandbox, string path, byte[] content)
     {
         _fake.WriteFile(sandbox, path, content);
+        return Task.CompletedTask;
+    }
+
+    protected override Task GivenUnreadableAsync(Sandbox sandbox, string path)
+    {
+        _fake.FailReading(path, "Permission denied");
+        return Task.CompletedTask;
+    }
+
+    protected override Task GivenUnremovableAsync(Sandbox sandbox, string path)
+    {
+        _fake.FailRemoving(path);
         return Task.CompletedTask;
     }
 
@@ -427,6 +473,13 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
             TestContext.Current.CancellationToken);
         Assert.Equal(0, written.ExitCode);
     }
+
+    protected override Task GivenUnreadableAsync(Sandbox sandbox, string path) => RunAsync(sandbox, $"chmod 000 '{path}'");
+
+    protected override Task GivenUnremovableAsync(Sandbox sandbox, string path) => RunAsync(sandbox, $"chmod 555 \"$(dirname '{path}')\"");
+
+    private async Task RunAsync(Sandbox sandbox, string command) =>
+        Assert.Equal(0, (await _azure.RunCommandAsync(sandbox, command, TestContext.Current.CancellationToken)).ExitCode);
 
     protected override ValueTask DisposeProviderAsync()
     {

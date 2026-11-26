@@ -49,10 +49,12 @@ public interface ISandboxProvider
 
     /// <summary>
     /// Reads the file at <paramref name="path"/> in the Sandbox and removes it, so that it is taken only once, as when an
-    /// agent hands in what it wrote there.
+    /// agent hands in what it wrote there. A file that can be read but not removed, as one in a directory of root's, is given all
+    /// the same, and stays.
     /// </summary>
     /// <param name="path">An absolute path in the Sandbox.</param>
     /// <returns>The file's content as UTF-8 text; <c>null</c> when there is no such file.</returns>
+    /// <exception cref="SandboxFileUnreadableException">The file is there, but can't be read.</exception>
     Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken);
 
     /// <summary>
@@ -63,7 +65,7 @@ public interface ISandboxProvider
     /// <param name="maxBytes">The most bytes the file may hold.</param>
     /// <returns>The file's content; <c>null</c> when there is no such file.</returns>
     /// <exception cref="SandboxFileTooLargeException">The file holds more than <paramref name="maxBytes"/>; it stays there.</exception>
-    /// <exception cref="InvalidOperationException">The file is there, but couldn't be read or removed.</exception>
+    /// <exception cref="SandboxFileUnreadableException">The file is there, but can't be read.</exception>
     Task<byte[]?> TakeBinaryFileAsync(Sandbox sandbox, string path, int maxBytes, CancellationToken cancellationToken);
 
     /// <summary>
@@ -140,6 +142,10 @@ public enum SandboxOwnerKind
     Intent,
     RepositorySetup,
 }
+
+/// <summary>A file to be taken from a Sandbox is there, but can't be read; the message says why.</summary>
+public sealed class SandboxFileUnreadableException(string path, string why)
+    : InvalidOperationException($"The file {path} in the Sandbox could not be read: {why}");
 
 /// <summary>A file in a Sandbox holds more bytes than whoever asked for it takes.</summary>
 public sealed class SandboxFileTooLargeException(string path, int maxBytes)
