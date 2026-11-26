@@ -11,15 +11,16 @@ namespace Overseer.Implementation;
 /// <summary>
 /// The Squad at work: carries out an Intent's Tasks in its prepared Sandbox, one at a time (ADR 0001), in their order, each in a
 /// new agent session for the Task's role. Once the agent says it is done, Overseer verifies the work (<see cref="Verification"/>,
-/// the full one for the fix-up Task) and tells the agent what failed, for it to fix, until the work passes or the allowed attempts
-/// are used up, which makes the Task a Failed Task. Work that passes is committed and pushed to the Intent branch
+/// the full one for the fix-up Task), and that a Designer handed in screenshots (<see cref="TaskScreenshots"/>), and tells the
+/// agent what failed, for it to fix, until the work passes or the allowed attempts are used up, which makes the Task a Failed
+/// Task. Work that passes is committed and pushed to the Intent branch
 /// (<see cref="IntentBranches"/>); only then is the Task Done and the next one started. What each session reports is kept in its log
 /// (<see cref="SessionLogs"/>).
 /// </summary>
 public sealed class TaskLoop(
     IntentTasks tasks, VerificationAttempts attempts, TaskQuestions questions, Verification verification, IntentBranches branches,
     SpecStore specs, SandboxRegistry sandboxes, SessionLogs logs, SettingsStore settings, RepositoryCommands commands,
-    ILogger<TaskLoop> logger)
+    TaskScreenshots screenshots, ILogger<TaskLoop> logger)
 {
     /// <summary>
     /// Carries out the Intent's Tasks that aren't Done until none is left, or one can't be finished. A Task whose verified work
@@ -150,6 +151,10 @@ public sealed class TaskLoop(
         IAgentSession session;
         try
         {
+            if (task.Role == AgentRole.Designer)
+            {
+                await screenshots.DiscardHandedInAsync(sandbox, cancellationToken);
+            }
             session = await sandboxes.StartAgentSessionAsync(sandbox, task.Role, cancellationToken);
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
@@ -157,6 +162,8 @@ public sealed class TaskLoop(
             return SessionFailed(intent, task, exception);
         }
         await using var stopping = session;
+        // Whether a Designer's session has handed in screenshots that still stand, which its Task needs to be Done.
+        var screenshotsHandedIn = false;
         await using var log = await logs.OpenAsync(new TaskKey(intent.Id, task.Number), task.Role, cancellationToken);
         // The number of the last verification attempt this session made, and how many of them failed. A turn that ends in a
         // question, or with a message of the human's waiting, leads to none.
@@ -205,10 +212,17 @@ public sealed class TaskLoop(
             IReadOnlyList<RepositoryName> changedRepositories;
             try
             {
+                // Ahead of the commands of the verification, so that what is taken is what the agent left.
+                var withoutScreenshots = task.Role == AgentRole.Designer
+                    ? await screenshots.TakeAsync(intent.Id, task.Number, sandbox, screenshotsHandedIn, cancellationToken)
+                    : null;
+                screenshotsHandedIn = withoutScreenshots is null;
                 var verified = task.IsFixUp
                     ? await verification.VerifyAllAsync(sandbox, intent, cancellationToken)
                     : await verification.VerifyAsync(sandbox, intent, task.Repositories, cancellationToken);
-                attempt = new VerificationAttempt(task.Number, run, attemptNumber, verified.Steps);
+                attempt = new VerificationAttempt(
+                    task.Number, run, attemptNumber,
+                    withoutScreenshots is null ? verified.Steps : [.. verified.Steps, withoutScreenshots]);
                 changedRepositories = verified.Changed;
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested)

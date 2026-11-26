@@ -98,7 +98,8 @@ public class FailedTaskTests(PostgresServer postgres)
         await SetOperatingLimitsAsync(overseer, verificationAttemptsPerTask: 1);
         var designing = new TaskCompletionSource();
         overseer.Sandboxes.ScriptAgentSessions(
-            AgentRole.Designer, new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = designing.Task }));
+            AgentRole.Designer,
+            new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = designing.Task }.WithScreenshot()));
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneAtOnce());
         // Task 1 builds acme/web alone, and Task 2 acme/api, which fails.
         overseer.Sandboxes.ScriptCommandsContaining(
@@ -275,7 +276,7 @@ public class FailedTaskTests(PostgresServer postgres)
     {
         await using var overseer = await StartAsync("acme/api", "acme/web");
         await SetOperatingLimitsAsync(overseer, verificationAttemptsPerTask: 1);
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneAtOnce());
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DesignerHandsIn.DesignsAtOnce());
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneAtOnce());
         overseer.Sandboxes.ScriptCommandsContaining(
             "acme/api' || exit\nlog=$(mktemp) || exit\n(\nset -e\nnpm test", new CommandResult(1, "1 test failed"));

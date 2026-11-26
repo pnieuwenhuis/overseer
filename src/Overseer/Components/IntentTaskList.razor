@@ -1,6 +1,6 @@
-@* An Intent's Tasks in the order they are carried out, each with its role, the repositories it touches, its state, the verification
-   attempts on it, the questions its agents asked, whether a message to one was never delivered and a link to its page, which shows
-   its agent sessions; a Failed Task also with what recovers it. *@
+@* An Intent's Tasks in the order they are carried out, each with its role, the repositories it touches, its state, the screenshots
+   of its design, the verification attempts on it, the questions its agents asked, whether a message to one was never delivered and
+   a link to its page, which shows its agent sessions; a Failed Task also with what recovers it. *@
 @using System.Globalization
 @using Overseer.Implementation
 
@@ -35,6 +35,7 @@
                         : ($"{never.Messages} messages you sent were not delivered.", "them");
                     <p class="intent-task-undelivered">@said <a href="intents/@IntentId/tasks/@task.Number">Read @them on the Task's page</a>.</p>
                 }
+                <TaskScreenshotList IntentId="IntentId" Screenshots="@([.. Screenshots.Where(screenshot => screenshot.TaskNumber == task.Number)])" />
                 @{
                     var attempts = Attempts.Where(attempt => attempt.TaskNumber == task.Number).ToList();
                 }
@@ -80,6 +81,10 @@
     /// <summary>The verification attempts on the Tasks, in the order they were made.</summary>
     [Parameter, EditorRequired]
     public required IReadOnlyList<VerificationAttempt> Attempts { get; set; }
+
+    /// <summary>The screenshots of the Tasks' designs, by Task, in the order they were listed.</summary>
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<TaskScreenshot> Screenshots { get; set; }
 
     /// <summary>The questions the Tasks' agents asked, in the order they were asked.</summary>
     [Parameter, EditorRequired]

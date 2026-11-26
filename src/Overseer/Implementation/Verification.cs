@@ -243,12 +243,20 @@ public sealed class Verification(RepositoryCommands commands, ComposeDependencie
 /// </param>
 public sealed record WorkVerification(IReadOnlyList<VerificationStep> Steps, IReadOnlyList<RepositoryName> Changed);
 
-/// <summary>One thing run, or checked, to verify a repository.</summary>
+/// <summary>One thing run, or checked, to verify a repository, or the screenshots of a design.</summary>
+/// <param name="Repository">The repository it verifies; <c>null</c> for the check of a Designer Task's screenshots.</param>
 /// <param name="What">What it is, such as "The test command of acme/web".</param>
 /// <param name="Command">The command; <c>null</c> when none was run, as for an invalid Repository Manifest.</param>
 /// <param name="Failure">A sentence saying how it failed; <c>null</c> when it passed.</param>
-/// <param name="Output">The end of what it printed.</param>
-public sealed record VerificationStep(RepositoryName Repository, string What, string? Command, string? Failure, string Output)
+/// <param name="Output">The end of what it printed, or what is wrong.</param>
+public sealed record VerificationStep(RepositoryName? Repository, string What, string? Command, string? Failure, string Output)
 {
     public bool Passed => Failure is null;
+
+    /// <summary>Whether it is the check of a Designer Task's screenshots, which verifies no repository.</summary>
+    public bool IsOfScreenshots => Repository is null;
+
+    /// <summary>The failed check of a Designer Task's screenshots.</summary>
+    public static VerificationStep OfScreenshots(string failure, string output) =>
+        new(Repository: null, "The screenshots of the design", Command: null, failure, output);
 }

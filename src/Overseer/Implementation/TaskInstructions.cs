@@ -20,8 +20,14 @@ internal static class TaskInstructions
     /// passed.
     /// </param>
     public static string FirstMessage(
-        Intent intent, Spec approved, IntentTask task, int taskCount, IReadOnlyList<VerificationStep> failedLast) =>
-        $"""
+        Intent intent, Spec approved, IntentTask task, int taskCount, IReadOnlyList<VerificationStep> failedLast)
+    {
+        if (task.Role != AgentRole.Designer)
+        {
+            // As where the Task was the Designer's when it last failed: only a Designer owes screenshots.
+            failedLast = [.. failedLast.Where(step => !step.IsOfScreenshots)];
+        }
+        return $"""
         {RoleOf(task.Role)}
 
         The Intent's Repositories in scope, the GitHub repositories it may change, are cloned in this Sandbox, each on the Intent
@@ -53,7 +59,7 @@ internal static class TaskInstructions
         - Otherwise don't end your turn with a question, nor with an offer such as "Shall I go on?": Overseer takes a last message
           that ends in a question mark as a question to the human. End your turn with a short statement of what you did and what you
           decided.
-
+        {(task.Role == AgentRole.Designer ? $"\n{Screenshots}\n" : "")}
         # The Approved Spec
 
         The human approved this Spec. It is what the work is held against.
@@ -68,6 +74,21 @@ internal static class TaskInstructions
 
         {task.Description}{(failedLast.Count == 0 ? "" : $"\n\n{LastFailure(failedLast)}")}{(
             task.RejectedPush is { } rejection ? $"\n\n{Rejected(rejection, intent.Branch)}" : "")}
+        """;
+    }
+
+    /// <summary>What a Designer is told about the screenshots it owes.</summary>
+    private static string Screenshots { get; } =
+        $"""
+        # Your screenshots
+
+        The human sees your design through screenshots, which Overseer shows with your Task, before Developers build on it. Run what
+        you built in this Sandbox and take screenshots of it with the headless browser here: Playwright is installed, with its
+        browsers, as in `playwright screenshot --full-page <url> <file>.png`. Show each screen and state your Task designs.
+
+        Hand them in before you end your turn: without them your Task isn't done.
+
+        {ScreenshotHandIn.HowToHandIn}
         """;
 
     /// <summary>What a new session on a Task is told about the verification that failed before it.</summary>
@@ -165,6 +186,11 @@ internal static class TaskInstructions
     /// <summary>How a step of a verification failed, with the command that was run and what it printed.</summary>
     private static string FailureOf(VerificationStep failed)
     {
+        if (failed.IsOfScreenshots)
+        {
+            var wrong = failed.Output.Length == 0 ? "" : $"\n\n{failed.Output}";
+            return $"{failed.Failure}{wrong}\n\n{ScreenshotHandIn.HowToHandIn}";
+        }
         var command = failed.Command is null ? "" : $"\n\nThe command, run from the root of {failed.Repository}:\n\n{Fenced(failed.Command)}";
         var output = failed.Output.Length == 0 ? "" : $"\n\nThe end of its output:\n\n{Fenced(failed.Output)}";
         return $"{failed.Failure}{command}{output}";
@@ -189,7 +215,8 @@ internal static class TaskInstructions
             You are the Designer of Overseer, a system in which one human directs a team of AI agents. The human wants a single change
             made to their software, an Intent, and approved a Spec for it. Your job is to carry out one of its Tasks: work out the UI
             and UX it asks for, as working UI code in the repositories, with placeholder data where the real data isn't there yet, so
-            that Developers can build on it. Follow the look and conventions the repositories already have.
+            that Developers can build on it, and hand in screenshots of it. Follow the look and conventions the repositories already
+            have.
             """,
         AgentRole.Developer =>
             """

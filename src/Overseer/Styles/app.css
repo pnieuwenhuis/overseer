@@ -1692,6 +1692,32 @@
         font-size: 0.875rem;
     }
 
+    /* The screenshots of a Designer Task's design, side by side where there is room, each with its caption. */
+    .task-screenshots {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr));
+        align-items: start;
+        gap: 0.75rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .task-screenshot img {
+        display: block;
+        width: 100%;
+        max-height: 20rem;
+        object-fit: contain;
+        background: var(--color-raised);
+        border: 1px solid var(--color-line);
+        border-radius: 0.375rem;
+    }
+
+    .task-screenshot-caption {
+        margin-top: 0.25rem;
+        color: var(--color-muted);
+        font-size: 0.8125rem;
+        overflow-wrap: anywhere;
+    }
+
     /* The verification attempts on a Task, each opening to the commands run and what they printed. */
     .task-attempts {
         display: flex;

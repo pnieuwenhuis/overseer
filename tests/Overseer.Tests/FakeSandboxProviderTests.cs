@@ -74,6 +74,21 @@ public class FakeSandboxProviderTests
     }
 
     [Fact]
+    public async Task An_unscripted_Designer_hands_in_a_placeholder_screenshot_so_that_its_Task_can_be_done_offline()
+    {
+        var sandbox = await CreateAsync();
+
+        await (await SendFirstMessageAsync(sandbox, AgentRole.Designer)).Outcome;
+
+        Assert.Contains(
+            "placeholder.png",
+            await _provider.TakeFileAsync(sandbox, "/home/overseer/.overseer/screenshots.json", TestContext.Current.CancellationToken));
+        var image = await _provider.TakeBinaryFileAsync(
+            sandbox, "/home/overseer/.overseer/screenshots/placeholder.png", 10_000, TestContext.Current.CancellationToken);
+        Assert.Equal([0x89, (byte)'P', (byte)'N', (byte)'G'], image![..4]);
+    }
+
+    [Fact]
     public async Task Each_new_session_of_a_role_plays_the_next_script()
     {
         var sandbox = await CreateAsync();

@@ -1,0 +1,25 @@
+@* The screenshots of one Designer Task's design, in the order the Designer listed them, each opening to its full size. *@
+@using Overseer.Implementation
+
+@if (Screenshots.Count > 0)
+{
+    @* No list items here: the Task's is one already. *@
+    <div class="task-screenshots">
+        @foreach (var screenshot in Screenshots)
+        {
+            var address = $"intents/{IntentId}/screenshots/{screenshot.Id}";
+            <figure @key="screenshot.Id" class="task-screenshot">
+                <a href="@address" target="_blank" rel="noopener"><img src="@address" alt="@screenshot.Caption" loading="lazy" /></a>
+                <figcaption class="task-screenshot-caption">@screenshot.Caption</figcaption>
+            </figure>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public required Guid IntentId { get; set; }
+
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<TaskScreenshot> Screenshots { get; set; }
+}

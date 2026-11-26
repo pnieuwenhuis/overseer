@@ -87,6 +87,7 @@ public static class OverseerServer
         builder.Services.AddSingleton<VerificationAttempts>();
         builder.Services.AddSingleton<SessionLogs>();
         builder.Services.AddSingleton<TaskQuestions>();
+        builder.Services.AddSingleton<TaskScreenshots>();
         builder.Services.AddSingleton<TaskLoop>();
         builder.Services.AddSingleton<FinalVerification>();
         builder.Services.AddSingleton<PullRequests>();
@@ -153,6 +154,18 @@ public static class OverseerServer
                 id, int.Parse((string)context.Request.RouteValues["number"]!, CultureInfo.InvariantCulture),
                 IntentTaskList.LastRunIn(context.Request.Form), edit: null, context.RequestAborted),
             id => $"/intents/{id}");
+        // The images of the screenshots that the pages show with a Task.
+        app.MapGet("/intents/{id:guid}/screenshots/{screenshot:guid}", async (
+            Guid id, Guid screenshot, TaskScreenshots screenshots, HttpContext context) =>
+        {
+            if (await screenshots.ImageOfAsync(id, screenshot, context.RequestAborted) is not { } image)
+            {
+                return Results.NotFound();
+            }
+            // An agent made the file, so the browser mustn't take it for anything but the image it begins as.
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            return Results.Bytes(image.Content, image.ContentType);
+        }).RequireAuthorization();
         // Every page requires the logged-in user; only the login page opts out with [AllowAnonymous].
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode()

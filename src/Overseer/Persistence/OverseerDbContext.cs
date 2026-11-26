@@ -23,6 +23,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
     public DbSet<IntentTaskRecord> IntentTasks => Set<IntentTaskRecord>();
     public DbSet<VerificationAttemptRecord> VerificationAttempts => Set<VerificationAttemptRecord>();
     public DbSet<PullRequestRecord> PullRequests => Set<PullRequestRecord>();
+    public DbSet<TaskScreenshotRecord> TaskScreenshots => Set<TaskScreenshotRecord>();
     public DbSet<AgentSessionRecord> AgentSessions => Set<AgentSessionRecord>();
     public DbSet<AgentSessionEntryRecord> AgentSessionEntries => Set<AgentSessionEntryRecord>();
     public DbSet<UndeliveredMessageRecord> UndeliveredMessages => Set<UndeliveredMessageRecord>();
@@ -93,6 +94,12 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
         {
             step.ToTable("VerificationSteps");
             step.HasKey(record => new { record.IntentId, record.TaskNumber, record.Run, record.AttemptNumber, record.Number });
+        });
+        modelBuilder.Entity<TaskScreenshotRecord>(screenshot =>
+        {
+            screenshot.ToTable("TaskScreenshots");
+            screenshot.HasIndex(record => new { record.IntentId, record.TaskNumber, record.Number }).IsUnique();
+            screenshot.HasOne<IntentTaskRecord>().WithMany().HasForeignKey(record => new { record.IntentId, record.TaskNumber });
         });
         modelBuilder.Entity<AgentSessionRecord>(session =>
         {

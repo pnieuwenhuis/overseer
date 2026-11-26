@@ -40,7 +40,7 @@ public class TaskTests(PostgresServer postgres)
         var design = new TaskCompletionSource();
         var endpoint = new TaskCompletionSource();
         var button = new TaskCompletionSource();
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneOnce(design.Task));
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DesignOnce(design.Task));
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneOnce(endpoint.Task), DoneOnce(button.Task));
 
         var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
@@ -90,7 +90,7 @@ public class TaskTests(PostgresServer postgres)
             _ => new FakeAgentSession(
                 new FakeAgentTurn([new AgentUpdate.Message("Reading the code")], new AgentOutcome.Done()) { Failure = "The agent process exited with code 1." }),
         };
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneOnce(Task.CompletedTask));
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DesignOnce(Task.CompletedTask));
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, failing, new FakeAgentSession(FakeAgentTurn.Endless()));
 
         var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
@@ -143,7 +143,7 @@ public class TaskTests(PostgresServer postgres)
     public async Task Retry_after_a_failed_session_prepares_a_fresh_Sandbox_when_the_prepared_one_is_gone_and_no_Task_that_is_done_runs_again()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/api", "acme/web");
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneOnce(Task.CompletedTask));
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DesignOnce(Task.CompletedTask));
         overseer.Sandboxes.ScriptAgentSessions(
             AgentRole.Developer, new FakeAgentSession { StartFailure = "The Sandbox does not answer." }, new FakeAgentSession(FakeAgentTurn.Endless()));
         var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
@@ -206,7 +206,7 @@ public class TaskTests(PostgresServer postgres)
         await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/api", "acme/web"]))
         {
             firstSandboxes = first.Sandboxes;
-            first.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneOnce(Task.CompletedTask));
+            first.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DesignOnce(Task.CompletedTask));
             address = await ImplementingAsync(first, ThreeTasks(), "Export data", "acme/api", "acme/web");
             await StatesAsync(first, address, "Done", "Running", "Pending");
             await SquadMessagesAsync(first, 2);
@@ -278,7 +278,7 @@ public class TaskTests(PostgresServer postgres)
     public async Task The_first_message_of_a_Tasks_session_holds_the_Approved_Spec_and_the_Task_with_the_repositories_it_touches()
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/api", "acme/web");
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneOnce(Task.CompletedTask));
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DesignOnce(Task.CompletedTask));
         overseer.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneOnce(Task.CompletedTask), new FakeAgentSession(FakeAgentTurn.Endless()));
 
         var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
@@ -315,7 +315,7 @@ public class TaskTests(PostgresServer postgres)
         AgentRole role, string who, string duty)
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/api", "acme/web");
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneOnce(Task.CompletedTask));
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DesignOnce(Task.CompletedTask));
 
         await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
 
@@ -336,6 +336,10 @@ public class TaskTests(PostgresServer postgres)
 
     /// <summary>A session whose turn ends as done once <paramref name="until"/> completes.</summary>
     private static FakeAgentSession DoneOnce(Task until) => new(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = until });
+
+    /// <summary>As <see cref="DoneOnce"/>, for the Designer, whose turn hands in a screenshot too.</summary>
+    private static FakeAgentSession DesignOnce(Task until) =>
+        new(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = until }.WithScreenshot());
 
     /// <summary>The sessions the Squad's agents got so far, in the order they started.</summary>
     internal static IReadOnlyList<AgentSessionStart> SquadSessionsStarted(RunningOverseer overseer) =>

@@ -21,7 +21,7 @@ public class AgentMessageTests(PostgresServer postgres)
     {
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/api", "acme/web");
         var working = new TaskCompletionSource();
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, new FakeAgentSession(Done(after: working.Task)));
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, new FakeAgentSession(Done(after: working.Task).WithScreenshot()));
         var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
         await StatesAsync(overseer, address, "Running", "Pending", "Pending");
 

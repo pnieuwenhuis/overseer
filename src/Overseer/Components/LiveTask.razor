@@ -1,5 +1,5 @@
-@* One of an Intent's Tasks with the logs of the agent sessions on it, updated live as the agent works, and, while it runs, a box to
-   send its agent a message. *@
+@* One of an Intent's Tasks with the screenshots of its design and the logs of the agent sessions on it, updated live as the agent
+   works, and, while it runs, a box to send its agent a message. *@
 @using Overseer.Implementation
 @using Overseer.Sandboxes
 @inherits LiveView<LiveTask.Heading?>
@@ -7,6 +7,7 @@
 @inject TaskRunner TaskRunner
 @inject SessionLogs SessionLogs
 @inject TaskQuestions Questions
+@inject TaskScreenshots Screenshots
 
 @if (MessageRefused is { } refused)
 {
@@ -26,6 +27,7 @@
         <span class="intent-task-repositories">@task.Repositories</span>
     </p>
 }
+<TaskScreenshotList IntentId="IntentId" Screenshots="_screenshots" />
 @if (_sessions is { } sessions)
 {
     <section class="agent-sessions" aria-label="Agent sessions">
@@ -113,6 +115,9 @@
 @code {
     private IReadOnlyList<LoggedSession>? _sessions;
 
+    /// <summary>The screenshots of the Task's design.</summary>
+    private IReadOnlyList<TaskScreenshot> _screenshots = [];
+
     /// <summary>The number of the session the page's message box writes to; <c>null</c> when it offers none.</summary>
     private int? _boxSession;
 
@@ -161,6 +166,7 @@
     {
         var task = (await Tasks.OfAsync(IntentId, cancellationToken)).SingleOrDefault(task => task.Number == Number);
         _sessions = await SessionLogs.OfAsync(new TaskKey(IntentId, Number), cancellationToken);
+        _screenshots = [.. (await Screenshots.OfAsync(IntentId, cancellationToken)).Where(screenshot => screenshot.TaskNumber == Number)];
         _boxSession = task is { State: IntentTaskState.Running } && _sessions is [.., { TakesMessages: true } open]
             ? open.Number
             : null;

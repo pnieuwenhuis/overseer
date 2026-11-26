@@ -52,7 +52,7 @@ public class VerificationTests(PostgresServer postgres)
     public async Task A_Task_that_never_passes_is_a_Failed_Task_after_3_attempts_which_turns_the_Intent_red_pushes_nothing_and_runs_no_further_Task()
     {
         await using var overseer = await StartAsync("acme/api", "acme/web");
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneAtOnce());
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DesignerHandsIn.DesignsAtOnce());
         // The agent changed the repository, so that there would be something to push.
         Changes(overseer, "acme/web", "src/orders.ts");
         overseer.Sandboxes.ScriptCommandsContaining("npm test", new CommandResult(1, "1 test failed"));
@@ -241,7 +241,7 @@ public class VerificationTests(PostgresServer postgres)
     {
         await using var overseer = await StartAsync("acme/api", "acme/docs", "acme/web");
         var pushing = new TaskCompletionSource();
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneAtOnce());
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DesignerHandsIn.DesignsAtOnce());
         Changes(overseer, "acme/api", "src/Orders.cs");
         Changes(overseer, "acme/web", "src/orders.ts");
         overseer.Sandboxes.HoldCommandsContaining("git push", pushing.Task);
@@ -467,7 +467,7 @@ public class VerificationTests(PostgresServer postgres)
     public async Task A_push_that_fails_turns_the_Intent_red_with_GitHubs_error_and_Retry_only_pushes_again()
     {
         await using var overseer = await StartAsync("acme/api", "acme/web");
-        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DoneAtOnce());
+        overseer.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DesignerHandsIn.DesignsAtOnce());
         Changes(overseer, "acme/api", "src/Orders.cs");
         Changes(overseer, "acme/web", "src/orders.ts");
         const string refused = "remote: Permission to acme/web.git denied to octocat.";

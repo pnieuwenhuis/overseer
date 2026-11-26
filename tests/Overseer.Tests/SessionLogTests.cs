@@ -218,7 +218,8 @@ public class SessionLogTests(PostgresServer postgres)
         await using var overseer = await StartWithRepositoriesAsync(postgres, "acme/api", "acme/web");
         var live = Channel.CreateUnbounded<AgentUpdate>();
         overseer.Sandboxes.ScriptAgentSessions(
-            AgentRole.Designer, new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { Live = live.Reader }));
+            AgentRole.Designer,
+            new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()) { Live = live.Reader }.WithScreenshot()));
         var address = await TaskTests.ImplementingAsync(overseer, TaskTests.ThreeTasks(), "Export data", "acme/api", "acme/web");
         await TaskTests.StatesAsync(overseer, address, "Running", "Pending", "Pending");
         Assert.Empty(ActivitiesOn(await GetAsync(overseer, address)));

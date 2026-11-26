@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
 using Overseer.GitHub;
+using Overseer.Implementation;
 
 namespace Overseer.Sandboxes;
 
@@ -87,7 +88,8 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
 
     /// <summary>
     /// Makes the next <paramref name="role"/> sessions play <paramref name="sessions"/> in turn, across all Sandboxes, repeating the last one.
-    /// In an unscripted session, every turn is done without updates.
+    /// In an unscripted session, every turn is done without updates; a Designer's also hands in a placeholder screenshot, without
+    /// which its Task wouldn't be done.
     /// </summary>
     public void ScriptAgentSessions(AgentRole role, params FakeAgentSession[] sessions) => _agentSessions[role] = new Sequence<FakeAgentSession>(sessions);
 
@@ -228,7 +230,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         CancellationToken cancellationToken)
     {
         EnsureExists(sandbox);
-        var script = _agentSessions.TryGetValue(role, out var sessions) ? sessions.Next() : new FakeAgentSession(new FakeAgentTurn([], new AgentOutcome.Done()));
+        var script = _agentSessions.TryGetValue(role, out var sessions) ? sessions.Next() : Unscripted(role);
         if (script.StartFailure is { } failure)
         {
             throw new InvalidOperationException(failure);
@@ -236,8 +238,8 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         var start = new AgentSessionStart(sandbox, role, harness.Json, harness.ModelOf(role), new Dictionary<string, string>(environment));
         _agentSessionsStarted.Enqueue(start);
         return Task.FromResult<IAgentSession>(new ScriptedAgentSession(
-            script, message => _messagesSent.Enqueue(new AgentMessage(sandbox, role, message)), (path, content) => WriteFile(sandbox, path, content),
-            () => _agentSessionsStopped.Enqueue(start)));
+            script, message => _messagesSent.Enqueue(new AgentMessage(sandbox, role, message)),
+            (path, content) => WriteFile(sandbox, path, content), () => _agentSessionsStopped.Enqueue(start)));
     }
 
     public async Task DestroyAsync(Sandbox sandbox, CancellationToken cancellationToken)
@@ -259,6 +261,29 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         _listingFailures.TryDequeue(out var error)
             ? throw new InvalidOperationException(error)
             : Task.FromResult<IReadOnlyList<Sandbox>>([.. _sandboxes.Values]);
+
+    /// <summary>The session of an agent of <paramref name="role"/> that no test scripted, as in offline work.</summary>
+    private static FakeAgentSession Unscripted(AgentRole role)
+    {
+        var turn = new FakeAgentTurn([], new AgentOutcome.Done());
+        return new FakeAgentSession(role != AgentRole.Designer ? turn : turn with
+        {
+            Writes = new Dictionary<string, string>
+            {
+                [ScreenshotHandIn.FilePath] = """{ "screenshots": [ { "file": "placeholder.png", "caption": "A placeholder from the fake Sandbox Provider." } ] }""",
+            },
+            BinaryWrites = new Dictionary<string, byte[]> { [$"{ScreenshotHandIn.Directory}/placeholder.png"] = PlaceholderScreenshot },
+        });
+    }
+
+    /// <summary>A plain grey PNG image, 320 by 180 pixels.</summary>
+    private static readonly byte[] PlaceholderScreenshot = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAUAAAAC0CAIAAABqhmJGAAABlElEQVR42u3TMQkAAAzEwPevrEOnKqqOh4NTEEhmDygVCcDAgIEBA4OBAQMDBgYMDAYGDAwY"
+        + "GAwMGBgwMGBgMDBgYMDAgIHBwICBAQODgQEDAwYGDAwGBgwMGBgwMBgYMDBgYDAwYGDAwICBwcCAgQEDg4FVAAMDBgYMDAYGDAwYGDAwGBgwMGBgMDBg"
+        + "YMDAgIHBwICBAQMDBgYDAwYGDAwGBgwMGBgwMBgYMDBgYMDAYGDAwICBwcCAgQEDAwYGAwMGBgwMBgYMDBgYMDAYGDAwYGDAwGBgwMCAgcHAgIEBAwMG"
+        + "BgMDBgYMDBgYDAwYGDAwGBgwMGBgwMBgYMDAgIEBA4OBAQMDBgYDAwYGDAwYGAwMGBgwMBgYMDBgYMDAYGDAwICBAQODgQEDAwYGAwMGBgwMGBgMDBgY"
+        + "MDBgYDAwYGDAwGBgwMCAgQEDg4EBAwMGBgOrAAYGDAwYGAwMGBgwMGBgMDBgYMDAYGDAwICBAQODgQEDAwYGDAwGBgwMGBgMDBgYMDBgYDAwYGDAwICB"
+        + "odsDh2zFlgXl4uAAAAAASUVORK5CYII=");
 
     private void EnsureExists(Sandbox sandbox)
     {
@@ -291,7 +316,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
 
     /// <summary>Plays one turn per message, whatever the message says.</summary>
     private sealed class ScriptedAgentSession(
-        FakeAgentSession script, Action<string> received, Action<string, string> write, Action stopped) : IAgentSession
+        FakeAgentSession script, Action<string> received, Action<string, byte[]> write, Action stopped) : IAgentSession
     {
         private readonly Sequence<FakeAgentTurn> _turns = new(script.Turns);
         private bool _stopped;
@@ -309,6 +334,10 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
             }
             received(message);
             foreach (var (path, content) in turn.Writes)
+            {
+                write(path, Encoding.UTF8.GetBytes(content));
+            }
+            foreach (var (path, content) in turn.BinaryWrites)
             {
                 write(path, content);
             }
@@ -421,6 +450,9 @@ public sealed record FakeAgentTurn(IReadOnlyList<AgentUpdate> Updates, AgentOutc
 
     /// <summary>The files the agent writes in its Sandbox during the turn, by absolute path, such as what it hands in.</summary>
     public IReadOnlyDictionary<string, string> Writes { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>As <see cref="Writes"/>, for the files it writes that aren't text, such as images.</summary>
+    public IReadOnlyDictionary<string, byte[]> BinaryWrites { get; init; } = new Dictionary<string, byte[]>();
 
     /// <summary>A turn that streams <paramref name="updates"/>, then goes on until the session is stopped.</summary>
     public static FakeAgentTurn Endless(params AgentUpdate[] updates) => new(updates, new AgentOutcome.Done()) { EndsNever = true };

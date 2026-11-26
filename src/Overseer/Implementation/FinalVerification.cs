@@ -27,8 +27,8 @@ public sealed class FinalVerification(
             if (steps.Where(step => !step.Passed).ToList() is { Count: > 0 } failed)
             {
                 await tasks.AddFixUpAsync(
-                    intent.Id, FixUpTitle, TaskInstructions.FixUp(failed), [.. failed.Select(step => step.Repository).Distinct()],
-                    cancellationToken);
+                    intent.Id, FixUpTitle, TaskInstructions.FixUp(failed),
+                    [.. failed.Select(step => step.Repository).OfType<RepositoryName>().Distinct()], cancellationToken);
                 return new FinalVerificationResult.FixUpAdded();
             }
             return new FinalVerificationResult.Passed(
