@@ -10,11 +10,11 @@ This replaces ticket 01's stopgap of marking interrupted implementations failed.
 
 **Blocked by:** 03 (Verify, then push), 08 (An agent asks you a question)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] After a restart each interrupted Implementing Intent continues in a fresh Sandbox, and Sandboxes left from before the restart are destroyed
-- [ ] The first Task that isn't Done runs again from the start; Done Tasks don't run again
-- [ ] A Task that was pushed but not yet marked Done when Overseer stopped doesn't leave the Intent stuck
-- [ ] A restart during final verification or while opening pull requests ends with each changed repository having exactly one pull request
-- [ ] A failed implementation stays red, and its Retry works after the restart
-- [ ] Covered by tests through the application, restarting it with the fake Sandbox Provider
+- [x] After a restart each interrupted Implementing Intent continues in a fresh Sandbox, and Sandboxes left from before the restart are destroyed
+- [x] The first Task that isn't Done runs again from the start; Done Tasks don't run again
+- [x] A Task that was pushed but not yet marked Done when Overseer stopped doesn't leave the Intent stuck
+- [x] A restart during final verification or while opening pull requests ends with each changed repository having exactly one pull request
+- [x] A failed implementation stays red, and its Retry works after the restart
+- [x] Covered by tests through the application, restarting it with the fake Sandbox Provider
