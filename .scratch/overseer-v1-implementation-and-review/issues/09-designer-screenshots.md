@@ -8,11 +8,11 @@ A Designer Task without screenshots isn't done: the agent is told what is missin
 
 **Blocked by:** 03 (Verify, then push)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A Designer session's instructions ask for working UI code with placeholder data and for screenshots
-- [ ] The Sandbox Provider takes binary files from a Sandbox unchanged, in both the fake and Azure, covered by the contract tests
-- [ ] The screenshots handed in are kept and shown with the Task in the Portal, also after the Sandbox is gone
-- [ ] Screenshots are not committed to the Intent branch
-- [ ] A Designer Task that hands in none, or something that isn't an image, is told so and uses an attempt
-- [ ] Covered by tests through the application
+- [x] A Designer session's instructions ask for working UI code with placeholder data and for screenshots
+- [x] The Sandbox Provider takes binary files from a Sandbox unchanged, in both the fake and Azure, covered by the contract tests
+- [x] The screenshots handed in are kept and shown with the Task in the Portal, also after the Sandbox is gone
+- [x] Screenshots are not committed to the Intent branch
+- [x] A Designer Task that hands in none, or something that isn't an image, is told so and uses an attempt
+- [x] Covered by tests through the application
