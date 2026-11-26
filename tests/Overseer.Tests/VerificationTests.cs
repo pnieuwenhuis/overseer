@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Time.Testing;
 using Overseer.Sandboxes;
+using static Overseer.Tests.AgentTurns;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
 using static Overseer.Tests.TaskTests;
@@ -258,7 +259,7 @@ public class VerificationTests(PostgresServer postgres)
         pushing.SetResult();
 
         await StatesAsync(overseer, address, "Done", "Running", "Pending");
-        var branch = $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}";
+        var branch = BranchOf(address);
         Assert.All(["acme/api", "acme/web"], repository =>
         {
             var commands = CommandsIn(overseer, repository);
@@ -477,7 +478,7 @@ public class VerificationTests(PostgresServer postgres)
         var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
 
         var failed = await ImplementationTests.FailedAsync(overseer, address);
-        var branch = $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}";
+        var branch = BranchOf(address);
         Assert.Equal($"Pushing the Intent branch {branch} of acme/web failed with exit code 128:\n{refused}", failed.Status);
         Assert.Equal(("Red", "Failed"), failed.Light);
         // Not Done, and no Task after it.
@@ -512,7 +513,7 @@ public class VerificationTests(PostgresServer postgres)
         overseer.Sandboxes.ScriptCommandsContaining("git push", new CommandResult(1, rejection), Passes);
         var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/web");
         var failed = await ImplementationTests.FailedAsync(overseer, address);
-        var branch = $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}";
+        var branch = BranchOf(address);
         Assert.Equal($"Pushing the Intent branch {branch} of acme/web failed with exit code 1:\n{rejection}", failed.Status);
         // Not a Failed Task: it is back to Pending, for an agent to deal with.
         await StatesAsync(overseer, address, "Pending");
@@ -634,7 +635,7 @@ public class VerificationTests(PostgresServer postgres)
         var address = await ImplementationTests.ImplementingAsync(overseer, "Export data", "acme/api", "acme/web");
 
         await StatesAsync(overseer, address, "Done");
-        var branch = $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}";
+        var branch = BranchOf(address);
         var failure = $"acme/api isn't on the Intent branch {branch}, but on main. Check out the Intent branch again, bringing "
             + "along what belongs on it, without forcing it to another commit.";
         var attempts = AttemptsOn(await GetAsync(overseer, address), 1);
@@ -821,9 +822,6 @@ public class VerificationTests(PostgresServer postgres)
         }
         return overseer;
     }
-
-    /// <summary>A session whose every turn ends as done at once.</summary>
-    private static FakeAgentSession DoneAtOnce() => new(new FakeAgentTurn([], new AgentOutcome.Done()));
 
     /// <summary>The commands run in the repository's directory in a Sandbox, in order.</summary>
     private static IReadOnlyList<string> CommandsIn(RunningOverseer overseer, string repository) =>

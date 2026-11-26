@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.RegularExpressions;
 using Overseer.Sandboxes;
+using static Overseer.Tests.AgentTurns;
 using static Overseer.Tests.FinalVerificationTests;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
@@ -194,12 +195,7 @@ public class PullRequestTests(PostgresServer postgres)
         }
     }
 
-    private static string BranchOf(string address) => $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}";
-
     private static Overseer.GitHub.RepositoryName Repository(string ownerAndName) => Overseer.GitHub.RepositoryName.Parse(ownerAndName);
-
-    /// <summary>A session whose every turn ends as done at once.</summary>
-    private static FakeAgentSession DoneAtOnce() => new(new FakeAgentTurn([], new AgentOutcome.Done()));
 
     /// <summary>The pull requests the Intent's detail page links to, in its order: what each link says, and where it leads.</summary>
     private static IReadOnlyList<(string Text, string Address)> PullRequestsOn(string page) =>

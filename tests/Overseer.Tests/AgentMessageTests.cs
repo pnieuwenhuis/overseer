@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Overseer.Implementation;
 using Overseer.Sandboxes;
+using static Overseer.Tests.AgentTurns;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
 using static Overseer.Tests.TaskTests;
@@ -657,8 +658,4 @@ public class AgentMessageTests(PostgresServer postgres)
             "the message box");
 
     private static bool OffersBox(string page) => page.Contains("<textarea name=\"Message\"");
-
-    /// <summary>A turn the agent ends as done, once <paramref name="after"/> completes when there is one.</summary>
-    private static FakeAgentTurn Done(Task? after = null, params AgentUpdate[] updates) =>
-        new(updates, new AgentOutcome.Done()) { EndsAfter = after };
 }

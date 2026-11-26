@@ -32,10 +32,11 @@ public sealed class TaskRunner(
     private readonly SandboxedWork _work = new(logger);
 
     /// <summary>
-    /// Raised whenever an implementation changes phase, one of its Tasks changes or is verified, its agent asks a question or gets
-    /// the answer, or one of its pull requests is opened, on the thread that changed it, once the change is committed. Handlers must
-    /// not throw; read again with <see cref="ProgressOfAsync"/>, <see cref="IntentTasks.OfAsync"/>,
-    /// <see cref="VerificationAttempts.OfAsync"/>, <see cref="TaskQuestions.OfAsync"/> and <see cref="PullRequests.OfAsync"/>.
+    /// Raised whenever an implementation changes phase, one of its Tasks changes, gets screenshots or is verified, its agent asks a
+    /// question or gets the answer, or one of its pull requests is opened, on the thread that changed it, once the change is
+    /// committed. Handlers must not throw; read again with <see cref="ProgressOfAsync"/>, <see cref="IntentTasks.OfAsync"/>,
+    /// <see cref="TaskScreenshots.OfAsync"/>, <see cref="VerificationAttempts.OfAsync"/>, <see cref="TaskQuestions.OfAsync"/> and
+    /// <see cref="PullRequests.OfAsync"/>.
     /// </summary>
     public event Action? Changed;
 

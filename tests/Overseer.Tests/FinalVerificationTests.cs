@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Time.Testing;
 using Overseer.Sandboxes;
+using static Overseer.Tests.AgentTurns;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
 using static Overseer.Tests.TaskTests;
@@ -258,7 +259,7 @@ public class FinalVerificationTests(PostgresServer postgres)
                 overseer.GitHub.AddRepository("acme/web");
             }
             overseer.GitHub.AllowPullRequests("acme/web");
-            overseer.GitHub.AddBranch("acme/web", $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}");
+            overseer.GitHub.AddBranch("acme/web", BranchOf(address));
             var commands = overseer.Sandboxes.CommandsRun.Count;
             var sessions = SquadSessionsStarted(overseer).Count;
 
@@ -384,9 +385,6 @@ public class FinalVerificationTests(PostgresServer postgres)
     /// <summary>What the script of a manifest's command that starts with <paramref name="command"/> holds, in this repository.</summary>
     internal static string ManifestCommandIn(string repository, string command) =>
         $"{repository}' || exit\nlog=$(mktemp) || exit\n(\nset -e\n{command}";
-
-    /// <summary>A session whose turn ends as done once <paramref name="until"/> completes.</summary>
-    private static FakeAgentSession DoneOnce(Task until) => new(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = until });
 
     /// <summary>Overseer with these repositories configured, each with a Repository Manifest in every Sandbox that holds it.</summary>
     internal static async Task<RunningOverseer> StartWithManifestsAsync(string connectionString, string[] repositories, TimeProvider? time = null)

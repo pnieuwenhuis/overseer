@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Sandboxes;
+using static Overseer.Tests.AgentTurns;
 using static Overseer.Tests.ImplementationTests;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
@@ -270,7 +271,7 @@ public class TaskTests(PostgresServer postgres)
         // Where to find the code.
         Assert.Contains("- acme/api, in /home/overseer/repositories/acme/api", message);
         Assert.Contains("- acme/web, in /home/overseer/repositories/acme/web", message);
-        Assert.Contains($"overseer/intent-{address["/intents/".Length..].Replace("-", "")}", message);
+        Assert.Contains(BranchOf(address), message);
     }
 
     [Theory]
@@ -298,9 +299,6 @@ public class TaskTests(PostgresServer postgres)
         EventuallyAsync(
             () => Task.FromResult(SquadMessages(overseer) is var messages && messages.Count >= count ? messages : null),
             $"the Squad to be sent {count} messages");
-
-    /// <summary>A session whose turn ends as done once <paramref name="until"/> completes.</summary>
-    private static FakeAgentSession DoneOnce(Task until) => new(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = until });
 
     /// <summary>As <see cref="DoneOnce"/>, for the Designer, whose turn hands in a screenshot too.</summary>
     private static FakeAgentSession DesignOnce(Task until) =>

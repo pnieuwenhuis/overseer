@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Overseer.Sandboxes;
+using static Overseer.Tests.AgentTurns;
 using static Overseer.Tests.DesignerHandsIn;
 using static Overseer.Tests.ImplementationTests;
 using static Overseer.Tests.IntentPortal;
@@ -513,9 +514,6 @@ public class DesignerScreenshotTests(PostgresServer postgres)
         overseer.Sandboxes.ScriptCommandsContaining("npm test", new CommandResult(1, "1 test failed"), new CommandResult(0, ""));
         return overseer;
     }
-
-    /// <summary>A turn that ends as done, with nothing handed in.</summary>
-    private static FakeAgentTurn Done() => new([], new AgentOutcome.Done());
 
     /// <summary>A valid Spec with one Task, the Designer's, in acme/web.</summary>
     private static JsonObject DesignOnly()

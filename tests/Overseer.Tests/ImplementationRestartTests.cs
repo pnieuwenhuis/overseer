@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Implementation;
 using Overseer.Sandboxes;
+using static Overseer.Tests.AgentTurns;
 using static Overseer.Tests.FinalVerificationTests;
 using static Overseer.Tests.ImplementationTests;
 using static Overseer.Tests.IntentPortal;
@@ -359,12 +360,4 @@ public class ImplementationRestartTests(PostgresServer postgres)
 
     private static int Pushes(RunningOverseer overseer) =>
         overseer.Sandboxes.CommandsRun.Count(run => run.Command.Contains("git push"));
-
-    private static string BranchOf(string address) => $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}";
-
-    /// <summary>A session whose turn ends as done once <paramref name="until"/> completes.</summary>
-    private static FakeAgentSession DoneOnce(Task until) => new(new FakeAgentTurn([], new AgentOutcome.Done()) { EndsAfter = until });
-
-    /// <summary>A session whose every turn ends as done at once.</summary>
-    private static FakeAgentSession DoneAtOnce() => new(new FakeAgentTurn([], new AgentOutcome.Done()));
 }

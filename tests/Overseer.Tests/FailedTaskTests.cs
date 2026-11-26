@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Sandboxes;
+using static Overseer.Tests.AgentTurns;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
 using static Overseer.Tests.TaskTests;
@@ -571,7 +572,4 @@ public class FailedTaskTests(PostgresServer postgres)
         }
         return overseer;
     }
-
-    /// <summary>A session whose every turn ends as done at once.</summary>
-    private static FakeAgentSession DoneAtOnce() => new(new FakeAgentTurn([], new AgentOutcome.Done()));
 }

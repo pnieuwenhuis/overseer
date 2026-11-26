@@ -14,6 +14,9 @@ namespace Overseer.Tests;
 /// <summary>Working with Intents in the Portal, and reading back what its pages show of them.</summary>
 public static class IntentPortal
 {
+    /// <summary>The Intent branch of the Intent whose detail page is at <paramref name="address"/>.</summary>
+    public static string BranchOf(string address) => $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}";
+
     /// <summary>A running Overseer on an empty database, logged in, with these repositories configured.</summary>
     public static async Task<RunningOverseer> StartWithRepositoriesAsync(PostgresServer postgres, params string[] repositories) =>
         await StartWithRepositoriesAsync(await postgres.CreateEmptyDatabaseAsync(), repositories);

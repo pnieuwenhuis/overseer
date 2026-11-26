@@ -289,6 +289,10 @@ namespace Overseer.Persistence.Migrations
                     b.Property<string>("Failure")
                         .HasColumnType("text");
 
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("Output")
                         .IsRequired()
                         .HasColumnType("text");

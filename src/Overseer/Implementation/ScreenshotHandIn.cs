@@ -26,14 +26,15 @@ internal sealed class ScreenshotHandIn : HandIn<IReadOnlyList<ListedScreenshot>>
     /// <summary>The most megabytes one image may hold.</summary>
     public const int LargestImageMegabytes = 5;
 
-    /// <summary>An example of the list, for the Designer's instructions.</summary>
-    public const string Example = """
-        {
-          "screenshots": [
-            { "file": "orders-page.png", "caption": "The orders page, with the Export button above the table." }
-          ]
-        }
-        """;
+    /// <summary>The list of these screenshots, as it is written at <see cref="FilePath"/>.</summary>
+    public static string ListFileOf(params (string File, string Caption)[] screenshots) => JsonSerializer.Serialize(
+        new Listing([.. screenshots.Select(screenshot => new Listed(screenshot.File, screenshot.Caption))]), AsWritten);
+
+    private static readonly JsonSerializerOptions AsWritten = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+
+    private sealed record Listing(IReadOnlyList<Listed> Screenshots);
+
+    private sealed record Listed(string File, string Caption);
 
     /// <summary>How the Designer hands in its screenshots, in Markdown.</summary>
     public static string HowToHandIn { get; } =
@@ -42,7 +43,7 @@ internal sealed class ScreenshotHandIn : HandIn<IReadOnlyList<ListedScreenshot>>
         belong in a repository, so don't commit them. Then list them in `{FilePath}`, as JSON such as:
 
         ```json
-        {Example}
+        {ListFileOf(("orders-page.png", "The orders page, with the Export button above the table."))}
         ```
 
         "file" is the name of an image in that directory, and "caption" says what it shows. List at most {MostScreenshots}, each at

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Overseer.Sandboxes;
+using static Overseer.Tests.AgentTurns;
 
 namespace Overseer.Tests;
 
@@ -86,7 +87,7 @@ public static class DesignerHandsIn
 
     /// <summary>A turn that ends as done having saved these images and listed them.</summary>
     public static FakeAgentTurn HandsIn(params (string File, string Caption, byte[] Content)[] screenshots) =>
-        new FakeAgentTurn([], new AgentOutcome.Done()).HandingIn(screenshots);
+        Done().HandingIn(screenshots);
 
     /// <summary>The turn, during which the agent also saves these images and lists them.</summary>
     private static FakeAgentTurn HandingIn(this FakeAgentTurn turn, params (string File, string Caption, byte[] Content)[] screenshots) =>
@@ -113,5 +114,5 @@ public static class DesignerHandsIn
     }.ToJsonString();
 
     /// <summary>A session whose every turn ends as done with a screenshot handed in, as a Designer's that did its Task.</summary>
-    public static FakeAgentSession DesignsAtOnce() => new(new FakeAgentTurn([], new AgentOutcome.Done()).WithScreenshot());
+    public static FakeAgentSession DesignsAtOnce() => new(Done().WithScreenshot());
 }

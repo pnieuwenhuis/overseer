@@ -152,8 +152,8 @@ public sealed class TaskLoop(
             return new Work.Unfinished(notRefreshed);
         }
         var key = new TaskKey(intent.Id, task.Number);
-        // The screenshots the session hands in, which a Designer's Task needs to be Done.
-        var sessionScreenshots = task.Role == AgentRole.Designer ? screenshots.OfSession(key, sandbox) : null;
+        // The screenshots the session hands in, where its role owes them: its Task then needs them to be Done.
+        var sessionScreenshots = screenshots.OfSession(task.Role, key, sandbox);
         IAgentSession session;
         try
         {

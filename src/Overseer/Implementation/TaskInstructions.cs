@@ -22,10 +22,11 @@ internal static class TaskInstructions
     public static string FirstMessage(
         Intent intent, Spec approved, IntentTask task, int taskCount, IReadOnlyList<VerificationStep> failedLast)
     {
-        if (task.Role != AgentRole.Designer)
+        var owesScreenshots = TaskScreenshots.OwedBy(task.Role);
+        if (!owesScreenshots)
         {
-            // As where the Task was the Designer's when it last failed: only a Designer owes screenshots.
-            failedLast = [.. failedLast.Where(step => !step.IsOfScreenshots)];
+            // As where the Task was the Designer's when it last failed.
+            failedLast = [.. failedLast.Where(step => step.Kind != VerificationStepKind.Screenshots)];
         }
         return $"""
         {RoleOf(task.Role)}
@@ -59,7 +60,7 @@ internal static class TaskInstructions
         - Otherwise don't end your turn with a question, nor with an offer such as "Shall I go on?": Overseer takes a last message
           that ends in a question mark as a question to the human. End your turn with a short statement of what you did and what you
           decided.
-        {(task.Role == AgentRole.Designer ? $"\n{Screenshots}\n" : "")}
+        {(owesScreenshots ? $"\n{ScreenshotInstructions}\n" : "")}
         # The Approved Spec
 
         The human approved this Spec. It is what the work is held against.
@@ -78,7 +79,7 @@ internal static class TaskInstructions
     }
 
     /// <summary>What a Designer is told about the screenshots it owes.</summary>
-    private static string Screenshots { get; } =
+    private static string ScreenshotInstructions { get; } =
         $"""
         # Your screenshots
 
@@ -186,7 +187,7 @@ internal static class TaskInstructions
     /// <summary>How a step of a verification failed, with the command that was run and what it printed.</summary>
     private static string FailureOf(VerificationStep failed)
     {
-        if (failed.IsOfScreenshots)
+        if (failed.Kind == VerificationStepKind.Screenshots)
         {
             var wrong = failed.Output.Length == 0 ? "" : $"\n\n{failed.Output}";
             return $"{failed.Failure}{wrong}\n\n{ScreenshotHandIn.HowToHandIn}";

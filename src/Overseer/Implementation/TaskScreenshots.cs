@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Overseer.Persistence;
 using Overseer.Sandboxes;
@@ -14,8 +13,16 @@ public sealed class TaskScreenshots(SandboxRegistry sandboxes, IDbContextFactory
 {
     private const int LargestImage = ScreenshotHandIn.LargestImageMegabytes * 1024 * 1024;
 
-    /// <summary>What a Designer's session on the Task hands in, in its Sandbox.</summary>
-    public Session OfSession(TaskKey task, Sandbox sandbox) => new(this, task, sandbox);
+    /// <summary>
+    /// Whether an agent in this role owes screenshots with its work on a Task, which isn't Done without them: a Designer does.
+    /// </summary>
+    public static bool OwedBy(AgentRole role) => role == AgentRole.Designer;
+
+    /// <summary>
+    /// What a session on the Task, of an agent in <paramref name="role"/>, hands in, in its Sandbox; <c>null</c> when that role
+    /// owes no screenshots.
+    /// </summary>
+    public Session? OfSession(AgentRole role, TaskKey task, Sandbox sandbox) => OwedBy(role) ? new(this, task, sandbox) : null;
 
     /// <summary>
     /// The screenshots one Designer session hands in, taken at the end of each of its turns, and whether they stand: the Task
@@ -191,8 +198,7 @@ public sealed class TaskScreenshots(SandboxRegistry sandboxes, IDbContextFactory
             return (null, $"{named} isn't a PNG, JPEG, GIF or WebP image.");
         }
         // The Sandbox holds the GitHub token, so a file can hold it; a secret never goes into PostgreSQL.
-        await sandboxes.WithoutSecretsAsync("", cancellationToken);
-        return sandboxes.SecretsGiven.Any(secret => secret.Length > 0 && content.AsSpan().IndexOf(Encoding.UTF8.GetBytes(secret)) >= 0)
+        return await sandboxes.HoldsSecretAsync(content, cancellationToken)
             ? (null, $"{named} holds a secret, such as a token, so it isn't kept.")
             : (new ScreenshotImage(contentType, content), null);
     }

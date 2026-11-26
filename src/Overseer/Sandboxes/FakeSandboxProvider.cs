@@ -293,7 +293,8 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         {
             Writes = new Dictionary<string, string>
             {
-                [ScreenshotHandIn.FilePath] = """{ "screenshots": [ { "file": "placeholder.png", "caption": "A placeholder from the fake Sandbox Provider." } ] }""",
+                [ScreenshotHandIn.FilePath] =
+                    ScreenshotHandIn.ListFileOf(("placeholder.png", "A placeholder from the fake Sandbox Provider.")),
             },
             BinaryWrites = new Dictionary<string, byte[]> { [$"{ScreenshotHandIn.Directory}/placeholder.png"] = PlaceholderScreenshot },
         });

@@ -379,7 +379,7 @@ public sealed class IntentBranchTests(PostgresServer postgres) : IDisposable
                     command => command.Contains(holding) && (without is null || !command.Contains(without)))
                 .Replace(Sandbox.CloneDirectory(new RepositoryName("acme", "web")), clone);
         return new Commands(
-            $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}",
+            BranchOf(address),
             Command("git config user.name"), Command("head=$(git symbolic-ref", without: "git commit "),
             Command("# What Overseer's commands wrote.", without: "git commit "), Command(changedFilesAsked), Command("git commit "),
             Command("git push"), Command("base=$(git merge-base refs/remotes/origin/HEAD HEAD"),

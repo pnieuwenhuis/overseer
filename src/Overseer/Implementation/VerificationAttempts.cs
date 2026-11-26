@@ -23,7 +23,7 @@ public sealed class VerificationAttempts(IDbContextFactory<OverseerDbContext> da
             attempt.TaskNumber, attempt.Run, attempt.Number,
             [.. attempt.Steps.OrderBy(step => step.Number).Select(step => new VerificationStep(
                 step.Repository is { } repository ? RepositoryName.Parse(repository) : null, step.What, step.Command, step.Failure,
-                step.Output))]))];
+                step.Output) { Kind = step.Kind })]))];
     }
 
     /// <summary>The number of the Task's next run that makes an attempt, from 1.</summary>
@@ -52,6 +52,7 @@ public sealed class VerificationAttempts(IDbContextFactory<OverseerDbContext> da
             Steps = [.. attempt.Steps.Select((step, index) => new VerificationStepRecord
             {
                 Number = index + 1,
+                Kind = step.Kind,
                 Repository = step.Repository?.ToString(),
                 What = StorableText.Of(step.What),
                 Command = StorableText.Of(step.Command),
@@ -104,6 +105,8 @@ public sealed class VerificationStepRecord
     public int Run { get; init; }
     public int AttemptNumber { get; init; }
     public required int Number { get; init; }
+
+    public required VerificationStepKind Kind { get; init; }
 
     /// <summary><c>owner/name</c> of the repository it verifies; <c>null</c> when it verifies none.</summary>
     public required string? Repository { get; init; }

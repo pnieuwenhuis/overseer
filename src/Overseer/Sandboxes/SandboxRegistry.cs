@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Overseer.GitHub;
 using Overseer.ModelProviders;
@@ -121,10 +122,26 @@ public sealed class SandboxRegistry(
     /// </summary>
     public async Task<string> WithoutSecretsAsync(string text, CancellationToken cancellationToken)
     {
-        await RememberedGitHubTokenAsync(cancellationToken);
-        await RememberedProviderTokensAsync(cancellationToken);
+        await RememberStoredSecretsAsync(cancellationToken);
         // Made storable first, as taking characters out afterwards could put a secret together.
         return Redaction.Without(StorableText.Of(text), SecretsGiven);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="content"/>, such as a file an agent hands in, holds a secret, of those
+    /// <see cref="WithoutSecretsAsync"/> takes out of a text, as its UTF-8 bytes: such a file is not to be stored.
+    /// </summary>
+    public async Task<bool> HoldsSecretAsync(ReadOnlyMemory<byte> content, CancellationToken cancellationToken)
+    {
+        await RememberStoredSecretsAsync(cancellationToken);
+        return SecretsGiven.Any(secret => secret.Length > 0 && content.Span.IndexOf(Encoding.UTF8.GetBytes(secret)) >= 0);
+    }
+
+    /// <summary>Remembers the tokens stored now as ones to take out.</summary>
+    private async Task RememberStoredSecretsAsync(CancellationToken cancellationToken)
+    {
+        await RememberedGitHubTokenAsync(cancellationToken);
+        await RememberedProviderTokensAsync(cancellationToken);
     }
 
     /// <summary>

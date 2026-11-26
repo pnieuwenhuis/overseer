@@ -585,7 +585,7 @@ public class LiveIntentsBrowserTests(PostgresServer postgres, PortalChromium chr
         overseer.Sandboxes.ScriptCommandsContaining(
             FinalVerificationTests.IntentBranchComparedIn("acme/web"), new CommandResult(0, "src/orders.ts\0"));
         var address = await ImplementationTests.AwaitingApprovalAsync(overseer, "Export data", "acme/web");
-        overseer.GitHub.AddBranch("acme/web", $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}");
+        overseer.GitHub.AddBranch("acme/web", BranchOf(address));
         overseer.GitHub.HoldPullRequests(opening.Task);
         // The Task's verification and the final one both test it.
         overseer.Sandboxes.HoldCommandsContaining("npm test", testing.Task);

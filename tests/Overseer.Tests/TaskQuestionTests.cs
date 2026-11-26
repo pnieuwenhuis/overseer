@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Overseer.Implementation;
 using Overseer.Sandboxes;
+using static Overseer.Tests.AgentTurns;
 using static Overseer.Tests.IntentPortal;
 using static Overseer.Tests.RepositorySetupPortal;
 using static Overseer.Tests.SessionLogTests;
@@ -393,9 +394,6 @@ public class TaskQuestionTests(PostgresServer postgres)
 
     /// <summary>A turn the agent ends with this question.</summary>
     private static FakeAgentTurn Asks(string question) => new([], new AgentOutcome.AskedQuestion(question));
-
-    /// <summary>A turn the agent ends as done.</summary>
-    private static FakeAgentTurn Done() => new([], new AgentOutcome.Done());
 
     /// <summary>
     /// Waits for the Intent's detail page to show the question with this number awaiting its answer, with the light orange, and gives

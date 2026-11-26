@@ -94,6 +94,7 @@ public sealed class OverseerDbContext(DbContextOptions<OverseerDbContext> option
         {
             step.ToTable("VerificationSteps");
             step.HasKey(record => new { record.IntentId, record.TaskNumber, record.Run, record.AttemptNumber, record.Number });
+            step.Property(record => record.Kind).HasConversion<string>();
         });
         modelBuilder.Entity<TaskScreenshotRecord>(screenshot =>
         {
