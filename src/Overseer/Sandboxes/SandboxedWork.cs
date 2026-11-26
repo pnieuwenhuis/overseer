@@ -5,8 +5,8 @@ namespace Overseer.Sandboxes;
 /// <summary>
 /// Work done in the background in Sandboxes, such as Refinements, implementations or Repository Setups, shaped the same way for
 /// each: it runs until serve stops, which interrupts it and waits for it. The module it belongs to keeps where each piece of work
-/// stands, and takes up the work a stop interrupted when serve starts: Repository Setups and implementations mark it failed, and
-/// Refinements continue it. The Sandboxes it leaves behind are destroyed then (<see cref="LeftOverSandboxes"/>).
+/// stands, and takes up the work a stop interrupted when serve starts: Repository Setups mark it failed, and Refinements and
+/// implementations continue it. The Sandboxes it leaves behind are destroyed then (<see cref="LeftOverSandboxes"/>).
 /// </summary>
 public sealed class SandboxedWork(ILogger logger)
 {

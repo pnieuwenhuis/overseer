@@ -197,41 +197,6 @@ public class TaskTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task A_restart_while_a_Task_runs_leaves_it_Pending_and_Retry_runs_it_again_in_a_fresh_Sandbox_without_the_Tasks_already_done()
-    {
-        var connectionString = await postgres.CreateEmptyDatabaseAsync();
-        string address;
-        Sandbox old;
-        FakeSandboxProvider firstSandboxes;
-        await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/api", "acme/web"]))
-        {
-            firstSandboxes = first.Sandboxes;
-            first.Sandboxes.ScriptAgentSessions(AgentRole.Designer, DesignOnce(Task.CompletedTask));
-            address = await ImplementingAsync(first, ThreeTasks(), "Export data", "acme/api", "acme/web");
-            await StatesAsync(first, address, "Done", "Running", "Pending");
-            await SquadMessagesAsync(first, 2);
-            old = Assert.Single(await first.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
-        }
-        // Stopping serve stops the agent.
-        Assert.Equal(2, firstSandboxes.AgentSessionsStopped.Count(session => session.Role is AgentRole.Designer or AgentRole.Developer));
-
-        await using var second = await StartWithRepositoriesAsync(connectionString, []);
-
-        // From the moment the Portal answers.
-        var page = await GetAsync(second, address);
-        Assert.Equal(["Done", "Pending", "Pending"], TasksOn(page).Select(task => task.State));
-        Assert.Equal(("Failed", ("Red", "Failed")), (ImplementationOn(page)!.Phase, ImplementationOn(page)!.Light));
-
-        using var retried = await ImplementationTests.RetryAsync(second, address);
-
-        var message = Assert.Single(await SquadMessagesAsync(second, 1));
-        Assert.Contains("Your Task is Task 2 of 3", message.Message);
-        Assert.NotEqual(old, message.Sandbox);
-        await StatesAsync(second, address, "Done", "Running", "Pending");
-        Assert.Equal([AgentRole.Developer], SquadSessionsStarted(second).Select(session => session.Role));
-    }
-
-    [Fact]
     public async Task A_restart_after_a_session_failed_keeps_its_error_and_Retry_prepares_a_fresh_Sandbox()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();

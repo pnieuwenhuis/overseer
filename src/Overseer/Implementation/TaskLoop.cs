@@ -44,7 +44,7 @@ public sealed class TaskLoop(
         {
             if (task.State == IntentTaskState.Failed)
             {
-                return $"Task {task.Number} is a Failed Task: its work didn't pass verification.";
+                return StoppedAtFailedTask(task.Number);
             }
             await tasks.EnterStateAsync(intent.Id, task.Number, IntentTaskState.Running, cancellationToken);
             changed();
@@ -76,6 +76,9 @@ public sealed class TaskLoop(
         }
         return null;
     }
+
+    /// <summary>Why an implementation can't go on past this Failed Task.</summary>
+    internal static string StoppedAtFailedTask(int number) => $"Task {number} is a Failed Task: its work didn't pass verification.";
 
     /// <summary>Has the Task's work done, verified and committed, unless it already is, and pushes it.</summary>
     /// <returns>Why the Task couldn't be finished; <c>null</c> once its work is pushed.</returns>

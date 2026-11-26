@@ -376,7 +376,7 @@ public class FinalVerificationTests(PostgresServer postgres)
         overseer.Sandboxes.ScriptCommandsContaining(ManifestCommandIn(repository, command), new CommandResult(1, output), new CommandResult(0, ""));
 
     /// <summary>What the script of a manifest's command that starts with <paramref name="command"/> holds, in this repository.</summary>
-    private static string ManifestCommandIn(string repository, string command) =>
+    internal static string ManifestCommandIn(string repository, string command) =>
         $"{repository}' || exit\nlog=$(mktemp) || exit\n(\nset -e\n{command}";
 
     /// <summary>A session whose turn ends as done once <paramref name="until"/> completes.</summary>

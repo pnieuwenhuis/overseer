@@ -25,9 +25,10 @@ public static class IntentPortal
     /// <param name="environment">Overrides the test defaults, as for <see cref="RunningOverseer.StartAsync"/>.</param>
     /// <param name="logs">Also receives everything the server logs.</param>
     /// <param name="sandboxes">Scripts the fake Sandbox Provider before the server starts, as for <see cref="RunningOverseer.StartAsync"/>.</param>
+    /// <param name="gitHub">Sets up the fake GitHub before the server starts, as for <see cref="RunningOverseer.StartAsync"/>.</param>
     public static async Task<RunningOverseer> StartWithRepositoriesAsync(
         string connectionString, string[] repositories, TimeProvider? time = null, IReadOnlyDictionary<string, string?>? environment = null,
-        ILoggerProvider? logs = null, Action<FakeSandboxProvider>? sandboxes = null)
+        ILoggerProvider? logs = null, Action<FakeSandboxProvider>? sandboxes = null, Action<FakeGitHubGateway>? gitHub = null)
     {
         var overseer = await RunningOverseer.StartAsync(connectionString, environment, logs, time, provider =>
         {
@@ -36,7 +37,7 @@ public static class IntentPortal
             AnalystKeepsWorking(provider);
             SquadKeepsWorking(provider);
             sandboxes?.Invoke(provider);
-        });
+        }, gitHub);
         await overseer.LogInAsync();
         overseer.GitHub.AcceptToken(Token, "octocat");
         using var saved = await overseer.SubmitFormAsync("/settings", "github-token", new Dictionary<string, string> { ["GitHubToken"] = Token });

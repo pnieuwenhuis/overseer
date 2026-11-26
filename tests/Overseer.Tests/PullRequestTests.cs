@@ -110,10 +110,8 @@ public class PullRequestTests(PostgresServer postgres)
         Assert.Equal([sandbox], await overseer.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task After_a_restart_Retry_opens_the_pull_requests_still_missing_without_a_Sandbox(bool interrupted)
+    [Fact]
+    public async Task After_a_restart_Retry_opens_the_pull_requests_still_missing_without_a_Sandbox()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
@@ -122,25 +120,9 @@ public class PullRequestTests(PostgresServer postgres)
             first.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneAtOnce());
             address = await AwaitingApprovalAsync(first, "Export data", "acme/web");
             Changes(first, address, "acme/web");
-            if (interrupted)
-            {
-                first.GitHub.HoldPullRequests(new TaskCompletionSource().Task);
-            }
-            else
-            {
-                first.GitHub.RefusePullRequests("acme/web", "Server Error (HTTP 500)");
-            }
+            first.GitHub.RefusePullRequests("acme/web", "Server Error (HTTP 500)");
             await ApproveAsync(first, address);
-            if (interrupted)
-            {
-                await ImplementationTests.InPhaseAsync(first, address, "OpeningPullRequests");
-                var shown = ImplementationTests.ImplementationOn(await GetAsync(first, address))!;
-                Assert.Equal(("Opening a pull request for each changed repository.", ("Green", "Working")), (shown.Status, shown.Light));
-            }
-            else
-            {
-                await ImplementationTests.FailedAsync(first, address);
-            }
+            await ImplementationTests.FailedAsync(first, address);
         }
 
         await using var second = await StartWithManifestsAsync(connectionString, []);
@@ -148,11 +130,7 @@ public class PullRequestTests(PostgresServer postgres)
         second.GitHub.AddRepository("acme/web");
         second.GitHub.AddBranch("acme/web", BranchOf(address));
         var failed = ImplementationTests.ImplementationOn(await GetAsync(second, address))!;
-        Assert.Equal(
-            interrupted
-                ? "Overseer restarted, which interrupted the implementation. Retry to open the pull requests."
-                : "The pull request of acme/web could not be opened: Server Error (HTTP 500)",
-            failed.Status);
+        Assert.Equal("The pull request of acme/web could not be opened: Server Error (HTTP 500)", failed.Status);
 
         using var retried = await ImplementationTests.RetryAsync(second, address);
 

@@ -172,7 +172,7 @@ public class TaskQuestionTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task A_restart_leaves_the_question_with_its_Task_unanswered_for_good_and_Retry_runs_the_Task_in_a_new_session()
+    public async Task A_restart_leaves_the_question_with_its_Task_unanswered_for_good_and_the_Task_runs_again_in_a_new_session()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
@@ -182,12 +182,18 @@ public class TaskQuestionTests(PostgresServer postgres)
             address = await ImplementationTests.ImplementingAsync(first, "Export data", "acme/web");
             await AskedAsync(first, address);
         }
+        // Held in the setup of the fresh Sandbox, so that no session has started yet.
+        var settingUp = new TaskCompletionSource();
         await using var second = await StartWithRepositoriesAsync(connectionString, [], sandboxes: sandboxes =>
-            sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(Asks("Which host?"), FakeAgentTurn.Endless())));
+        {
+            sandboxes.HoldCommandsContaining("git checkout", settingUp.Task);
+            sandboxes.ScriptAgentSessions(AgentRole.Developer, new FakeAgentSession(Asks("Which host?"), FakeAgentTurn.Endless()));
+        });
 
+        // From the moment the Portal answers.
         var page = await GetAsync(second, address);
 
-        Assert.Equal(("Red", "Failed"), LightOn(page));
+        Assert.Equal(("Green", "Working"), LightOn(page));
         Assert.Equal(["Pending"], TasksOn(page).Select(task => task.State));
         Assert.Equal([new ShownTaskQuestion(1, Open: false, "Which port?", Answer: null)], QuestionsOn(page, task: 1));
         Assert.Contains("Never answered: the session that asked it has ended.", page);
@@ -195,7 +201,7 @@ public class TaskQuestionTests(PostgresServer postgres)
         const string ended = "Your answer was not sent: Question 1 no longer awaits an answer: the session that asked it has ended.";
         Assert.Equal(ended, Alert(await late.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)));
 
-        using var retried = await ImplementationTests.RetryAsync(second, address);
+        settingUp.SetResult();
 
         var asked = await AskedAsync(second, address, question: 2);
         Assert.Equal(

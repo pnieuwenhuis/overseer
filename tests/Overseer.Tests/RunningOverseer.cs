@@ -72,13 +72,16 @@ public sealed class RunningOverseer : IAsyncDisposable
     /// Scripts the server's fake Sandbox Provider as it is created, before the server uses it: as the server starts, the Refinements a
     /// restart interrupted continue, before the test could script it otherwise.
     /// </param>
+    /// <param name="gitHub">Sets up the server's fake GitHub as it is created, as <paramref name="sandboxes"/> does the provider.</param>
     public static async Task<RunningOverseer> StartAsync(
         string connectionString, IReadOnlyDictionary<string, string?>? environment = null, ILoggerProvider? logs = null,
-        TimeProvider? time = null, Action<FakeSandboxProvider>? sandboxes = null)
+        TimeProvider? time = null, Action<FakeSandboxProvider>? sandboxes = null, Action<FakeGitHubGateway>? gitHub = null)
     {
         var defaults = new Dictionary<string, string?>
         {
-            ["OVERSEER_CONFIG_FILE"] = Path.Combine(Path.GetTempPath(), $"overseer-{Guid.NewGuid():N}", "config.json"),
+            // One for each database, so that the secrets a server saves are there after a restart, as they are after a redeploy.
+            ["OVERSEER_CONFIG_FILE"] = Path.Combine(
+                Path.GetTempPath(), new NpgsqlConnectionStringBuilder(connectionString).Database!, "config.json"),
             ["OVERSEER_URLS"] = "http://127.0.0.1:0",
             ["OVERSEER_CONNECTIONSTRINGS__OVERSEER"] = connectionString,
             ["OVERSEER_USER__PASSWORDHASH"] = PasswordHash,
@@ -93,7 +96,12 @@ public sealed class RunningOverseer : IAsyncDisposable
             TestContext.Current.CancellationToken,
             logs,
             time,
-            services => new FakeGitHubGateway(services.GetRequiredService<ISecretReader>()),
+            services =>
+            {
+                var fake = new FakeGitHubGateway(services.GetRequiredService<ISecretReader>());
+                gitHub?.Invoke(fake);
+                return fake;
+            },
             services =>
             {
                 var fake = new FakeSandboxProvider(services.GetRequiredService<TimeProvider>());

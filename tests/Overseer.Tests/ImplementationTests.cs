@@ -486,7 +486,7 @@ public class ImplementationTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task A_restart_during_provisioning_leaves_the_implementation_failed_with_a_Retry_that_works_and_destroys_the_Sandbox_it_was_provisioning()
+    public async Task A_restart_during_provisioning_destroys_the_Sandbox_it_was_provisioning_and_the_implementation_carries_on_in_a_fresh_one()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
@@ -506,20 +506,14 @@ public class ImplementationTests(PostgresServer postgres)
 
         await using var second = await StartWithRepositoriesAsync(connectionString, []);
 
-        // Failed from the moment the Portal answers.
-        var failed = ImplementationOn(await GetAsync(second, address));
-        Assert.Equal(Interrupted(address), failed);
-        await RefinementTests.NoSandboxLeftAsync(second);
-
-        using var retried = await RetryAsync(second, address);
-
         await ReadyAsync(second, address);
         var fresh = Assert.Single(await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
         Assert.NotEqual(interrupted, fresh.ResourceId);
+        Assert.Equal([interrupted], second.Sandboxes.DestructionsBegun.Select(sandbox => sandbox.ResourceId));
     }
 
     [Fact]
-    public async Task A_Retry_while_the_restart_is_still_destroying_the_old_Sandbox_waits_for_that_rather_than_destroy_it_too()
+    public async Task After_a_restart_the_fresh_Sandbox_waits_for_the_old_one_to_be_destroyed_which_is_done_once()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
@@ -534,9 +528,7 @@ public class ImplementationTests(PostgresServer postgres)
         await using var second = await StartWithRepositoriesAsync(connectionString, [], sandboxes: sandboxes => sandboxes.HoldDestructions(destroying.Task));
         await EventuallyAsync(() => Task.FromResult(second.Sandboxes.DestructionsBegun.Count > 0 ? "" : null), "the restart to destroy the old Sandbox");
 
-        using var retried = await RetryAsync(second, address);
-
-        // Nothing announces that the Retry has got as far as the old Sandbox, so this gives it the time to have.
+        // Nothing announces that the implementation has got as far as the old Sandbox, so this gives it the time to have.
         await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
         Assert.Equal([old], second.Sandboxes.DestructionsBegun);
         Assert.Empty(await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
@@ -566,7 +558,7 @@ public class ImplementationTests(PostgresServer postgres)
 
         await EventuallyAsync(
             async () => ImplementationOn(await GetAsync(overseer, address)) is { Phase: "Failed", Status: var status }
-                && status == "The failed Sandbox could not be destroyed, so no new one was created: The resource group is locked." ? status : null,
+                && status == "The old Sandbox could not be destroyed, so no new one was created: The resource group is locked." ? status : null,
             "the Retry to fail");
         Assert.Equal([failed], await overseer.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
 
@@ -577,7 +569,7 @@ public class ImplementationTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task Stopping_serve_during_setup_destroys_the_Sandbox_and_leaves_the_implementation_failed_after_the_restart()
+    public async Task Stopping_serve_during_setup_destroys_the_Sandbox_and_after_the_restart_a_fresh_one_is_prepared()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
@@ -592,31 +584,18 @@ public class ImplementationTests(PostgresServer postgres)
         }
         Assert.Empty(await firstSandboxes.ListAsync(TestContext.Current.CancellationToken));
 
-        await using var second = await StartWithRepositoriesAsync(connectionString, []);
+        await using var second = await StartWithRepositoriesAsync(
+            connectionString, [],
+            sandboxes: sandboxes => sandboxes.AddRepositoryFile(
+                "acme/web", ".overseer.yml", "setup: npm ci\nbuild: npm run build\ntest: npm test\n"));
 
-        Assert.Equal(Interrupted(address), ImplementationOn(await GetAsync(second, address)));
-        Assert.Empty(second.Sandboxes.CommandsRun);
+        await ReadyAsync(second, address);
+        var fresh = Assert.Single(await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Contains(second.Sandboxes.CommandsRun, run => run.Sandbox == fresh && run.Command.Contains("npm ci"));
     }
 
     [Fact]
-    public async Task After_a_restart_a_prepared_implementation_is_failed_too_as_its_Sandbox_goes()
-    {
-        var connectionString = await postgres.CreateEmptyDatabaseAsync();
-        string address;
-        await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"]))
-        {
-            address = await ImplementingAsync(first, "Export data", "acme/web");
-            await ReadyAsync(first, address);
-        }
-
-        await using var second = await StartWithRepositoriesAsync(connectionString, []);
-
-        Assert.Equal(Interrupted(address), ImplementationOn(await GetAsync(second, address)));
-        await RefinementTests.NoSandboxLeftAsync(second);
-    }
-
-    [Fact]
-    public async Task An_Intent_that_was_Implementing_before_Overseer_prepared_Sandboxes_for_it_is_failed_with_a_Retry_when_serve_starts()
+    public async Task An_Implementing_Intent_with_nothing_recorded_of_its_implementation_is_implemented_when_serve_starts()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
@@ -624,20 +603,18 @@ public class ImplementationTests(PostgresServer postgres)
         {
             address = await AwaitingApprovalAsync(first, "Export data", "acme/web");
             using var approved = await ApproveAsync(first, address, start: false);
-            // As an earlier version left it: Implementing, without anything of an implementation.
+            // As serve leaves it when it stops just as the implementation starts.
             await SetStateAsync(first, "Export data", IntentState.Implementing);
         }
 
         await using var second = await StartWithRepositoriesAsync(connectionString, []);
 
-        Assert.Equal(Interrupted(address), ImplementationOn(await GetAsync(second, address)));
-        using var retried = await RetryAsync(second, address);
         await ReadyAsync(second, address);
         Assert.True(second.Sandboxes.MayPushOf(Assert.Single(await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken))));
     }
 
     [Fact]
-    public async Task A_restart_leaves_a_failed_implementation_failed_with_its_error()
+    public async Task A_restart_leaves_a_failed_implementation_failed_with_its_error_and_its_Retry_works()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
@@ -651,14 +628,18 @@ public class ImplementationTests(PostgresServer postgres)
 
         await using var second = await StartWithRepositoriesAsync(connectionString, []);
 
-        Assert.Equal("The Sandbox could not be created: QuotaExceeded", ImplementationOn(await GetAsync(second, address))!.Status);
+        Assert.Equal(
+            new ShownImplementation(
+                "Failed", "The Sandbox could not be created: QuotaExceeded", ("Red", "Failed"),
+                $"intents/{IdOf(address)}/implementation/retry"),
+            ImplementationOn(await GetAsync(second, address)));
         Assert.Empty(await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
-    }
 
-    /// <summary>An implementation that a restart of serve interrupted, as its Intent's detail page shows it.</summary>
-    private static ShownImplementation Interrupted(string address) => new(
-        "Failed", "Overseer restarted, which interrupted the implementation. Retry to prepare a fresh Sandbox.", ("Red", "Failed"),
-        $"intents/{IdOf(address)}/implementation/retry");
+        using var retried = await RetryAsync(second, address);
+
+        await ReadyAsync(second, address);
+        Assert.True(second.Sandboxes.MayPushOf(Assert.Single(await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken))));
+    }
 
     /// <summary>The Repository Manifest the repository has in every Sandbox that holds it from now on.</summary>
     private static void AddManifest(RunningOverseer overseer, string repository, string manifest) =>

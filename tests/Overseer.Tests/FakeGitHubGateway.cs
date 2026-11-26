@@ -16,6 +16,39 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
     // By owner/name in lower case, since GitHub matches names regardless of case.
     private readonly ConcurrentDictionary<string, FakeRepository> _repositories = new();
 
+    /// <summary>
+    /// Makes this GitHub have what <paramref name="before"/> had, as GitHub keeps it all while Overseer restarts: the tokens it
+    /// accepts or rejects, its organizations, its repositories with their files and branches, its pull requests, and what it
+    /// refuses.
+    /// </summary>
+    public void CarryOver(FakeGitHubGateway before)
+    {
+        static void Copy<TKey, TValue>(ConcurrentDictionary<TKey, TValue> from, ConcurrentDictionary<TKey, TValue> to)
+            where TKey : notnull
+        {
+            foreach (var (key, value) in from)
+            {
+                to[key] = value;
+            }
+        }
+
+        Copy(before._tokens, _tokens);
+        Copy(before._organizations, _organizations);
+        Copy(before._repositories, _repositories);
+        Copy(before._creationRefusals, _creationRefusals);
+        Copy(before._files, _files);
+        Copy(before._branches, _branches);
+        Copy(before._pullRequestRefusals, _pullRequestRefusals);
+        foreach (var created in before._created)
+        {
+            _created.Enqueue(created);
+        }
+        foreach (var pullRequest in before._pullRequests)
+        {
+            _pullRequests.Enqueue(pullRequest);
+        }
+    }
+
     /// <summary>Makes GitHub accept <paramref name="token"/> as the user <paramref name="login"/>.</summary>
     public void AcceptToken(string token, string login) => _tokens[token] = new GitHubTokenCheck.Works(login);
 
@@ -159,6 +192,16 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
     /// </summary>
     public void HoldPullRequests(Task until) => _pullRequestsHeld = until;
 
+    // By owner/name in lower case: what GitHub's answer to opening a pull request in that repository waits for.
+    private readonly ConcurrentDictionary<string, Task> _pullRequestAnswersHeld = new();
+
+    /// <summary>
+    /// Makes GitHub open a pull request in the repository <paramref name="ownerAndName"/> and say so only once
+    /// <paramref name="until"/> completes, so that a test can act while it is open and not yet known to be.
+    /// </summary>
+    public void HoldPullRequestAnswers(string ownerAndName, Task until) =>
+        _pullRequestAnswersHeld[Key(RepositoryName.Parse(ownerAndName))] = until;
+
     /// <summary>Makes GitHub refuse to open pull requests in the repository <paramref name="ownerAndName"/> with <paramref name="error"/>.</summary>
     public void RefusePullRequests(string ownerAndName, string error) =>
         _pullRequestRefusals[Key(RepositoryName.Parse(ownerAndName))] = error;
@@ -186,6 +229,17 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
         {
             return new GitHubPullRequestOpening.Fails(refusal);
         }
+        var opening = Open(repository, branch, title, body);
+        if (_pullRequestAnswersHeld.TryGetValue(Key(repository), out var held))
+        {
+            await held.WaitAsync(cancellationToken);
+        }
+        return opening;
+    }
+
+    /// <summary>Opens the pull request, or finds the one that is open for the branch already.</summary>
+    private GitHubPullRequestOpening Open(RepositoryName repository, string branch, string title, string body)
+    {
         var found = _repositories[Key(repository)];
         lock (_pullRequests)
         {
