@@ -252,7 +252,7 @@ public class ImplementationRestartTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task A_restart_while_pull_requests_are_opened_opens_the_ones_still_missing_without_a_Sandbox_one_per_changed_repository()
+    public async Task A_restart_while_pull_requests_are_opened_opens_the_ones_still_missing_from_a_fresh_Sandbox_one_per_changed_repository()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
@@ -289,10 +289,17 @@ public class ImplementationRestartTests(PostgresServer postgres)
         Assert.All(
             ["acme/api #1", "acme/docs #1", "acme/web #1"],
             link => Assert.Single(Regex.Matches(page, $">{link}</a>")));
-        // Nothing but opening them was left to do.
-        Assert.Empty(await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
-        Assert.Empty(second.Sandboxes.CommandsRun);
-        await RefinementTests.NoSandboxLeftAsync(second);
+        // The review gets its Sandbox, prepared from the Intent branch, without the final verification run again.
+        var fresh = Assert.Single(await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
+        Assert.True(second.Sandboxes.MayPushOf(fresh));
+        Assert.Equal(3, second.Sandboxes.CommandsRun.Count(run => run.Sandbox == fresh && run.Command.Contains("git checkout")));
+        Assert.DoesNotContain(second.Sandboxes.CommandsRun, run => run.Command.Contains("\nnpm test"));
+        Assert.Empty(SquadSessionsStarted(second));
+        await using var database = second.OpenDatabase();
+        Assert.Equal(
+            [fresh.ResourceId],
+            await database.Sandboxes.Where(sandbox => sandbox.DestroyedAt == null).Select(sandbox => sandbox.ResourceId)
+                .ToListAsync(TestContext.Current.CancellationToken));
     }
 
     /// <summary>Starts serve again on the same database, with GitHub as it was, which keeps all it has meanwhile.</summary>

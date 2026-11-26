@@ -18,10 +18,10 @@ namespace Overseer.Implementation;
 /// implementation stands, and the Sandbox it was prepared in, is kept in PostgreSQL. A Task's agent that asks a question leaves the
 /// implementation waiting, its Intent orange, until the human answers (<see cref="AnswerAsync"/>). An implementation that fails
 /// leaves the Intent Implementing, in its slot, and red until a Retry, which goes on in the prepared Sandbox when there is one, and
-/// otherwise prepares a fresh one; once the final verification has passed, a Retry only opens the pull requests still missing, which
-/// needs no Sandbox. One with a Failed Task has no such Retry: the human retries that Task instead
+/// otherwise prepares a fresh one; once the final verification has passed, all that is left to do there is to open the pull requests
+/// still missing. One with a Failed Task has no such Retry: the human retries that Task instead
 /// (<see cref="RetryTaskAsync"/>). No Sandbox outlives a restart of serve: every implementation that hadn't failed carries on by
-/// itself, in a fresh one.
+/// itself, in a fresh one. So an Intent that moves to In Review has a Sandbox to be reviewed in.
 /// </summary>
 public sealed class TaskRunner(
     IntentLifecycle lifecycle, SandboxRegistry sandboxes, SandboxPreparation preparation, IntentTasks tasks,
@@ -42,14 +42,15 @@ public sealed class TaskRunner(
     /// <summary>
     /// Carries on with each implementation that a stop of serve interrupted, which is that of every Implementing Intent that
     /// hadn't failed; from then on implements each Intent that moves to Implementing. Its Sandbox goes with the restart
-    /// (<see cref="LeftOverSandboxes"/>), and with it any work not pushed, so unless only pull requests are left to open it goes on
-    /// in a fresh one, from its first Task that isn't Done. One that stopped at a Failed Task, before that was recorded, is recorded
-    /// failed instead. Runs as serve starts, and records where each one stands before the Portal takes requests, so that no page
-    /// shows a Task that runs, or a question that awaits its answer, in a session that is gone.
+    /// (<see cref="LeftOverSandboxes"/>), and with it any work not pushed, so it goes on in a fresh one, from its first Task that
+    /// isn't Done, or, once the final verification has passed, with the pull requests still missing. One that stopped at a Failed
+    /// Task, before that was recorded, is recorded failed instead. Runs as serve starts, and records where each one stands before the
+    /// Portal takes requests, so that no page shows a Task that runs, or a question that awaits its answer, in a session that is
+    /// gone.
     /// </summary>
     async Task IHostedService.StartAsync(CancellationToken cancellationToken)
     {
-        List<(Guid IntentId, bool AwaitingPullRequests, int? FailedTask)> interrupted;
+        List<(Guid IntentId, int? FailedTask)> interrupted;
         await using (var database = await databases.CreateDbContextAsync(cancellationToken))
         {
             // Also an Implementing Intent without a record: one started as serve stopped. A failed one waits for its Retry.
@@ -59,25 +60,22 @@ public sealed class TaskRunner(
                 .Select(intent => new
                 {
                     intent.Id,
-                    AwaitingPullRequests = database.Implementations.Any(
-                        implementation => implementation.IntentId == intent.Id && implementation.AwaitingPullRequests != null),
                     FailedTask = database.IntentTasks
                         .Where(task => task.IntentId == intent.Id && task.State == IntentTaskState.Failed)
                         .Select(task => (int?)task.Number)
                         .FirstOrDefault(),
                 })
                 .ToListAsync(cancellationToken))
-                .Select(intent => (intent.Id, intent.AwaitingPullRequests, intent.FailedTask))];
+                .Select(intent => (intent.Id, intent.FailedTask))];
             // No Sandbox outlives a restart, so no implementation has one to go on in, nor work to push.
             await database.Implementations.ExecuteUpdateAsync(
                 implementation => implementation.SetProperty(record => record.SandboxResourceId, (string?)null), cancellationToken);
         }
         await tasks.ForgetAllUnpushedAsync(cancellationToken);
         var carryingOn = new List<Guid>();
-        foreach (var (intentId, awaitingPullRequests, failedTask) in interrupted)
+        foreach (var (intentId, failedTask) in interrupted)
         {
             var (phase, error) = failedTask is { } number ? (ImplementationPhase.Failed, TaskLoop.StoppedAtFailedTask(number))
-                : awaitingPullRequests ? (ImplementationPhase.OpeningPullRequests, null)
                 : (ImplementationPhase.ProvisioningSandbox, (string?)null);
             await EnterPhaseAsync(intentId, phase, repository: null, error, cancellationToken);
             if (phase != ImplementationPhase.Failed)
@@ -127,12 +125,12 @@ public sealed class TaskRunner(
     private static readonly Func<ImplementationRecord, ImplementationPhase> ResumesAt = ImplementationRecord.ResumesAt.Compile();
 
     /// <summary>
-    /// Takes up the implementation of an Implementing Intent again after it failed. One that failed once the final verification had
-    /// passed, as when a pull request couldn't be opened, only opens the pull requests still missing. One that failed once its Sandbox
-    /// was prepared, as when a Task's session broke off or its work couldn't be pushed, goes on in that Sandbox, with its first Task
-    /// that isn't Done, and the final verification once all are. Otherwise, as when preparing failed or serve has restarted since, or
-    /// when the prepared Sandbox is gone, a fresh Sandbox is prepared, once what is left of the old one is destroyed. The Intent stays
-    /// Implementing throughout.
+    /// Takes up the implementation of an Implementing Intent again after it failed. One that failed once its Sandbox was prepared, as
+    /// when a Task's session broke off or its work couldn't be pushed, goes on in that Sandbox, with its first Task that isn't Done,
+    /// and the final verification once all are. Otherwise, as when preparing failed or serve has restarted since, or when the prepared
+    /// Sandbox is gone, a fresh Sandbox is prepared, once what is left of the old one is destroyed. One that failed once the final
+    /// verification had passed, as when a pull request couldn't be opened, runs no Task nor verification again, whichever Sandbox it
+    /// goes on in: it only opens the pull requests still missing. The Intent stays Implementing throughout.
     /// </summary>
     /// <returns>
     /// Whether it started again: not when there is no such Intent, its implementation hasn't failed, or one of its Tasks is a Failed
@@ -258,10 +256,6 @@ public sealed class TaskRunner(
             return null;
         }
         await tasks.CreateFromApprovedSpecAsync(intent, cancellationToken);
-        if (await AwaitingPullRequestsOfAsync(intentId, cancellationToken) is { } changed)
-        {
-            return await OpenPullRequestsAsync(intent, changed, cancellationToken);
-        }
         return await ImplementInSandboxAsync(intent, takenUpAgain, cancellationToken);
     }
 
@@ -377,7 +371,7 @@ public sealed class TaskRunner(
 
     /// <summary>
     /// Records in <paramref name="database"/> that the Intent's work passed the final verification, so that what is left is a pull
-    /// request for each of these repositories, the ones that changed: from here on a Retry only opens those.
+    /// request for each of these repositories, the ones that changed: from here on no Task nor verification runs again.
     /// </summary>
     private static Task AwaitPullRequestsAsync(
         OverseerDbContext database, Guid intentId, IReadOnlyList<RepositoryName> changed, CancellationToken cancellationToken)
@@ -537,9 +531,9 @@ public enum ImplementationPhase
 /// <param name="Error"><c>null</c> unless <paramref name="Phase"/> is <see cref="ImplementationPhase.Failed"/>.</param>
 /// <param name="ResumesAt">
 /// The phase a Retry takes it up in, which also says how far it had got when it failed:
+/// <see cref="ImplementationPhase.ProvisioningSandbox"/> while it has no prepared Sandbox; else
 /// <see cref="ImplementationPhase.OpeningPullRequests"/> once the final verification has passed, so that what is left is opening
-/// the pull requests; else <see cref="ImplementationPhase.Ready"/> once its Sandbox is prepared, which a Retry goes on in unless
-/// it is gone; else <see cref="ImplementationPhase.ProvisioningSandbox"/>.
+/// the pull requests; else <see cref="ImplementationPhase.Ready"/>. A Retry goes on in the prepared Sandbox unless it is gone.
 /// </param>
 /// <param name="HasFailedTask">Whether one of its Tasks is a Failed Task, which only retrying that Task takes up again.</param>
 public sealed record ImplementationProgress(
@@ -549,13 +543,13 @@ public sealed record ImplementationProgress(
 public sealed class ImplementationRecord
 {
     /// <summary>
-    /// The phase a Retry takes a failed implementation up in, from what it has got done: opening the pull requests once the final
-    /// verification has passed, else going on in the prepared Sandbox when there is one, else preparing one.
+    /// The phase a Retry takes a failed implementation up in, from what it has got done: preparing a Sandbox when there is no
+    /// prepared one, else opening the pull requests once the final verification has passed, else going on with the Tasks.
     /// </summary>
     internal static readonly Expression<Func<ImplementationRecord, ImplementationPhase>> ResumesAt = record =>
-        record.AwaitingPullRequests != null ? ImplementationPhase.OpeningPullRequests
-        : record.SandboxResourceId != null ? ImplementationPhase.Ready
-        : ImplementationPhase.ProvisioningSandbox;
+        record.SandboxResourceId == null ? ImplementationPhase.ProvisioningSandbox
+        : record.AwaitingPullRequests != null ? ImplementationPhase.OpeningPullRequests
+        : ImplementationPhase.Ready;
 
     public required Guid IntentId { get; init; }
     public required ImplementationPhase Phase { get; set; }

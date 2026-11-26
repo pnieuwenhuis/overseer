@@ -36,7 +36,8 @@
     };
 
     // A failure after the Sandbox was prepared, as of a Task's session, leaves the steps until then done, and one after the final
-    // verification passed, as of a pull request, those before it. One while preparing stops them all.
+    // verification passed, as of a pull request, those before it. Without a prepared Sandbox, as when preparing failed or serve
+    // has restarted since, it stops them all.
     private string StepClass(ImplementationPhase step) => Implementation switch
     {
         { Phase: ImplementationPhase.Failed, ResumesAt: ImplementationPhase.OpeningPullRequests } =>

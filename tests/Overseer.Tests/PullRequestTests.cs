@@ -111,7 +111,7 @@ public class PullRequestTests(PostgresServer postgres)
     }
 
     [Fact]
-    public async Task After_a_restart_Retry_opens_the_pull_requests_still_missing_without_a_Sandbox()
+    public async Task After_a_restart_Retry_prepares_a_fresh_Sandbox_and_then_opens_the_pull_requests_still_missing()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
         string address;
@@ -136,8 +136,10 @@ public class PullRequestTests(PostgresServer postgres)
 
         var page = await InReviewAsync(second, address);
         Assert.Equal([("acme/web #1", "https://github.com/acme/web/pull/1")], PullRequestsOn(page));
-        Assert.Empty(await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
-        Assert.Empty(second.Sandboxes.CommandsRun);
+        var fresh = Assert.Single(await second.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Contains(second.Sandboxes.CommandsRun, run => run.Sandbox == fresh && run.Command.Contains("git checkout"));
+        // The final verification passed before, and isn't run again.
+        Assert.DoesNotContain(second.Sandboxes.CommandsRun, run => run.Command.Contains("\nnpm test"));
     }
 
     [Fact]

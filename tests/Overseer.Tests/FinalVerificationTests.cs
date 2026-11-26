@@ -260,12 +260,18 @@ public class FinalVerificationTests(PostgresServer postgres)
             overseer.GitHub.AllowPullRequests("acme/web");
             overseer.GitHub.AddBranch("acme/web", $"overseer/intent-{address["/intents/".Length..].Replace("-", "")}");
             var commands = overseer.Sandboxes.CommandsRun.Count;
+            var sessions = SquadSessionsStarted(overseer).Count;
 
             using var retried = await ImplementationTests.RetryAsync(overseer, address);
 
             await InReviewAsync(overseer, address);
             Assert.Single(overseer.GitHub.PullRequests);
-            Assert.Equal(commands, overseer.Sandboxes.CommandsRun.Count);
+            Assert.Equal(sessions, SquadSessionsStarted(overseer).Count);
+            var since = overseer.Sandboxes.CommandsRun.Skip(commands).ToList();
+            Assert.DoesNotContain(since, run => run.Command.Contains("\nnpm test"));
+            // Only after a restart is there a fresh Sandbox to prepare; the one from before serves otherwise.
+            Assert.Equal(restarted, since.Count > 0);
+            Assert.Single(await overseer.Sandboxes.ListAsync(TestContext.Current.CancellationToken));
         }
         finally
         {
