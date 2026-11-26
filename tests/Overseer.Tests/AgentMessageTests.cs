@@ -589,7 +589,7 @@ public class AgentMessageTests(PostgresServer postgres)
             "the tests to run");
 
     /// <summary>Sends a message on the Task's page, as a browser would send the form it showed for that session.</summary>
-    private static Task<HttpResponseMessage> SendAsync(RunningOverseer overseer, string taskAddress, int session, string message) =>
+    internal static Task<HttpResponseMessage> SendAsync(RunningOverseer overseer, string taskAddress, int session, string message) =>
         overseer.SubmitFormAsync(taskAddress, "message-agent", MessageFields(session, message));
 
     private static KeyValuePair<string, string>[] MessageFields(int session, string message) =>

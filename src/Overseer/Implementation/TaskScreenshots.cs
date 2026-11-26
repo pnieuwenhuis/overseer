@@ -14,63 +14,73 @@ public sealed class TaskScreenshots(SandboxRegistry sandboxes, IDbContextFactory
 {
     private const int LargestImage = ScreenshotHandIn.LargestImageMegabytes * 1024 * 1024;
 
-    /// <summary>
-    /// Takes away a list of screenshots left in the Sandbox, as by a session that broke off, so that a new session's Task
-    /// doesn't count what it didn't hand in.
-    /// </summary>
-    public async Task DiscardHandedInAsync(Sandbox sandbox, CancellationToken cancellationToken) =>
-        await sandboxes.TakeFileAsync(sandbox, ScreenshotHandIn.FilePath, cancellationToken);
+    /// <summary>What a Designer's session on the Task hands in, in its Sandbox.</summary>
+    public Session OfSession(TaskKey task, Sandbox sandbox) => new(this, task, sandbox);
 
     /// <summary>
-    /// Takes the screenshots the Designer handed in at the end of its turn, if it did, and keeps them as the Task's, in place
-    /// of any it had. Nothing of a hand-in is kept unless all of it is valid.
+    /// The screenshots one Designer session hands in, taken at the end of each of its turns, and whether they stand: the Task
+    /// needs a valid set of this session to be Done.
     /// </summary>
-    /// <param name="handedInBefore">Whether the session has handed in screenshots that still stand.</param>
-    /// <returns>
-    /// The failed step of the verification that says what is missing or wrong; <c>null</c> when the Task has screenshots of this
-    /// session, handed in now or before.
-    /// </returns>
-    /// <exception cref="InvalidOperationException">The Sandbox couldn't give them; the message says why.</exception>
-    public async Task<VerificationStep?> TakeAsync(
-        Guid intentId, int taskNumber, Sandbox sandbox, bool handedInBefore, CancellationToken cancellationToken)
+    public sealed class Session(TaskScreenshots screenshots, TaskKey task, Sandbox sandbox)
     {
-        switch (await ScreenshotHandIn.Instance.TakeAsync(sandboxes, sandbox, cancellationToken))
+        /// <summary>Whether the session has handed in screenshots that still stand.</summary>
+        private bool _standing;
+
+        /// <summary>What is wrong with what it last handed in, until a check has said so.</summary>
+        private VerificationStep? _invalid;
+
+        /// <summary>
+        /// Takes away a list of screenshots left in the Sandbox, as by a session that broke off, so that this one's Task doesn't
+        /// count what it didn't hand in.
+        /// </summary>
+        public Task DiscardLeftOverAsync(CancellationToken cancellationToken) =>
+            screenshots.DiscardListAsync(sandbox, cancellationToken);
+
+        /// <summary>
+        /// Takes the screenshots the Designer handed in during the turn that has ended, if it did, and keeps them as the Task's,
+        /// in place of any it had. Nothing of a hand-in is kept unless all of it is valid; one that isn't leaves the Task the
+        /// screenshots it had, which no longer stand.
+        /// </summary>
+        /// <returns>Whether the Task has other screenshots now.</returns>
+        /// <exception cref="InvalidOperationException">The Sandbox couldn't give them; the message says why.</exception>
+        public async Task<bool> TakeAsync(CancellationToken cancellationToken)
         {
-            case HandedIn<IReadOnlyList<ListedScreenshot>>.Valid(var listed):
-                var images = new List<TaskScreenshotRecord>();
-                var errors = new List<string>();
-                foreach (var screenshot in listed)
-                {
-                    var (image, error) = await TakeImageAsync(sandbox, screenshot, cancellationToken);
-                    if (image is null)
-                    {
-                        errors.Add(error!);
-                        continue;
-                    }
-                    images.Add(new TaskScreenshotRecord
-                    {
-                        IntentId = intentId,
-                        TaskNumber = taskNumber,
-                        Number = screenshot.Number,
-                        Caption = await sandboxes.WithoutSecretsAsync(screenshot.Caption, cancellationToken),
-                        ContentType = image.ContentType,
-                        Content = image.Content,
-                    });
-                }
-                if (errors.Count > 0)
-                {
-                    return await InvalidAsync(errors, cancellationToken);
-                }
-                await ReplaceAsync(intentId, taskNumber, images, cancellationToken);
+            switch (await screenshots.HandedInAsync(task, sandbox, cancellationToken))
+            {
+                case HandedIn<IReadOnlyList<TaskScreenshotRecord>>.Valid(var images):
+                    await screenshots.ReplaceAsync(task, images, cancellationToken);
+                    (_standing, _invalid) = (true, null);
+                    return true;
+                case HandedIn<IReadOnlyList<TaskScreenshotRecord>>.Invalid(var errors):
+                    (_standing, _invalid) = (false, await screenshots.InvalidAsync(errors, cancellationToken));
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// The check of the screenshots, as part of verifying the Task's work. What was wrong with a hand-in is said once: a later
+        /// check, with nothing handed in since, finds them missing.
+        /// </summary>
+        /// <returns>
+        /// The failed step of the verification that says what is missing or wrong; <c>null</c> when the Task has screenshots of
+        /// this session, handed in with this turn or before.
+        /// </returns>
+        public VerificationStep? Check()
+        {
+            if (_standing)
+            {
                 return null;
-            case HandedIn<IReadOnlyList<ListedScreenshot>>.Invalid(var invalid):
-                return await InvalidAsync(invalid, cancellationToken);
-            default:
-                return handedInBefore
-                    ? null
-                    : VerificationStep.OfScreenshots("No screenshots of the design were handed in.", output: "");
+            }
+            var failed = _invalid ?? VerificationStep.OfScreenshots("No screenshots of the design were handed in.", output: "");
+            _invalid = null;
+            return failed;
         }
     }
+
+    private Task DiscardListAsync(Sandbox sandbox, CancellationToken cancellationToken) =>
+        sandboxes.TakeFileAsync(sandbox, ScreenshotHandIn.FilePath, cancellationToken);
 
     /// <summary>The screenshots of the Intent's Tasks, by Task, in the order they were listed.</summary>
     public async Task<IReadOnlyList<TaskScreenshot>> OfAsync(Guid intentId, CancellationToken cancellationToken)
@@ -92,6 +102,46 @@ public sealed class TaskScreenshots(SandboxRegistry sandboxes, IDbContextFactory
             .Where(screenshot => screenshot.IntentId == intentId && screenshot.Id == id)
             .Select(screenshot => new ScreenshotImage(screenshot.ContentType, screenshot.Content))
             .SingleOrDefaultAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Takes what the Designer handed in from the Sandbox: the Task's screenshots as they are to be kept, when all of it is valid,
+    /// else every reason it isn't.
+    /// </summary>
+    private async Task<HandedIn<IReadOnlyList<TaskScreenshotRecord>>> HandedInAsync(
+        TaskKey task, Sandbox sandbox, CancellationToken cancellationToken)
+    {
+        switch (await ScreenshotHandIn.Instance.TakeAsync(sandboxes, sandbox, cancellationToken))
+        {
+            case HandedIn<IReadOnlyList<ListedScreenshot>>.Valid(var listed):
+                var images = new List<TaskScreenshotRecord>();
+                var errors = new List<string>();
+                foreach (var screenshot in listed)
+                {
+                    var (image, error) = await TakeImageAsync(sandbox, screenshot, cancellationToken);
+                    if (image is null)
+                    {
+                        errors.Add(error!);
+                        continue;
+                    }
+                    images.Add(new TaskScreenshotRecord
+                    {
+                        IntentId = task.IntentId,
+                        TaskNumber = task.Number,
+                        Number = screenshot.Number,
+                        Caption = await sandboxes.WithoutSecretsAsync(screenshot.Caption, cancellationToken),
+                        ContentType = image.ContentType,
+                        Content = image.Content,
+                    });
+                }
+                return errors.Count > 0
+                    ? new HandedIn<IReadOnlyList<TaskScreenshotRecord>>.Invalid(errors)
+                    : new HandedIn<IReadOnlyList<TaskScreenshotRecord>>.Valid(images);
+            case HandedIn<IReadOnlyList<ListedScreenshot>>.Invalid(var invalid):
+                return new HandedIn<IReadOnlyList<TaskScreenshotRecord>>.Invalid(invalid);
+            default:
+                return new HandedIn<IReadOnlyList<TaskScreenshotRecord>>.Nothing();
+        }
     }
 
     /// <summary>Takes a listed image from the Sandbox, and gives it, or what is wrong with it.</summary>
@@ -130,13 +180,12 @@ public sealed class TaskScreenshots(SandboxRegistry sandboxes, IDbContextFactory
             "The screenshots handed in aren't valid.",
             await sandboxes.WithoutSecretsAsync(string.Join("\n", errors.Select(error => $"- {error}")), cancellationToken));
 
-    private async Task ReplaceAsync(
-        Guid intentId, int taskNumber, IReadOnlyList<TaskScreenshotRecord> screenshots, CancellationToken cancellationToken)
+    private async Task ReplaceAsync(TaskKey task, IReadOnlyList<TaskScreenshotRecord> screenshots, CancellationToken cancellationToken)
     {
         await using var database = await databases.CreateDbContextAsync(cancellationToken);
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await database.TaskScreenshots
-            .Where(screenshot => screenshot.IntentId == intentId && screenshot.TaskNumber == taskNumber)
+            .Where(screenshot => screenshot.IntentId == task.IntentId && screenshot.TaskNumber == task.Number)
             .ExecuteDeleteAsync(cancellationToken);
         database.TaskScreenshots.AddRange(screenshots);
         await database.SaveChangesAsync(cancellationToken);

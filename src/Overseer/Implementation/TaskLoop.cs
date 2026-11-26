@@ -151,12 +151,15 @@ public sealed class TaskLoop(
         {
             return new Work.Unfinished(notRefreshed);
         }
+        var key = new TaskKey(intent.Id, task.Number);
+        // The screenshots the session hands in, which a Designer's Task needs to be Done.
+        var sessionScreenshots = task.Role == AgentRole.Designer ? screenshots.OfSession(key, sandbox) : null;
         IAgentSession session;
         try
         {
-            if (task.Role == AgentRole.Designer)
+            if (sessionScreenshots is not null)
             {
-                await screenshots.DiscardHandedInAsync(sandbox, cancellationToken);
+                await sessionScreenshots.DiscardLeftOverAsync(cancellationToken);
             }
             session = await sandboxes.StartAgentSessionAsync(sandbox, task.Role, cancellationToken);
         }
@@ -165,9 +168,7 @@ public sealed class TaskLoop(
             return SessionFailed(intent, task, exception);
         }
         await using var stopping = session;
-        // Whether a Designer's session has handed in screenshots that still stand, which its Task needs to be Done.
-        var screenshotsHandedIn = false;
-        await using var log = await logs.OpenAsync(new TaskKey(intent.Id, task.Number), task.Role, cancellationToken);
+        await using var log = await logs.OpenAsync(key, task.Role, cancellationToken);
         // The number of the last verification attempt this session made, and how many of them failed. A turn that ends in a
         // question, or with a message of the human's waiting, leads to none.
         var attemptNumber = 0;
@@ -187,6 +188,21 @@ public sealed class TaskLoop(
                 return SessionFailed(intent, task, exception);
             }
             delivering = null;
+            // However the turn ended, so that the screenshots show while the human answers, and are kept should the session end
+            // there. Ahead of the commands of a verification, so that what is taken is what the agent left.
+            try
+            {
+                if (sessionScreenshots is not null && await sessionScreenshots.TakeAsync(cancellationToken))
+                {
+                    changed();
+                }
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogError(
+                    exception, "The screenshots of Task {Task} of the Intent {IntentId} could not be taken.", task.Number, intent.Id);
+                return new Work.Unfinished($"The screenshots of Task {task.Number} could not be taken: {exception.Message}");
+            }
             if (outcome is AgentOutcome.AskedQuestion asked)
             {
                 // The agent has tokens to work with, so it can say one; a secret never goes into PostgreSQL.
@@ -215,17 +231,13 @@ public sealed class TaskLoop(
             IReadOnlyList<RepositoryName> changedRepositories;
             try
             {
-                // Ahead of the commands of the verification, so that what is taken is what the agent left.
-                var withoutScreenshots = task.Role == AgentRole.Designer
-                    ? await screenshots.TakeAsync(intent.Id, task.Number, sandbox, screenshotsHandedIn, cancellationToken)
-                    : null;
-                screenshotsHandedIn = withoutScreenshots is null;
+                var screenshotFailure = sessionScreenshots?.Check();
                 var verified = task.IsFixUp
                     ? await verification.VerifyAllAsync(sandbox, intent, cancellationToken)
                     : await verification.VerifyAsync(sandbox, intent, task.Repositories, cancellationToken);
                 attempt = new VerificationAttempt(
                     task.Number, run, attemptNumber,
-                    withoutScreenshots is null ? verified.Steps : [.. verified.Steps, withoutScreenshots]);
+                    screenshotFailure is null ? verified.Steps : [.. verified.Steps, screenshotFailure]);
                 changedRepositories = verified.Changed;
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested)

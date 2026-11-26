@@ -340,6 +340,104 @@ public class DesignerScreenshotTests(PostgresServer postgres)
         Assert.DoesNotContain(await overseer.DumpDatabaseAsync(), table => table.Contains(Token));
     }
 
+    [Fact]
+    public async Task Screenshots_handed_in_with_a_question_are_shown_while_it_waits_without_using_an_attempt_and_stay_after_a_restart()
+    {
+        var connectionString = await postgres.CreateEmptyDatabaseAsync();
+        string address;
+        await using (var first = await StartWithRepositoriesAsync(connectionString, ["acme/web"]))
+        {
+            first.Sandboxes.ScriptAgentSessions(
+                AgentRole.Designer,
+                new FakeAgentSession(
+                    HandsIn(("orders.png", "Blue or green?", Png)) with { Outcome = new AgentOutcome.AskedQuestion("Which colour?") }));
+            address = await ImplementingAsync(first, DesignOnly(), "Export data", "acme/web");
+
+            var page = await TaskQuestionTests.AskedAsync(first, address);
+
+            Assert.Equal("Blue or green?", Assert.Single(ScreenshotsOn(page)).Caption);
+            Assert.Empty(VerificationTests.AttemptsOn(page, 1));
+        }
+
+        await using var second = await StartWithRepositoriesAsync(
+            connectionString, [],
+            sandboxes: sandboxes => sandboxes.ScriptAgentSessions(AgentRole.Designer, new FakeAgentSession(FakeAgentTurn.Endless())));
+
+        await SquadMessagesAsync(second, 1);
+        var shown = Assert.Single(ScreenshotsOn(await GetAsync(second, address)));
+        Assert.Equal("Blue or green?", shown.Caption);
+        await AssertServedAsync(second, shown.Image, "image/png", Png);
+    }
+
+    [Fact]
+    public async Task Screenshots_handed_in_with_a_question_count_once_the_agent_is_done_without_new_ones()
+    {
+        await using var overseer = await StartAsync();
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Designer,
+            new FakeAgentSession(
+                HandsIn(("orders.png", "The orders page", Png)) with { Outcome = new AgentOutcome.AskedQuestion("Is it right?") },
+                Done()));
+        var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
+        await TaskQuestionTests.AskedAsync(overseer, address);
+
+        using var answered = await TaskQuestionTests.AnswerAsync(overseer, address, 1, "Yes.");
+
+        await StatesAsync(overseer, address, "Done", "Running", "Pending");
+        var page = await GetAsync(overseer, address);
+        Assert.Equal(["Attempt 1: passed."], VerificationTests.AttemptsOn(page, 1).Select(attempt => attempt.Heading));
+        Assert.Equal("The orders page", Assert.Single(ScreenshotsOn(page)).Caption);
+    }
+
+    [Fact]
+    public async Task What_isnt_valid_screenshots_handed_in_with_a_question_is_told_once_the_agent_is_done_without_new_ones()
+    {
+        await using var overseer = await StartAsync();
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Designer,
+            new FakeAgentSession(
+                HandsIn(("orders.png", "Broken", [1, 2, 3])) with { Outcome = new AgentOutcome.AskedQuestion("Is it right?") },
+                Done(),
+                HandsIn(("orders.png", "The orders page", Png))));
+        var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
+        await TaskQuestionTests.AskedAsync(overseer, address);
+
+        using var answered = await TaskQuestionTests.AnswerAsync(overseer, address, 1, "Yes.");
+
+        await StatesAsync(overseer, address, "Done", "Running", "Pending");
+        var told = SquadMessages(overseer)[2].Message;
+        Assert.Contains("The screenshots handed in aren't valid.", told);
+        Assert.Contains("Screenshot 1, orders.png, isn't a PNG, JPEG, GIF or WebP image.", told);
+        Assert.Equal(
+            ["Attempt 1: failed. The screenshots handed in aren't valid.", "Attempt 2: passed."],
+            VerificationTests.AttemptsOn(await GetAsync(overseer, address), 1).Select(attempt => attempt.Heading));
+    }
+
+    [Fact]
+    public async Task Screenshots_handed_in_by_a_turn_that_a_waiting_message_follows_are_shown_while_the_agent_works_on_it()
+    {
+        await using var overseer = await StartAsync();
+        var working = new TaskCompletionSource();
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Designer,
+            new FakeAgentSession(
+                HandsIn(("orders.png", "The orders page", Png)) with { EndsAfter = working.Task }, FakeAgentTurn.Endless()));
+        var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
+        await SquadMessagesAsync(overseer, 1);
+        using var sent = await EventuallyAsync(
+            async () => (await GetAsync(overseer, $"{address}/tasks/1")).Contains("<textarea name=\"Message\"")
+                ? await AgentMessageTests.SendAsync(overseer, $"{address}/tasks/1", session: 1, "Make it green.")
+                : null,
+            "the message box");
+
+        working.SetResult();
+
+        await SquadMessagesAsync(overseer, 2);
+        var page = await GetAsync(overseer, address);
+        Assert.Equal("The orders page", Assert.Single(ScreenshotsOn(page)).Caption);
+        Assert.Empty(VerificationTests.AttemptsOn(page, 1));
+    }
+
     /// <summary>The screenshots a Portal page shows, in its order: each one's caption, and the address of its image.</summary>
     private static IReadOnlyList<(string Caption, string Image)> ScreenshotsOn(string page) =>
         [.. Regex.Matches(page, "<figure class=\"task-screenshot\"[^>]*>(.*?)</figure>", RegexOptions.Singleline).Select(figure =>

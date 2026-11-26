@@ -6,7 +6,7 @@ namespace Overseer.Implementation;
 /// <summary>
 /// The screenshots of a design as the Designer hands them in: images in a directory of their own, and a JSON file that lists
 /// them in order, each with a caption saying what it shows. The Designer's instructions describe the format. The images
-/// themselves are taken once the list is valid (<see cref="TaskScreenshots.TakeAsync"/>).
+/// themselves are taken once the list is valid (<see cref="TaskScreenshots.Session.TakeAsync"/>).
 /// </summary>
 internal sealed class ScreenshotHandIn : HandIn<IReadOnlyList<ListedScreenshot>>
 {
