@@ -47,6 +47,7 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
         {
             _pullRequests.Enqueue(pullRequest);
         }
+        Copy(before._closed, _closed);
     }
 
     /// <summary>Makes GitHub accept <paramref name="token"/> as the user <paramref name="login"/>.</summary>
@@ -209,8 +210,45 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
     /// <summary>Makes GitHub open pull requests in the repository <paramref name="ownerAndName"/> again.</summary>
     public void AllowPullRequests(string ownerAndName) => _pullRequestRefusals.TryRemove(Key(RepositoryName.Parse(ownerAndName)), out _);
 
-    /// <summary>The pull requests GitHub opened, in that order.</summary>
+    /// <summary>The pull requests GitHub opened, in that order, also those closed since.</summary>
     public IReadOnlyList<FakePullRequest> PullRequests => [.. _pullRequests];
+
+    // By owner/name in lower case, then number: the pull requests that are open no longer.
+    private readonly ConcurrentDictionary<(string Repository, int Number), bool> _closed = new();
+
+    /// <summary>
+    /// Closes the pull request with this number of the repository <paramref name="ownerAndName"/>, as the human does on GitHub,
+    /// whether by merging it or not.
+    /// </summary>
+    public void ClosePullRequest(string ownerAndName, int number) =>
+        _closed[(Key(RepositoryName.Parse(ownerAndName)), number)] = true;
+
+    /// <summary>Deletes the branch <paramref name="branch"/> of the repository <paramref name="ownerAndName"/>.</summary>
+    public void RemoveBranch(string ownerAndName, string branch) =>
+        _branches.TryRemove((Key(RepositoryName.Parse(ownerAndName)), branch), out _);
+
+    public async Task<GitHubPullRequestSearch?> FindPullRequestAsync(
+        RepositoryName repository, string branch, CancellationToken cancellationToken) =>
+        await CheckRepositoryAsync(repository, cancellationToken) switch
+        {
+            null => null,
+            GitHubRepositoryCheck.Fails fails => new GitHubPullRequestSearch.Fails(fails.Error),
+            GitHubRepositoryCheck.Reachable => Find(_repositories[Key(repository)], branch),
+            _ => new GitHubPullRequestSearch.Fails(GitHubFileCheck.Unreachable(repository)),
+        };
+
+    /// <summary>The pull request from the branch to the default branch: the open one, or else the latest.</summary>
+    private GitHubPullRequestSearch Find(FakeRepository repository, string branch)
+    {
+        var found = _pullRequests
+            .Where(pullRequest => pullRequest.Repository == repository.Name && pullRequest.Head == branch
+                && pullRequest.Base == repository.DefaultBranch)
+            .OrderByDescending(pullRequest => IsOpen(pullRequest)).ThenByDescending(pullRequest => pullRequest.Number)
+            .FirstOrDefault();
+        return found is null ? new GitHubPullRequestSearch.NotFound() : new GitHubPullRequestSearch.Found(found.Number, found.Url);
+    }
+
+    private bool IsOpen(FakePullRequest pullRequest) => !_closed.ContainsKey((Key(pullRequest.Repository), pullRequest.Number));
 
     public async Task<GitHubPullRequestOpening?> OpenPullRequestAsync(
         RepositoryName repository, string branch, string title, string body, CancellationToken cancellationToken)
@@ -243,7 +281,7 @@ public sealed class FakeGitHubGateway(ISecretReader secrets) : IGitHubGateway
         var found = _repositories[Key(repository)];
         lock (_pullRequests)
         {
-            if (_pullRequests.FirstOrDefault(open => open.Repository == found.Name && open.Head == branch) is { } existing)
+            if (_pullRequests.FirstOrDefault(open => open.Repository == found.Name && open.Head == branch && IsOpen(open)) is { } existing)
             {
                 return new GitHubPullRequestOpening.Opened(existing.Number, existing.Url);
             }

@@ -35,6 +35,15 @@ public interface IGitHubGateway
     Task<GitHubFileCheck?> CheckFileAsync(RepositoryName repository, string? branch, string path, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Looks in <paramref name="repository"/>, with the GitHub token Overseer uses, for a pull request from
+    /// <paramref name="branch"/> to the repository's default branch, in any state: open, closed or merged, also once the branch is
+    /// deleted. Of several, it finds the open one, or else the latest.
+    /// </summary>
+    /// <param name="branch">A branch of the repository, which needn't exist (any more).</param>
+    /// <returns>What GitHub says; <c>null</c> when no GitHub token is set.</returns>
+    Task<GitHubPullRequestSearch?> FindPullRequestAsync(RepositoryName repository, string branch, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Opens a pull request in <paramref name="repository"/>, with the GitHub token Overseer uses, from <paramref name="branch"/> to
     /// the repository's default branch. One that is open between the two already counts as opened, and stays as it is.
     /// </summary>
@@ -43,6 +52,26 @@ public interface IGitHubGateway
     /// <returns>What GitHub did; <c>null</c> when no GitHub token is set.</returns>
     Task<GitHubPullRequestOpening?> OpenPullRequestAsync(
         RepositoryName repository, string branch, string title, string body, CancellationToken cancellationToken);
+}
+
+/// <summary>What GitHub says about the pull requests of a branch.</summary>
+public abstract record GitHubPullRequestSearch
+{
+    private GitHubPullRequestSearch()
+    {
+    }
+
+    /// <summary>There is one: the repository's number <paramref name="Number"/>, whose page is <paramref name="Url"/>.</summary>
+    public sealed record Found(int Number, string Url) : GitHubPullRequestSearch;
+
+    /// <summary>There is none from the branch to the default branch.</summary>
+    public sealed record NotFound : GitHubPullRequestSearch;
+
+    /// <summary>
+    /// GitHub refused the request, as for a repository the token can't reach, or could not be asked; <paramref name="Error"/> says
+    /// why.
+    /// </summary>
+    public sealed record Fails(string Error) : GitHubPullRequestSearch;
 }
 
 /// <summary>What GitHub did when asked to open a pull request.</summary>

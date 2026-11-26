@@ -175,6 +175,50 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
         }
     }
 
+    public async Task<GitHubPullRequestSearch?> FindPullRequestAsync(
+        RepositoryName repository, string branch, CancellationToken cancellationToken)
+    {
+        if (await secrets.ReadAsync(GitHubToken.SecretName, cancellationToken) is not { } token)
+        {
+            return null;
+        }
+        if (!GitHubToken.IsWellFormed(token))
+        {
+            return new GitHubPullRequestSearch.Fails(GitHubToken.NotWellFormedError);
+        }
+
+        try
+        {
+            // Newest first, as GitHub lists them unless asked otherwise.
+            using var request = Get(
+                $"repos/{Uri.EscapeDataString(repository.Owner)}/{Uri.EscapeDataString(repository.Name)}/pulls" +
+                $"?state=all&per_page=100&head={Uri.EscapeDataString($"{repository.Owner}:{branch}")}",
+                token);
+            using var response = await Http.SendAsync(request, cancellationToken);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                return new GitHubPullRequestSearch.Fails(GitHubFileCheck.Unreachable(repository));
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                return new GitHubPullRequestSearch.Fails(await ErrorAsync(response, cancellationToken));
+            }
+            var found = await response.Content.ReadFromJsonAsync<IReadOnlyList<PullRequest>>(cancellationToken) ?? [];
+            // Not one to another branch, as a human may open.
+            var toDefaultBranch = found
+                .Where(pullRequest => pullRequest.Base is { Ref: { } to, Repo.DefaultBranch: { } defaultBranch } && to == defaultBranch)
+                .OrderByDescending(pullRequest => pullRequest.State == "open")
+                .FirstOrDefault();
+            return Opened(toDefaultBranch) is { } existing
+                ? new GitHubPullRequestSearch.Found(existing.Number, existing.Url)
+                : new GitHubPullRequestSearch.NotFound();
+        }
+        catch (Exception exception) when (IsUnreachable(exception, cancellationToken))
+        {
+            return new GitHubPullRequestSearch.Fails(UnreachableError(exception));
+        }
+    }
+
     public async Task<GitHubPullRequestOpening?> OpenPullRequestAsync(
         RepositoryName repository, string branch, string title, string body, CancellationToken cancellationToken)
     {
@@ -336,5 +380,12 @@ public sealed class GitHubGateway(ISecretReader secrets) : IGitHubGateway
 
     private sealed record PullRequest(
         [property: JsonPropertyName("number")] int Number,
-        [property: JsonPropertyName("html_url")] string? HtmlUrl);
+        [property: JsonPropertyName("html_url")] string? HtmlUrl,
+        [property: JsonPropertyName("state")] string? State,
+        [property: JsonPropertyName("base")] PullRequestBase? Base);
+
+    /// <summary>The branch a pull request goes to, with its repository.</summary>
+    private sealed record PullRequestBase(
+        [property: JsonPropertyName("ref")] string? Ref,
+        [property: JsonPropertyName("repo")] Repository? Repo);
 }

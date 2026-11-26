@@ -302,6 +302,41 @@ public class ImplementationRestartTests(PostgresServer postgres)
                 .ToListAsync(TestContext.Current.CancellationToken));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_pull_request_closed_or_merged_while_Overseer_was_down_before_it_could_record_it_stays_the_repositorys_only_one(
+        bool merged)
+    {
+        var connectionString = await postgres.CreateEmptyDatabaseAsync();
+        string address;
+        FakeGitHubGateway gitHub;
+        await using (var first = await StartWithManifestsAsync(connectionString, ["acme/web"]))
+        {
+            gitHub = first.GitHub;
+            first.Sandboxes.ScriptAgentSessions(AgentRole.Developer, DoneAtOnce());
+            // GitHub opens it, and Overseer never hears that it did.
+            gitHub.HoldPullRequestAnswers("acme/web", new TaskCompletionSource().Task);
+            first.Sandboxes.ScriptCommandsContaining(IntentBranchComparedIn("acme/web"), new CommandResult(0, "src/orders.ts\0"));
+            address = await AwaitingApprovalAsync(first, "Export data", "acme/web");
+            gitHub.AddBranch("acme/web", BranchOf(address));
+            using var approved = await ApproveAsync(first, address, start: true);
+            await EventuallyAsync(() => Task.FromResult(first.GitHub.PullRequests.Count == 1 ? "" : null), "the pull request");
+        }
+        gitHub.ClosePullRequest("acme/web", 1);
+        if (merged)
+        {
+            // As GitHub does where it is set to delete a merged pull request's branch.
+            gitHub.RemoveBranch("acme/web", BranchOf(address));
+        }
+
+        await using var second = await RestartAsync(connectionString, gitHub);
+
+        var page = await InReviewAsync(second, address);
+        Assert.Single(second.GitHub.PullRequests);
+        Assert.Single(Regex.Matches(page, ">acme/web #1</a>"));
+    }
+
     /// <summary>Starts serve again on the same database, with GitHub as it was, which keeps all it has meanwhile.</summary>
     /// <param name="sandboxes">
     /// Scripts the new fake Sandbox Provider, which has none of the old one's Sandboxes nor scripts, before the server starts. Its

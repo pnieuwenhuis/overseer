@@ -342,6 +342,70 @@ public abstract class GitHubGatewayContract : IAsyncDisposable
         Assert.Contains("Bad credentials", fails.Error);
     }
 
+    [Fact]
+    public async Task A_branch_without_a_pull_request_has_none_to_find()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var (repository, _) = await RepositoryWithBranchAsync(Branch, ahead: true);
+
+        Assert.IsType<GitHubPullRequestSearch.NotFound>(await FindPullRequestAsync(repository, Branch));
+    }
+
+    [Fact]
+    public async Task The_pull_request_of_a_branch_is_found_open_or_closed_also_once_the_branch_is_deleted()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var (repository, _) = await RepositoryWithBranchAsync(Branch, ahead: true);
+        var opened = Assert.IsType<GitHubPullRequestOpening.Opened>(await OpenPullRequestAsync(repository, Branch));
+        var found = new GitHubPullRequestSearch.Found(opened.Number, opened.Url);
+
+        Assert.Equal(found, await FindPullRequestAsync(repository, Branch));
+        await ClosePullRequestAsync(repository, opened.Number);
+        Assert.Equal(found, await FindPullRequestAsync(repository, Branch));
+        await DeleteBranchAsync(repository, Branch);
+        Assert.Equal(found, await FindPullRequestAsync(repository, Branch));
+    }
+
+    [Fact]
+    public async Task Where_a_branch_has_a_closed_pull_request_and_an_open_one_the_open_one_is_found()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var (repository, _) = await RepositoryWithBranchAsync(Branch, ahead: true);
+        var first = Assert.IsType<GitHubPullRequestOpening.Opened>(await OpenPullRequestAsync(repository, Branch));
+        await ClosePullRequestAsync(repository, first.Number);
+
+        var second = Assert.IsType<GitHubPullRequestOpening.Opened>(await OpenPullRequestAsync(repository, Branch));
+
+        Assert.NotEqual(first.Number, second.Number);
+        Assert.Equal(new GitHubPullRequestSearch.Found(second.Number, second.Url), await FindPullRequestAsync(repository, Branch));
+    }
+
+    [Fact]
+    public async Task Looking_for_a_pull_request_in_a_repository_the_token_cannot_reach_fails_naming_the_repository()
+    {
+        await Secrets.SetAsync(GitHubToken.SecretName, WorkingToken.Token, TestContext.Current.CancellationToken);
+        var repository = new RepositoryName("octocat", $"no-such-repository-{Guid.NewGuid():N}");
+
+        var fails = Assert.IsType<GitHubPullRequestSearch.Fails>(await FindPullRequestAsync(repository, Branch));
+
+        Assert.Contains(repository.ToString(), fails.Error);
+    }
+
+    [Fact]
+    public async Task Without_a_stored_token_no_pull_request_is_looked_for()
+    {
+        Assert.Null(await FindPullRequestAsync(PublicRepository, Branch));
+    }
+
+    private Task<GitHubPullRequestSearch?> FindPullRequestAsync(RepositoryName repository, string branch) =>
+        Gateway.FindPullRequestAsync(repository, branch, TestContext.Current.CancellationToken);
+
+    /// <summary>Closes the pull request without merging it, as the human does on GitHub.</summary>
+    protected abstract Task ClosePullRequestAsync(RepositoryName repository, int number);
+
+    /// <summary>Deletes the branch, as the human does on GitHub.</summary>
+    protected abstract Task DeleteBranchAsync(RepositoryName repository, string branch);
+
     private Task<GitHubPullRequestOpening?> OpenPullRequestAsync(RepositoryName repository, string branch) =>
         Gateway.OpenPullRequestAsync(
             repository, branch, "Export data", "Orders can be exported as **CSV**.", TestContext.Current.CancellationToken);
@@ -422,6 +486,18 @@ public sealed class FakeGitHubGatewayContract : GitHubGatewayContract
         return (repository, FakeGitHubGateway.DefaultBranch);
     }
 
+    protected override Task ClosePullRequestAsync(RepositoryName repository, int number)
+    {
+        _gateway.ClosePullRequest(repository.ToString(), number);
+        return Task.CompletedTask;
+    }
+
+    protected override Task DeleteBranchAsync(RepositoryName repository, string branch)
+    {
+        _gateway.RemoveBranch(repository.ToString(), branch);
+        return Task.CompletedTask;
+    }
+
     protected override Task<OpenPullRequest> ReadPullRequestAsync(RepositoryName repository, int number)
     {
         var found = Assert.Single(_gateway.PullRequests, open => open.Repository == repository && open.Number == number);
@@ -479,6 +555,16 @@ public sealed class GitHubGatewayContractAgainstGitHub : GitHubGatewayContract
         return new OpenPullRequest(
             found["title"]!.GetValue<string>(), found["body"]!.GetValue<string>(),
             found["head"]!["ref"]!.GetValue<string>(), found["base"]!["ref"]!.GetValue<string>());
+    }
+
+    protected override Task ClosePullRequestAsync(RepositoryName repository, int number) =>
+        SendAsync(HttpMethod.Patch, $"{PathOf(repository)}/pulls/{number}", new { state = "closed" });
+
+    protected override async Task DeleteBranchAsync(RepositoryName repository, string branch)
+    {
+        // GitHub answers with no content, so there is no JSON to read.
+        using var response = await RequestAsync(HttpMethod.Delete, $"{PathOf(repository)}/git/refs/heads/{branch}");
+        Assert.True(response.IsSuccessStatusCode, $"Deleting the branch {branch} failed ({(int)response.StatusCode}).");
     }
 
     /// <summary>Commits a new file, to the default branch when <paramref name="branch"/> is <c>null</c>.</summary>
