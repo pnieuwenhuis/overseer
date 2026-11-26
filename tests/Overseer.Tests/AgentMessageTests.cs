@@ -339,10 +339,12 @@ public class AgentMessageTests(PostgresServer postgres)
         }
         await using var second = await StartWithRepositoriesAsync(connectionString, []);
 
-        var page = await GetAsync(second, task);
+        // The session that carries the Task on, which gets none of them.
+        var message = Assert.Single(await TaskTests.SquadMessagesAsync(second, 1));
+        var page = await BoxAsync(second, task);
 
+        Assert.DoesNotContain("Rename it.", message.Message);
         Assert.Equal([NotDelivered("Rename it."), NotDelivered("Move it up.")], StreamOn(page));
-        Assert.False(OffersBox(page));
         Assert.Equal(
             [(1, "2 messages you sent were not delivered. Read them on the Task's page.")],
             UndeliveredOn(await GetAsync(second, task[..task.IndexOf("/tasks/", StringComparison.Ordinal)])));
