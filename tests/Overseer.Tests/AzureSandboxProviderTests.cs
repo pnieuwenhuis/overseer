@@ -463,6 +463,43 @@ public sealed class AzureSandboxProviderTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Taking_a_binary_file_brings_its_bytes_over_SSH_unchanged_and_removes_it()
+    {
+        var provider = Provider();
+        var sandbox = await CreateAsync(provider);
+        _ssh.Answer = (_, command) => RunInShell(command);
+        var path = Path.Combine(_directory, "it's a \"$HOME\" `file`; rm -rf .png");
+        // Larger than one line of base64, with every byte there is.
+        byte[] content = [.. Enumerable.Range(0, 100_000).Select(value => (byte)(value % 256))];
+        await File.WriteAllBytesAsync(path, content, TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<SandboxFileTooLargeException>(
+            () => provider.TakeBinaryFileAsync(sandbox, path, content.Length - 1, TestContext.Current.CancellationToken));
+        Assert.True(File.Exists(path));
+        var taken = await provider.TakeBinaryFileAsync(sandbox, path, content.Length, TestContext.Current.CancellationToken);
+        var again = await provider.TakeBinaryFileAsync(sandbox, path, content.Length, TestContext.Current.CancellationToken);
+
+        Assert.Equal(content, taken);
+        Assert.Null(again);
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public async Task Taking_a_binary_file_that_is_there_but_cant_be_taken_fails_with_what_the_Sandbox_said()
+    {
+        var provider = Provider();
+        var sandbox = await CreateAsync(provider);
+        _ssh.Answer = (_, _) => new CommandResult(1, "base64: orders.png: Permission denied\n");
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.TakeBinaryFileAsync(sandbox, "/home/overseer/orders.png", 100, TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            "The file /home/overseer/orders.png in the Sandbox could not be taken: base64: orders.png: Permission denied\n",
+            failure.Message);
+    }
+
     /// <summary>Runs a command in a local shell as SSH runs it in a Sandbox, with standard error merged into standard output.</summary>
     private static CommandResult RunInShell(string command)
     {

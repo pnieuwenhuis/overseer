@@ -56,6 +56,17 @@ public interface ISandboxProvider
     Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken);
 
     /// <summary>
+    /// As <see cref="TakeFileAsync"/>, for a file that needn't be text, such as an image an agent hands in: its bytes come
+    /// unchanged.
+    /// </summary>
+    /// <param name="path">An absolute path in the Sandbox.</param>
+    /// <param name="maxBytes">The most bytes the file may hold.</param>
+    /// <returns>The file's content; <c>null</c> when there is no such file.</returns>
+    /// <exception cref="SandboxFileTooLargeException">The file holds more than <paramref name="maxBytes"/>; it stays there.</exception>
+    /// <exception cref="InvalidOperationException">The file is there, but couldn't be read or removed.</exception>
+    Task<byte[]?> TakeBinaryFileAsync(Sandbox sandbox, string path, int maxBytes, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Starts an agent in the given role, configured by <paramref name="harness"/> and running its role's agent with that
     /// agent's model, ready for its first message. Dispose the session to stop the agent.
     /// </summary>
@@ -129,6 +140,10 @@ public enum SandboxOwnerKind
     Intent,
     RepositorySetup,
 }
+
+/// <summary>A file in a Sandbox holds more bytes than whoever asked for it takes.</summary>
+public sealed class SandboxFileTooLargeException(string path, int maxBytes)
+    : Exception($"The file {path} in the Sandbox is larger than {maxBytes} bytes.");
 
 /// <summary>The provider could not create a Sandbox. The message is the provider's own error, such as Azure's, to show the user.</summary>
 public sealed class SandboxCreationFailedException(string message) : Exception(message);

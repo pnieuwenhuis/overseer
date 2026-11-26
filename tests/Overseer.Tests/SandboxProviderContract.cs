@@ -108,6 +108,37 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_binary_file_taken_from_a_Sandbox_gives_its_bytes_unchanged_and_is_gone_afterwards()
+    {
+        var sandbox = await CreateAsync(NewIntent());
+        // Every byte there is, so also what is no text, and line breaks of both kinds, which text handling would change.
+        byte[] content = [.. Enumerable.Range(0, 256).Select(value => (byte)value), .. "\r\n\n\r"u8];
+        await GivenFileAsync(sandbox, "/home/overseer/.overseer/screenshots/orders.png", content);
+
+        var taken = await Provider.TakeBinaryFileAsync(
+            sandbox, "/home/overseer/.overseer/screenshots/orders.png", content.Length, TestContext.Current.CancellationToken);
+        var again = await Provider.TakeBinaryFileAsync(
+            sandbox, "/home/overseer/.overseer/screenshots/orders.png", content.Length, TestContext.Current.CancellationToken);
+
+        Assert.Equal(content, taken);
+        Assert.Null(again);
+    }
+
+    [Fact]
+    public async Task A_binary_file_larger_than_asked_for_is_not_taken_and_stays_in_the_Sandbox()
+    {
+        var sandbox = await CreateAsync(NewIntent());
+        byte[] content = [1, 2, 3, 4, 5];
+        await GivenFileAsync(sandbox, "/home/overseer/.overseer/screenshots/orders.png", content);
+
+        await Assert.ThrowsAsync<SandboxFileTooLargeException>(() => Provider.TakeBinaryFileAsync(
+            sandbox, "/home/overseer/.overseer/screenshots/orders.png", 4, TestContext.Current.CancellationToken));
+
+        Assert.Equal(content, await Provider.TakeBinaryFileAsync(
+            sandbox, "/home/overseer/.overseer/screenshots/orders.png", 5, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Reading_a_file_in_a_Sandbox_gives_its_content_and_leaves_it_there()
     {
         var sandbox = await CreateAsync(NewIntent());
@@ -229,6 +260,9 @@ public abstract class SandboxProviderContract : IAsyncDisposable
     /// <summary>Puts a file with this content in the Sandbox, as an agent would write it there.</summary>
     protected abstract Task GivenFileAsync(Sandbox sandbox, string path, string content);
 
+    /// <inheritdoc cref="GivenFileAsync(Sandbox, string, string)"/>
+    protected abstract Task GivenFileAsync(Sandbox sandbox, string path, byte[] content);
+
     private static SandboxOwner NewIntent() => new(SandboxOwnerKind.Intent, Guid.NewGuid());
 
     private async Task DestroyAsync(Sandbox sandbox)
@@ -267,6 +301,12 @@ public sealed class FakeSandboxProviderContract : SandboxProviderContract
     protected override void GivenCommand(string command, CommandResult result) => _fake.ScriptCommand(command, result);
 
     protected override Task GivenFileAsync(Sandbox sandbox, string path, string content)
+    {
+        _fake.WriteFile(sandbox, path, content);
+        return Task.CompletedTask;
+    }
+
+    protected override Task GivenFileAsync(Sandbox sandbox, string path, byte[] content)
     {
         _fake.WriteFile(sandbox, path, content);
         return Task.CompletedTask;
@@ -377,6 +417,14 @@ public sealed class AzureSandboxProviderContract : SandboxProviderContract
     {
         var written = await _azure.RunCommandAsync(
             sandbox, $"mkdir -p \"$(dirname '{path}')\" && printf '%s' '{content.Replace("'", "'\\''")}' > '{path}'", TestContext.Current.CancellationToken);
+        Assert.Equal(0, written.ExitCode);
+    }
+
+    protected override async Task GivenFileAsync(Sandbox sandbox, string path, byte[] content)
+    {
+        var written = await _azure.RunCommandAsync(
+            sandbox, $"mkdir -p \"$(dirname '{path}')\" && printf '%s' '{Convert.ToBase64String(content)}' | base64 -d > '{path}'",
+            TestContext.Current.CancellationToken);
         Assert.Equal(0, written.ExitCode);
     }
 

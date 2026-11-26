@@ -187,6 +187,10 @@ public sealed class SandboxRegistry(
     public Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken) =>
         provider.TakeFileAsync(sandbox, path, cancellationToken);
 
+    /// <inheritdoc cref="ISandboxProvider.TakeBinaryFileAsync"/>
+    public Task<byte[]?> TakeBinaryFileAsync(Sandbox sandbox, string path, int maxBytes, CancellationToken cancellationToken) =>
+        provider.TakeBinaryFileAsync(sandbox, path, maxBytes, cancellationToken);
+
     /// <summary>
     /// Whether the Sandbox is still there to work in: not recorded destroyed, and the provider still has it, which it hasn't once
     /// the machine was deleted behind Overseer's back, as an evicted spot instance is.

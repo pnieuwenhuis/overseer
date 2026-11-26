@@ -344,21 +344,47 @@ public sealed partial class AzureSandboxProvider(
         return FileContentAsync(sandbox, $"""
             [ -f {quoted} ] || exit {NoSuchFile}
             cat -- {quoted} && rm -f -- {quoted}
-            """, failure: $"The file {path} in the Sandbox could not be taken", cancellationToken);
+            """, failure: NotTaken(path), cancellationToken);
+    }
+
+    /// <inheritdoc cref="ISandboxProvider.TakeBinaryFileAsync"/>
+    /// <exception cref="InvalidOperationException">
+    /// The Sandbox does not exist, or its key is gone; or the file is there, but couldn't be read or removed.
+    /// </exception>
+    /// <exception cref="SandboxUnreachableException">The Sandbox does not accept SSH, for instance from a new public IP of the developer's.</exception>
+    public async Task<byte[]?> TakeBinaryFileAsync(Sandbox sandbox, string path, int maxBytes, CancellationToken cancellationToken)
+    {
+        var quoted = ShellText.Quoted(path);
+        // A command's output comes as text, so the bytes travel in base64. The arithmetic takes the blanks some wc pads with.
+        var encoded = await FileContentAsync(sandbox, $"""
+            [ -f {quoted} ] || exit {NoSuchFile}
+            [ "$(($(wc -c < {quoted})))" -le {maxBytes} ] || exit {FileTooLarge}
+            base64 < {quoted} && rm -f -- {quoted}
+            """, failure: NotTaken(path), cancellationToken, tooLarge: () => new SandboxFileTooLargeException(path, maxBytes));
+        // Decoding passes over the line breaks base64 puts in.
+        return encoded is null ? null : Convert.FromBase64String(encoded);
     }
 
     /// <summary>What a command that prints a file exits with when there is no file.</summary>
     private const int NoSuchFile = 3;
 
+    /// <summary>What a command that prints a file exits with when the file is larger than asked for.</summary>
+    private const int FileTooLarge = 4;
+
+    private static string NotTaken(string path) => $"The file {path} in the Sandbox could not be taken";
+
     /// <summary>Runs a command that prints a file, or exits with <see cref="NoSuchFile"/> when there is none.</summary>
     /// <param name="failure">What to say, ahead of the command's output, when it fails otherwise.</param>
-    private async Task<string?> FileContentAsync(Sandbox sandbox, string command, string failure, CancellationToken cancellationToken)
+    /// <param name="tooLarge">What to throw when it exits with <see cref="FileTooLarge"/>, for a command that may.</param>
+    private async Task<string?> FileContentAsync(
+        Sandbox sandbox, string command, string failure, CancellationToken cancellationToken, Func<Exception>? tooLarge = null)
     {
         var result = await RunCommandAsync(sandbox, command, cancellationToken);
         return result.ExitCode switch
         {
             0 => result.Output,
             NoSuchFile => null,
+            FileTooLarge when tooLarge is not null => throw tooLarge(),
             _ => throw new InvalidOperationException($"{failure}: {result.Output}"),
         };
     }

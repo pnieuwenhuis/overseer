@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading.Channels;
 using Overseer.GitHub;
 
@@ -21,7 +22,7 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
     private readonly ConcurrentQueue<AgentSessionStart> _agentSessionsStarted = new();
     private readonly ConcurrentQueue<AgentMessage> _messagesSent = new();
     private readonly ConcurrentQueue<AgentSessionStart> _agentSessionsStopped = new();
-    private readonly ConcurrentDictionary<(string ResourceId, string Path), string> _files = new();
+    private readonly ConcurrentDictionary<(string ResourceId, string Path), byte[]> _files = new();
     private readonly ConcurrentDictionary<(string Repository, string Path), string> _repositoryFiles = new();
     private readonly ConcurrentQueue<SandboxCommand> _commandsRun = new();
     private readonly ConcurrentQueue<(string Fragment, Sequence<CommandResult> Results)> _commandsContaining = new();
@@ -158,7 +159,8 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         {
             if (repositoriesInScope.Contains(repository, StringComparer.OrdinalIgnoreCase))
             {
-                _files[(sandbox.ResourceId, $"{Sandbox.CloneDirectory(RepositoryName.Parse(repository))}/{path}")] = content;
+                _files[(sandbox.ResourceId, $"{Sandbox.CloneDirectory(RepositoryName.Parse(repository))}/{path}")] =
+                    Encoding.UTF8.GetBytes(content);
             }
         }
         _sandboxes[sandbox.ResourceId] = sandbox;
@@ -187,22 +189,39 @@ public sealed class FakeSandboxProvider(TimeProvider time) : ISandboxProvider
         {
             throw new InvalidOperationException(error);
         }
-        return Task.FromResult(_files.GetValueOrDefault((sandbox.ResourceId, path)));
+        return Task.FromResult(TextOf(_files.GetValueOrDefault((sandbox.ResourceId, path))));
     }
 
     /// <summary>Writes a file in the Sandbox, replacing any at that path, as an agent or a command would.</summary>
     /// <exception cref="InvalidOperationException">The Sandbox doesn't exist.</exception>
-    public void WriteFile(Sandbox sandbox, string path, string content)
+    public void WriteFile(Sandbox sandbox, string path, string content) => WriteFile(sandbox, path, Encoding.UTF8.GetBytes(content));
+
+    /// <inheritdoc cref="WriteFile(Sandbox, string, string)"/>
+    public void WriteFile(Sandbox sandbox, string path, byte[] content)
     {
         EnsureExists(sandbox);
-        _files[(sandbox.ResourceId, path)] = content;
+        _files[(sandbox.ResourceId, path)] = [.. content];
     }
 
     public Task<string?> TakeFileAsync(Sandbox sandbox, string path, CancellationToken cancellationToken)
     {
         EnsureExists(sandbox);
-        return Task.FromResult(_files.TryRemove((sandbox.ResourceId, path), out var content) ? content : null);
+        return Task.FromResult(TextOf(Take(sandbox, path)));
     }
+
+    public Task<byte[]?> TakeBinaryFileAsync(Sandbox sandbox, string path, int maxBytes, CancellationToken cancellationToken)
+    {
+        EnsureExists(sandbox);
+        if (_files.GetValueOrDefault((sandbox.ResourceId, path)) is { } there && there.Length > maxBytes)
+        {
+            throw new SandboxFileTooLargeException(path, maxBytes);
+        }
+        return Task.FromResult(Take(sandbox, path));
+    }
+
+    private byte[]? Take(Sandbox sandbox, string path) => _files.TryRemove((sandbox.ResourceId, path), out var content) ? content : null;
+
+    private static string? TextOf(byte[]? content) => content is null ? null : Encoding.UTF8.GetString(content);
 
     public Task<IAgentSession> StartAgentSessionAsync(
         Sandbox sandbox, AgentRole role, AgentHarnessConfiguration harness, IReadOnlyDictionary<string, string> environment,
