@@ -162,7 +162,7 @@ public static class OverseerServer
             {
                 return Results.NotFound();
             }
-            // An agent made the file, so the browser mustn't take it for anything but the image it begins as.
+            // An agent made the file, so the browser mustn't take it for anything but the kind of image it was kept as.
             context.Response.Headers.XContentTypeOptions = "nosniff";
             return Results.Bytes(image.Content, image.ContentType);
         }).RequireAuthorization();

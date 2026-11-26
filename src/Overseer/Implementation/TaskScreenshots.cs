@@ -113,7 +113,7 @@ public sealed class TaskScreenshots(SandboxRegistry sandboxes, IDbContextFactory
         {
             return (null, $"{named} isn't there: there is no such file in {ScreenshotHandIn.Directory}.");
         }
-        if (ContentTypeOf(content) is not { } contentType)
+        if (ScreenshotImageFormats.ContentTypeOf(content) is not { } contentType)
         {
             return (null, $"{named} isn't a PNG, JPEG, GIF or WebP image.");
         }
@@ -123,16 +123,6 @@ public sealed class TaskScreenshots(SandboxRegistry sandboxes, IDbContextFactory
             ? (null, $"{named} holds a secret, such as a token, so it isn't kept.")
             : (new ScreenshotImage(contentType, content), null);
     }
-
-    /// <summary>The kind of image the bytes begin as; <c>null</c> when they begin as none a screenshot may be.</summary>
-    private static string? ContentTypeOf(ReadOnlySpan<byte> content) => content switch
-    {
-        [0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A, ..] => "image/png",
-        [0xFF, 0xD8, 0xFF, ..] => "image/jpeg",
-        _ when content.StartsWith("GIF87a"u8) || content.StartsWith("GIF89a"u8) => "image/gif",
-        _ when content.Length >= 12 && content.StartsWith("RIFF"u8) && content[8..].StartsWith("WEBP"u8) => "image/webp",
-        _ => null,
-    };
 
     private async Task<VerificationStep> InvalidAsync(IReadOnlyList<string> errors, CancellationToken cancellationToken) =>
         // They quote what the agent wrote.

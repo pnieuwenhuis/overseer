@@ -100,6 +100,33 @@ public class DesignerScreenshotTests(PostgresServer postgres)
     }
 
     [Fact]
+    public async Task Images_of_each_kind_are_kept_as_the_encoders_write_them()
+    {
+        await using var overseer = await StartAsync();
+        (string File, string ContentType, byte[] Content)[] images =
+        [
+            ("base.jpg", "image/jpeg", Jpeg), ("progressive.jpg", "image/jpeg", ProgressiveJpeg),
+            ("metadata.jpg", "image/jpeg", JpegWithMetadata), ("still.gif", "image/gif", Gif),
+            ("animated.gif", "image/gif", AnimatedGif), ("lossy.webp", "image/webp", WebP),
+            ("lossless.webp", "image/webp", LosslessWebP), ("transparent.webp", "image/webp", TransparentWebP),
+            ("animated.webp", "image/webp", AnimatedWebP),
+        ];
+        overseer.Sandboxes.ScriptAgentSessions(
+            AgentRole.Designer,
+            new FakeAgentSession(HandsIn([.. images.Select(image => (image.File, image.File, image.Content))])));
+
+        var address = await ImplementingAsync(overseer, ThreeTasks(), "Export data", "acme/api", "acme/web");
+
+        await StatesAsync(overseer, address, "Done", "Running", "Pending");
+        var shown = ScreenshotsOn(await GetAsync(overseer, address));
+        Assert.Equal(images.Select(image => image.File), shown.Select(screenshot => screenshot.Caption));
+        foreach (var (image, screenshot) in images.Zip(shown))
+        {
+            await AssertServedAsync(overseer, screenshot.Image, image.ContentType, image.Content);
+        }
+    }
+
+    [Fact]
     public async Task Screenshots_are_still_shown_once_the_Sandbox_is_gone()
     {
         var connectionString = await postgres.CreateEmptyDatabaseAsync();
@@ -108,7 +135,8 @@ public class DesignerScreenshotTests(PostgresServer postgres)
         {
             first.Sandboxes.ScriptAgentSessions(AgentRole.Designer, new FakeAgentSession(HandsIn(("orders.png", "The orders page", Png))));
             address = await ImplementingAsync(first, DesignOnly(), "Export data", "acme/web");
-            await StatesAsync(first, address, "Done");
+            // With nothing left of the implementation for a restart to carry on with.
+            await FinalVerificationTests.InReviewAsync(first, address);
         }
 
         // A restart destroys the Sandbox, and the new fake provider holds none of its files.
@@ -141,6 +169,12 @@ public class DesignerScreenshotTests(PostgresServer postgres)
     [Theory]
     [InlineData("not an image", "Screenshot 1, orders.png, isn't a PNG, JPEG, GIF or WebP image.")]
     [InlineData("an SVG", "Screenshot 1, orders.png, isn't a PNG, JPEG, GIF or WebP image.")]
+    [InlineData("a PNG signature alone", "Screenshot 1, orders.png, isn't a PNG, JPEG, GIF or WebP image.")]
+    [InlineData("a truncated PNG", "Screenshot 1, orders.png, isn't a PNG, JPEG, GIF or WebP image.")]
+    [InlineData("a truncated JPEG", "Screenshot 1, orders.png, isn't a PNG, JPEG, GIF or WebP image.")]
+    [InlineData("a GIF header and text", "Screenshot 1, orders.png, isn't a PNG, JPEG, GIF or WebP image.")]
+    [InlineData("a truncated GIF", "Screenshot 1, orders.png, isn't a PNG, JPEG, GIF or WebP image.")]
+    [InlineData("a truncated WebP", "Screenshot 1, orders.png, isn't a PNG, JPEG, GIF or WebP image.")]
     [InlineData("no such file", "Screenshot 1, orders.png, isn't there: there is no such file in /home/overseer/.overseer/screenshots.")]
     [InlineData("too large", "Screenshot 1, orders.png, is larger than 5 MB.")]
     [InlineData("not JSON", "The file is not valid JSON")]
@@ -159,6 +193,13 @@ public class DesignerScreenshotTests(PostgresServer postgres)
         {
             "not an image" => (one, "<html>orders</html>"u8.ToArray()),
             "an SVG" => (one, "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"u8.ToArray()),
+            "a PNG signature alone" => (one, Png[..8]),
+            // Without the chunk that ends it.
+            "a truncated PNG" => (one, Png[..^12]),
+            "a truncated JPEG" => (one, Jpeg[..^20]),
+            "a GIF header and text" => (one, "GIF89a is the format this file says it is."u8.ToArray()),
+            "a truncated GIF" => (one, AnimatedGif[..(AnimatedGif.Length / 2)]),
+            "a truncated WebP" => (one, WebP[..^8]),
             "no such file" => (one, null),
             "too large" => (one, [.. Png, .. new byte[5 * 1024 * 1024]]),
             "not JSON" => ("orders.png", Png),
